@@ -96,15 +96,17 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 - `proxy-manager --version` 外部版本取自 `VERSION` 文件 Build 取自安装时写入的 `BUILD` 文件
 - `proxy-manager doctor` 严格只读的环境检查 报告 Alpine OpenRC root 架构 cgroup 内存上限 当前内存 swap 以及 Snell 与 sing-box 安装情况 存在 cgroup 限制时优先报告 cgroup 上限
 - `proxy-manager status` 显示 Core 状态与功能配置状态
-- `proxy-manager core list` 列出 Core
-- Core Adapter 分发接口 生命周期操作目前全部未实现
+- `proxy-manager core list` 只读发现 Core 并显示状态 版本 来源与管理状态 已有部署显示为 现有部署 未接管 本项目不会改动它
+- `proxy-manager snell status` `snell info` `snell log [N]` Snell 只读 Adapter 显示 OpenRC 状态 版本 配置元数据 日志位置与监听 PSK 一律脱敏 日志默认只读末尾 20 行
+- Core 发现只执行已确认为 ELF 的二进制 脚本与指向脚本的符号链接不会被执行 运行状态以 OpenRC 为准
+- Core Adapter 分发接口 生命周期写操作目前全部未实现 `snell install` `start` `stop` `restart` `update` `uninstall` 会被拒绝
 - Protocol Instance Server SOCKS Profile Relay Access Policy 的数据模型与校验
 - 配置事务基础设施 候选文件 校验 hook 备份 原子替换 失败回滚
 - 基础测试与 GitHub Actions CI
 
 ## 尚未完成
 
-- Snell 与 sing-box 的安装 升级 卸载 启停
+- Snell 与 sing-box 的安装 升级 卸载 启停 以及接管已有部署
 - 任何 sing-box 协议的配置生成
 - Server SOCKS Egress 与 Relay Access Policy 的实际落地 目前只有数据模型和校验
 - 添加 删除 修改 查看实例的命令
