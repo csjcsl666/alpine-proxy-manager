@@ -365,21 +365,34 @@ _core_find_pids() {
 core_meta_file() { printf '%s/cores/%s.meta' "$(state_var)" "$1"; }
 
 # 只有 Manager 自己的元数据才能证明归属, 二进制路径相同不算
-# 设置 CF_MANAGED CF_DEPLOYMENT CF_META_EXACT
+# 设置 CF_MANAGED CF_DEPLOYMENT CF_META_EXACT CF_META_STATE
+#   CF_META_STATE  none 无元数据文件 | valid 语法正确且 core 匹配 | invalid 文件存在但无法证明归属
+# invalid 时 CF_MANAGED 为 no, 写操作必须拒绝, 避免归属丢失后覆盖用户环境
 _core_ownership() {
     local _f _m
     CF_MANAGED=no
     CF_META_EXACT=
+    CF_META_STATE=none
     _f=$(core_meta_file "$1")
-    if [ -f "$_f" ] && _core_can_read "$_f" && kv_check_syntax "$_f" 2>/dev/null; then
-        if [ "$(kv_get "$_f" managed)" = true ] && [ "$(kv_get "$_f" core)" = "$1" ]; then
-            CF_MANAGED=yes
-            CF_META_EXACT=$(kv_get "$_f" exact_release)
-            _m=$(kv_get "$_f" binary)
-            if [ -n "$_m" ] && [ -n "$CF_BINARY" ] && [ "$_m" != "$CF_BINARY" ] && [ "$_m" != "$CF_BINARY_REAL" ]; then
-                CF_NOTES="${CF_NOTES}元数据中的二进制路径 $_m 与实际发现的 $CF_BINARY 不一致
+    if [ -e "$_f" ]; then
+        CF_META_STATE=invalid
+        if [ -f "$_f" ] && _core_can_read "$_f" && kv_check_syntax "$_f" 2>/dev/null \
+            && [ "$(kv_get "$_f" core)" = "$1" ] && [ -n "$(kv_get "$_f" managed)" ]; then
+            CF_META_STATE=valid
+            if [ "$(kv_get "$_f" managed)" = true ]; then
+                CF_MANAGED=yes
+                CF_META_EXACT=$(kv_get "$_f" exact_release)
+                _m=$(kv_get "$_f" binary_path)
+                [ -n "$_m" ] || _m=$(kv_get "$_f" binary)
+                if [ -n "$_m" ] && [ -n "$CF_BINARY" ] && [ "$_m" != "$CF_BINARY" ] && [ "$_m" != "$CF_BINARY_REAL" ]; then
+                    CF_NOTES="${CF_NOTES}元数据中的二进制路径 $_m 与实际发现的 $CF_BINARY 不一致
 "
+                fi
             fi
+        fi
+        if [ "$CF_META_STATE" = invalid ]; then
+            CF_NOTES="${CF_NOTES}Manager 元数据 $_f 存在但无法证明归属 (语法错误, core 不匹配或缺少 managed), 视为归属不明, 拒绝写操作
+"
         fi
     fi
     if [ "$CF_INSTALLED" = no ]; then
@@ -511,6 +524,10 @@ core_deployment_label() {
 }
 
 core_managed_label() {
+    if [ "$CF_META_STATE" = invalid ]; then
+        printf '归属不明 (元数据异常)'
+        return 0
+    fi
     case $CF_DEPLOYMENT in
         managed) printf '已接管' ;;
         external) printf '未接管' ;;

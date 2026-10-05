@@ -39,7 +39,8 @@ atomic_install() {
     _base=${2##*/}
     [ "$_dir" = "$2" ] && _dir=.
     _tmp="$_dir/.$_base.tmp.$$"
-    cp -- "$1" "$_tmp" || { rm -f -- "$_tmp"; return 1; }
+    # -p 保留属主, 回滚时不能把 root:snell 的配置变成 root:root
+    cp -p -- "$1" "$_tmp" || { rm -f -- "$_tmp"; return 1; }
     chmod "$3" "$_tmp" || { rm -f -- "$_tmp"; return 1; }
     mv -f -- "$_tmp" "$2" || { rm -f -- "$_tmp"; return 1; }
 }
@@ -61,6 +62,8 @@ txn_backup() {
     done
     _dst=$(printf '%s/%s.bak.%s.%03d' "$_dir" "$_base" "$_ts" "$_n")
     cp -p -- "$1" "$_dst" || return 1
+    # 备份可能含凭据, 备份目录是 0700, 文件再收紧为 0600
+    chmod 600 -- "$_dst" || return 1
 
     _keep=$(txn_backup_keep)
     _count=0
@@ -93,9 +96,10 @@ txn_commit() {
         return 10
     fi
 
-    _mode=600
+    # 新文件的默认权限, 调用方可用 TXN_NEW_MODE 覆盖 (例如 root:snell 的 0640 配置)
+    _mode=${TXN_NEW_MODE:-600}
     if [ -e "$_target" ]; then
-        _mode=$(stat -c %a -- "$_target") || _mode=600
+        _mode=$(stat -c %a -- "$_target") || _mode=${TXN_NEW_MODE:-600}
         if ! _backup=$(txn_backup "$_target"); then
             rm -f -- "$_cand"
             apm_err "备份旧配置失败, 当前配置未改动"
