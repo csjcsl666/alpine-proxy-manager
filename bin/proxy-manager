@@ -9,7 +9,7 @@ APM_HOME=${_self%/*}
 APM_HOME=${APM_HOME%/*}
 export APM_HOME
 
-for _m in common environment state core model policy txn report snell; do
+for _m in common environment state core model policy txn report snell singbox; do
     # shellcheck source=/dev/null
     . "$APM_HOME/lib/$_m.sh" || { echo "加载 lib/$_m.sh 失败" >&2; exit 1; }
 done
@@ -30,6 +30,12 @@ usage() {
   snell config set psk --stdin | --generate
   snell update [标签] [--force]        更新二进制 失败自动回滚
   snell uninstall [--purge]            卸载 默认保留配置与日志
+  sing-box status | info | log [N] | check            状态 事实 日志 配置检查
+  sing-box install [--release 标签]    下载官方 musl release 安装并启动 默认 v1.13.14
+  sing-box start | stop | restart | update [标签] [--force] | uninstall [--purge]
+  sing-box add anytls [--name ID] [--port N | --listen ADDR] [--server-name 名] [--password-stdin]
+  sing-box list | show ID | enable ID | disable ID | delete ID
+  sing-box set ID port|listen|server-name 值 | set ID password --stdin|--generate
   help          显示本帮助
 EOF
 }
@@ -45,6 +51,7 @@ case ${1:-help} in
         esac
         ;;
     snell) shift; snell_cli "$@"; exit $? ;;
+    sing-box|singbox) shift; singbox_cli "$@"; exit $? ;;
     help|--help|-h) usage ;;
     *) apm_err "未知命令: $1"; usage >&2; exit 2 ;;
 esac
