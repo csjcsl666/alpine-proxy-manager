@@ -9,7 +9,7 @@ APM_HOME=${_self%/*}
 APM_HOME=${APM_HOME%/*}
 export APM_HOME
 
-for _m in common environment state core model policy txn report; do
+for _m in common environment state core model policy txn report snell; do
     # shellcheck source=/dev/null
     . "$APM_HOME/lib/$_m.sh" || { echo "加载 lib/$_m.sh 失败" >&2; exit 1; }
 done
@@ -22,9 +22,14 @@ usage() {
   --version     显示版本与 Build
   doctor        只读环境检查
   core list     列出 Core 及状态 (只读发现)
-  snell status  Snell 状态 (只读)
-  snell info    Snell 发现到的全部事实 (只读)
-  snell log [N] Snell 日志末尾 N 行 默认 20 (只读)
+  snell status | info | log [N]       Snell 状态 事实 日志 (只读)
+  snell install [--release 标签] [--port 端口 | --listen 列表] [--psk-stdin]
+  snell start | stop | restart         仅限 Manager 安装的 Snell
+  snell config [show]                  显示配置 (PSK 脱敏)
+  snell config set listen|mode 值      修改配置 失败自动恢复
+  snell config set psk --stdin | --generate
+  snell update [标签] [--force]        更新二进制 失败自动回滚
+  snell uninstall [--purge]            卸载 默认保留配置与日志
   help          显示本帮助
 EOF
 }
@@ -39,18 +44,7 @@ case ${1:-help} in
             *) apm_err "未知的 core 子命令: $2"; usage >&2; exit 2 ;;
         esac
         ;;
-    snell)
-        case ${2:-status} in
-            status) report_snell_status ;;
-            info) report_snell_info ;;
-            log) report_snell_log "${3:-20}" ;;
-            install|uninstall|start|stop|restart|reload|update|config|adopt|migrate)
-                apm_err "Snell 目前只有只读 Adapter, $2 尚未实现"
-                exit 3
-                ;;
-            *) apm_err "未知的 snell 子命令: $2"; usage >&2; exit 2 ;;
-        esac
-        ;;
+    snell) shift; snell_cli "$@"; exit $? ;;
     help|--help|-h) usage ;;
     *) apm_err "未知命令: $1"; usage >&2; exit 2 ;;
 esac
