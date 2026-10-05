@@ -25,3 +25,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: 在 Alpine 容器内检查并测试
         run: docker run --rm -v "$PWD:/src:ro" "alpine:${{ matrix.alpine }}" sh /src/tests/ci-alpine.sh
+
+  snell-official:
+    name: 官方 Snell release smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 下载官方 Snell 并运行 -v
+        run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-snell-smoke.sh

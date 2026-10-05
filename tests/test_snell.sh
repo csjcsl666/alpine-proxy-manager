@@ -374,11 +374,15 @@ mk_snell_init "$A" external
 mk_conf /etc/snell-server.conf 0.0.0.0:43817
 printf 'started' > "$APM_FAKE_RC_DIR/snell"
 BEFORE=$(cd "$A" && find . -type f | sort | xargs cksum)
-for v in install uninstall start stop restart reload update config adopt migrate; do
-    assert_rc "snell $v 被拒绝返回 3" 3 "$PM" snell "$v"
+for v in install uninstall start stop restart update; do
+    assert_rc "External: snell $v 被拒绝返回 4" 4 "$PM" snell "$v"
 done
+for v in reload adopt migrate; do
+    assert_rc "snell $v 尚未实现返回 3" 3 "$PM" snell "$v"
+done
+assert_rc "snell config 只读显示" 0 "$PM" snell config
 assert_rc "未知 snell 子命令返回 2" 2 "$PM" snell bogus
-assert_fail "写操作被拒绝时没有调用 rc-service" test -e "$APM_FAKE_RC_DIR/calls"
+assert_eq "写操作被拒绝时只调用过 status" "" "$(grep -v ' status$' "$APM_FAKE_RC_DIR/calls" 2>/dev/null)"
 "$PM" snell info >/dev/null
 "$PM" snell status >/dev/null
 "$PM" snell log >/dev/null 2>&1

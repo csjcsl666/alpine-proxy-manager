@@ -213,6 +213,173 @@ mk_net() {
     } > "$1/proc/net/$2"
 }
 
+# ---- Snell Managed 生命周期用的模拟系统 ----
+# 旋钮放在 $APM_FAKE_RC_DIR 下: fail_start fail_stop fail_restart no_listen fail_rcupdate fail_adduser fail_apk
+# fail_port 文件里写一个端口, 配置监听该端口时 start 失败
+# 二进制内容含 BADBIN 时 start 失败
+
+# mk_sim_system SYSROOT, 写入模拟的 rc-service rc-update adduser addgroup deluser delgroup apk
+mk_sim_system() {
+    local _r
+    _r=$1
+    mkdir -p "$_r/sbin" "$_r/etc/runlevels/default" "$_r/run" "$_r/var/tmp" "$_r/var/lib" "$_r/var/log" "$_r/etc/init.d" "$_r/proc/net" "$_r/usr/local/bin"
+    : > "$_r/etc/passwd"
+    : > "$_r/etc/group"
+    : > "$_r/.apk-installed"
+    printf 'libstdc++\nlibgcc\n' > "$_r/.apk-installed"
+    cat > "$_r/sbin/rc-service" <<'EOS'
+#!/bin/sh
+R=${APM_SYSROOT:?}
+K=${APM_FAKE_RC_DIR:?}
+svc=$1
+act=${2:-}
+echo "$svc $act" >> "$K/calls"
+conf=$R/etc/snell/snell-server.conf
+bin=$R/usr/local/bin/snell-server
+state() { cat "$K/state" 2>/dev/null || echo stopped; }
+stop_proc() {
+    rm -rf "$R/proc/23754" "$R/proc/23755" "$R/run/snell.pid" "$R/proc/net/tcp"
+}
+start_proc() {
+    mkdir -p "$R/run" "$R/proc/23754" "$R/proc/23755/fd" "$R/proc/net"
+    printf '23754\n' > "$R/run/snell.pid"
+    printf '23754 (supervise-daemo) S 1 1 1 0 -1 4194560 1 0 0 0 1 1 0 0 20 0 1 0 100 1148000 83 1\n' > "$R/proc/23754/stat"
+    printf 'supervise-daemon\0snell\0--start\0' > "$R/proc/23754/cmdline"
+    printf '23755 (ld-musl-x86_64.) S 23754 1 1 0 -1 4194560 1 0 0 0 1 1 0 0 20 0 1 0 100 15292000 1047 1\n' > "$R/proc/23755/stat"
+    printf 'ld-linux-x86-64.so.2\0--argv0\0/usr/local/bin/snell-server\0--\0/usr/local/bin/snell-server\0-c\0/etc/snell/snell-server.conf\0' > "$R/proc/23755/cmdline"
+    {
+        printf '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n'
+        if [ ! -e "$K/no_listen" ]; then
+            i=0
+            for p in $(sed -n 's/^listen[[:space:]]*=[[:space:]]*//p' "$conf" | tr ',' '\n' | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p'); do
+                printf '   %s: 00000000:%04X 00000000:0000 0A 00000000:00000000 00:00000000 00000000   100        0 %s 1 0\n' "$i" "$p" "$((50000 + i))"
+                ln -sf "socket:[$((50000 + i))]" "$R/proc/23755/fd/$((10 + i))"
+                i=$((i + 1))
+            done
+        fi
+    } > "$R/proc/net/tcp"
+}
+do_start() {
+    [ ! -e "$K/fail_start" ] || return 1
+    [ -f "$conf" ] || return 1
+    # BusyBox grep 对 NUL 与非法字节不可靠, 先把所有非字母数字换成空格
+    tr -c 'A-Za-z0-9\n' ' ' < "$bin" 2>/dev/null | grep -q BADBIN && return 1
+    if [ -s "$K/fail_port" ]; then
+        grep -q ":$(cat "$K/fail_port")" "$conf" && return 1
+    fi
+    echo started > "$K/state"
+    start_proc
+    return 0
+}
+case $act in
+    status)
+        st=$(state)
+        echo " * status: $st"
+        case $st in started) exit 0 ;; crashed) exit 32 ;; *) exit 3 ;; esac
+        ;;
+    start) do_start; exit $? ;;
+    stop)
+        [ ! -e "$K/fail_stop" ] || exit 1
+        echo stopped > "$K/state"
+        stop_proc
+        exit 0
+        ;;
+    restart)
+        [ ! -e "$K/fail_restart" ] || exit 1
+        echo stopped > "$K/state"
+        stop_proc
+        do_start
+        exit $?
+        ;;
+    *) echo "$*" >> "$K/violations"; exit 99 ;;
+esac
+EOS
+    cat > "$_r/sbin/rc-update" <<'EOS'
+#!/bin/sh
+R=${APM_SYSROOT:?}
+K=${APM_FAKE_RC_DIR:?}
+echo "rc-update $*" >> "$K/calls"
+[ ! -e "$K/fail_rcupdate" ] || exit 1
+case $1 in
+    add) mkdir -p "$R/etc/runlevels/$3"; ln -sf "/etc/init.d/$2" "$R/etc/runlevels/$3/$2" ;;
+    del) rm -f "$R/etc/runlevels/$3/$2" ;;
+esac
+EOS
+    cat > "$_r/sbin/addgroup" <<'EOS'
+#!/bin/sh
+R=${APM_SYSROOT:?}
+[ ! -e "${APM_FAKE_RC_DIR:?}/fail_addgroup" ] || exit 1
+for last; do :; done
+echo "$last:x:101:" >> "$R/etc/group"
+EOS
+    cat > "$_r/sbin/adduser" <<'EOS'
+#!/bin/sh
+R=${APM_SYSROOT:?}
+[ ! -e "${APM_FAKE_RC_DIR:?}/fail_adduser" ] || exit 1
+for last; do :; done
+echo "$last:x:100:101::/var/empty:/sbin/nologin" >> "$R/etc/passwd"
+EOS
+    cat > "$_r/sbin/deluser" <<'EOS'
+#!/bin/sh
+R=${APM_SYSROOT:?}
+grep -v "^$1:" "$R/etc/passwd" > "$R/etc/passwd.new"; mv "$R/etc/passwd.new" "$R/etc/passwd"
+EOS
+    cat > "$_r/sbin/delgroup" <<'EOS'
+#!/bin/sh
+R=${APM_SYSROOT:?}
+grep -v "^$1:" "$R/etc/group" > "$R/etc/group.new"; mv "$R/etc/group.new" "$R/etc/group"
+EOS
+    cat > "$_r/sbin/apk" <<'EOS'
+#!/bin/sh
+R=${APM_SYSROOT:?}
+K=${APM_FAKE_RC_DIR:?}
+case $1 in
+    info) grep -qx "$3" "$R/.apk-installed" ;;
+    add)
+        [ ! -e "$K/fail_apk" ] || exit 1
+        shift
+        for a; do case $a in -*) ;; *) echo "$a" >> "$R/.apk-installed" ;; esac; done
+        ;;
+    *) exit 99 ;;
+esac
+EOS
+    chmod +x "$_r"/sbin/rc-service "$_r"/sbin/rc-update "$_r"/sbin/addgroup "$_r"/sbin/adduser "$_r"/sbin/deluser "$_r"/sbin/delgroup "$_r"/sbin/apk
+}
+
+# mk_snell_zip DIR TAG MESSAGE, 在 DIR 生成 snell-server-TAG-linux-amd64.zip, 内含一个输出 MESSAGE 的真实 ELF 桩
+# 用 git archive 生成 zip, 不需要 zip 命令
+mk_snell_zip() {
+    local _w
+    _w=$(mktemp -d)
+    mkdir -p "$1"
+    mk_elf_stub "$_w/snell-server" "$3" || { rm -rf "$_w"; return 1; }
+    git -C "$_w" init -q
+    git -C "$_w" add snell-server
+    git -C "$_w" -c user.name=t -c user.email=t@example.invalid commit -q -m x
+    git -C "$_w" archive --format=zip -o "$1/snell-server-$2-linux-amd64.zip" HEAD
+    rm -rf "$_w"
+}
+
+# 下载 shim: 与 wget 同形的参数, 按 URL 文件名在 $APM_TEST_ZIPS 里找文件, 记录 URL
+mk_dl_shim() {
+    cat > "$1" <<'EOS'
+#!/bin/sh
+while [ $# -gt 1 ]; do
+    case $1 in
+        -O) dest=$2; shift 2 ;;
+        -T) shift 2 ;;
+        *) shift ;;
+    esac
+done
+echo "$1" >> "${APM_TEST_DL_LOG:?}"
+[ -z "${APM_TEST_DL_FAIL:-}" ] || exit 1
+f=${APM_TEST_ZIPS:?}/${1##*/}
+[ -f "$f" ] || exit 1
+cp "$f" "$dest"
+EOS
+    chmod +x "$1"
+}
+
 t_done() {
     printf '%s: %s 通过, %s 失败\n' "$(basename "$0")" "$T_PASS" "$T_FAIL"
     [ "$T_FAIL" -eq 0 ]
