@@ -90,6 +90,16 @@ core_discover snell
 assert_eq "timeout 包着的版本查询进程不算服务进程" stopped "$CF_STATE"
 assert_eq "timeout 包着的版本查询进程没有 PID" "" "$CF_PID"
 rm -rf "$A/proc/502"
+# 无关进程的某个参数里只是包含二进制路径作为子串, 不能算服务进程 (HK-IXP2 真机发现)
+mk_proc "$A" 503 1 sh sh -c 'ls /usr/local/bin; sha256sum /usr/local/bin/snell-server | cut -c1-8'
+core_discover snell
+assert_eq "参数子串包含二进制路径的无关进程不算服务进程" stopped "$CF_STATE"
+assert_eq "参数子串包含二进制路径的无关进程没有 PID" "" "$CF_PID"
+rm -rf "$A/proc/503"
+mk_proc "$A" 504 1 ld-musl-x86_64. ld-linux-x86-64.so.2 --argv0 /usr/local/bin/snell-server -- /usr/local/bin/snell-server -c /x.conf
+core_discover snell
+assert_eq "argv 元素恰好等于二进制路径才算服务进程" 504 "$CF_PID"
+rm -rf "$A/proc/504"
 
 # ---- External + OpenRC running (tw-home 形态, gcompat) ----
 new_sys s2

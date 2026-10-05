@@ -307,6 +307,11 @@ _core_pid_alive() { [ -d "$(env_path "/proc/$1")" ]; }
 # 进程命令行的 argv 第一项与完整命令行 (NUL 换成空格)
 _core_cmdline() { tr '\0' ' ' < "$(env_path "/proc/$1/cmdline")" 2>/dev/null; }
 
+# argv 中是否有一个元素恰好等于 PATH
+_core_argv_has() {
+    tr '\0' '\n' < "$(env_path "/proc/$1/cmdline")" 2>/dev/null | grep -Fxq -- "$2"
+}
+
 _core_argv0_base() {
     local _a
     _a=$(tr '\0' '\n' < "$(env_path "/proc/$1/cmdline")" 2>/dev/null | head -n 1)
@@ -354,9 +359,13 @@ _core_find_pids() {
             [ -r "$_pf/cmdline" ] || continue
             # 排除监督进程, 以及版本查询时 timeout 留下的瞬时进程, 它们的命令行也含二进制路径
             case $(_core_argv0_base "$_pid") in supervise-daemon|timeout) continue ;; esac
-            case " $(_core_cmdline "$_pid")" in
-                *" $CF_BINARY "*|*" $CF_BINARY_REAL "*) CF_PID=$_pid; CF_PIDSRC=cmdline; break ;;
-            esac
+            # 必须是某个 argv 元素恰好等于二进制路径, 不能是拼接后命令行里的子串
+            # 否则 sh -c "...路径..." 这样的无关进程会被误判为服务进程
+            if _core_argv_has "$_pid" "$CF_BINARY" || { [ -n "$CF_BINARY_REAL" ] && _core_argv_has "$_pid" "$CF_BINARY_REAL"; }; then
+                CF_PID=$_pid
+                CF_PIDSRC=cmdline
+                break
+            fi
         done
     fi
 }
