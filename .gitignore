@@ -1,0 +1,4 @@
+BUILD
+*.tmp
+.*.cand.*
+.*.tmp.*

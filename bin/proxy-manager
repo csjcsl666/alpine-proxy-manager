@@ -1,0 +1,34 @@
+#!/bin/sh
+# Alpine Proxy Manager 主入口
+# 仅使用 POSIX sh 与 BusyBox 工具
+
+set -u
+
+_self=$(readlink -f -- "$0") || { echo "无法解析自身路径" >&2; exit 1; }
+APM_HOME=${_self%/*}
+APM_HOME=${APM_HOME%/*}
+export APM_HOME
+
+for _m in common; do
+    # shellcheck source=/dev/null
+    . "$APM_HOME/lib/$_m.sh" || { echo "加载 lib/$_m.sh 失败" >&2; exit 1; }
+done
+
+usage() {
+    cat <<EOF
+用法: proxy-manager <命令>
+
+命令:
+  --version     显示版本与 Build
+  doctor        只读环境检查
+  status        显示 Core 与功能状态
+  core list     列出 Core 及安装状态
+  help          显示本帮助
+EOF
+}
+
+case ${1:-help} in
+    --version|-V|version) apm_print_version ;;
+    help|--help|-h) usage ;;
+    *) apm_err "未知命令: $1"; usage >&2; exit 2 ;;
+esac
