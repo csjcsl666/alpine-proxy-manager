@@ -77,16 +77,140 @@ mk_sysroot() {
     printf 'MemTotal:        1048576 kB\nMemFree:          200000 kB\nMemAvailable:     600000 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\n' > "$1/proc/meminfo"
 }
 
-# mk_fake_singbox SYSROOT, 安装一个假的 sing-box, version 固定, check 以文件内含 valid 为通过
+t_skip() { printf '  skip %s\n' "$1"; }
+
+# mk_elf_stub FILE MESSAGE, 生成一个真实可执行的最小 x86_64 ELF, 运行时忽略参数并打印 MESSAGE
+# 用于测试 "只执行已确认的 ELF" 的路径, 其他架构返回 1
+# shellcheck disable=SC2059
+mk_elf_stub() {
+    local _len _total _lo _hi
+    [ "$(uname -m)" = x86_64 ] || return 1
+    _len=$(printf '%s\n' "$2" | wc -c | tr -d ' ')
+    _total=$((153 + _len))
+    _lo=$((_total % 256))
+    _hi=$((_total / 256))
+    {
+        printf '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000'
+        printf '\002\000\076\000\001\000\000\000'
+        printf '\170\000\100\000\000\000\000\000'
+        printf '\100\000\000\000\000\000\000\000'
+        printf '\000\000\000\000\000\000\000\000'
+        printf '\000\000\000\000'
+        printf '\100\000\070\000\001\000\000\000\000\000\000\000'
+        printf '\001\000\000\000\005\000\000\000'
+        printf '\000\000\000\000\000\000\000\000'
+        printf '\000\000\100\000\000\000\000\000'
+        printf '\000\000\100\000\000\000\000\000'
+        printf "\\$(printf '%03o' "$_lo")\\$(printf '%03o' "$_hi")\\000\\000\\000\\000\\000\\000"
+        printf "\\$(printf '%03o' "$_lo")\\$(printf '%03o' "$_hi")\\000\\000\\000\\000\\000\\000"
+        printf '\000\020\000\000\000\000\000\000'
+        printf '\270\001\000\000\000'
+        printf '\277\001\000\000\000'
+        printf '\110\215\065\020\000\000\000'
+        printf "\\272\\$(printf '%03o' "$_len")\\000\\000\\000"
+        printf '\017\005'
+        printf '\270\074\000\000\000'
+        printf '\061\377'
+        printf '\017\005'
+        printf '%s\n' "$2"
+    } > "$1"
+    chmod +x "$1"
+}
+
+# mk_fake_singbox SYSROOT, 安装一个真实 ELF 的 sing-box 桩, version 输出固定
+# 非 x86_64 时返回 1
 mk_fake_singbox() {
-    cat > "$1/usr/bin/sing-box" <<'EOS'
+    mk_elf_stub "$1/usr/bin/sing-box" "sing-box version 1.13.11" || return 1
+}
+
+# mk_script_bin FILE MARKER_DIR, 安装一个恶意样式的脚本, 一旦被执行就在 MARKER_DIR 下创建 SHOULD_NOT_EXIST
+mk_script_bin() {
+    printf '#!/bin/sh\ntouch "%s/SHOULD_NOT_EXIST"\necho "snell-server v9.9.9"\n' "$2" > "$1"
+    chmod +x "$1"
+}
+
+# 假的 rc-service: 只允许 status, 状态取自 $APM_FAKE_RC_DIR/<服务名>, 任何其他动作记入 violations 并失败
+mk_fake_rcservice() {
+    cat > "$1/sbin/rc-service" <<'EOS'
 #!/bin/sh
-case $1 in
-    version) echo "sing-box version 1.13.11"; echo "Environment: go1.x linux/amd64" ;;
-    check) grep -q valid "$3" ;;
+d=${APM_FAKE_RC_DIR:?}
+if [ "${2:-}" != status ]; then
+    echo "$*" >> "$d/violations"
+    exit 99
+fi
+echo "$*" >> "$d/calls"
+st=$(cat "$d/$1" 2>/dev/null || echo stopped)
+echo " * status: $st"
+case $st in
+    started) exit 0 ;;
+    crashed) exit 32 ;;
+    *) exit 3 ;;
 esac
 EOS
-    chmod +x "$1/usr/bin/sing-box"
+    chmod +x "$1/sbin/rc-service"
+}
+
+# mk_snell_init SYSROOT [external|alpine], 写入 OpenRC 脚本
+mk_snell_init() {
+    mkdir -p "$1/etc/init.d"
+    if [ "${2:-external}" = external ]; then
+        cat > "$1/etc/init.d/snell" <<'EOS'
+#!/sbin/openrc-run
+name="snell"
+description="Official Snell Server v6.0.0-rc2"
+command="/usr/local/bin/snell-server"
+command_args="-c /etc/snell-server.conf"
+command_user="snell:snell"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/snell/access.log"
+error_log="/var/log/snell/error.log"
+supervisor=supervise-daemon
+export LD_PRELOAD="/lib/libgcompat.so.0"
+depend() {
+    need net
+}
+EOS
+    else
+        cat > "$1/etc/init.d/snell" <<'EOS'
+#!/sbin/openrc-run
+name="Snell"
+command="/usr/local/bin/snell-server"
+command_args="-l notify -c /etc/snell/snell-server.conf"
+command_user="snell:snell"
+supervisor="supervise-daemon"
+output_log="/var/log/snell.log"
+error_log="/var/log/snell.log"
+required_files="/etc/snell/snell-server.conf"
+depend() {
+    need net
+}
+EOS
+    fi
+    chmod +x "$1/etc/init.d/snell"
+}
+
+# mk_proc SYSROOT PID PPID COMM ARG...  写入 /proc/PID/{stat,comm,cmdline}
+mk_proc() {
+    local _r _pid _ppid _comm
+    _r=$1
+    _pid=$2
+    _ppid=$3
+    _comm=$4
+    shift 4
+    mkdir -p "$_r/proc/$_pid"
+    printf '%s (%s) S %s 1 1 0 -1 4194560 100 0 0 0 1 1 0 0 20 0 1 0 100 15292000 1047 18446744073709551615\n' "$_pid" "$_comm" "$_ppid" > "$_r/proc/$_pid/stat"
+    printf '%s\n' "$_comm" > "$_r/proc/$_pid/comm"
+    printf '%s\0' "$@" > "$_r/proc/$_pid/cmdline"
+}
+
+# mk_net SYSROOT FILE LINES, 写 /proc/net/FILE, 带表头
+mk_net() {
+    mkdir -p "$1/proc/net"
+    {
+        printf '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n'
+        printf '%s\n' "$3"
+    } > "$1/proc/net/$2"
 }
 
 t_done() {
