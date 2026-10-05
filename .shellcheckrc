@@ -2,3 +2,6 @@
 # 目标是 BusyBox ash, local 可用
 shell=sh
 disable=SC2034,SC2153,SC3043
+source-path=SCRIPTDIR
+# tests 中用 ls 计数文件名受控, 无需 find
+disable=SC2012,SC2010,SC2126

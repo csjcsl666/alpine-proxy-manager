@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  alpine:
+    name: Alpine ${{ matrix.alpine }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        alpine: ["3.22", "3.24"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: 在 Alpine 容器内检查并测试
+        run: docker run --rm -v "$PWD:/src:ro" "alpine:${{ matrix.alpine }}" sh /src/tests/ci-alpine.sh
