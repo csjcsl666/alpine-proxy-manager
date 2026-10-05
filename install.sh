@@ -501,12 +501,22 @@ do_uninstall() {
 }
 
 apm_main() {
-    local _mode
-    # 最后一行传入的完成标记, 缺失说明脚本被截断
-    if [ "${1:-}" != --apm-complete ]; then
+    local _mode _n _i _last
+    # 完成标记必须是最后一个参数, 即脚本最后一行的末尾
+    # 下载被截断时无论在哪里断开都拿不到标记, 不会执行任何操作
+    _n=$#
+    _last=
+    for _last in "$@"; do :; done
+    if [ "$_n" -eq 0 ] || [ "$_last" != --apm-complete ]; then
         err "install.sh 不完整 (可能下载被中断), 未执行任何操作"
         exit 1
     fi
+    _i=1
+    while [ "$_i" -lt "$_n" ]; do
+        set -- "$@" "$1"
+        shift
+        _i=$((_i + 1))
+    done
     shift
 
     _mode=install
@@ -543,4 +553,4 @@ apm_main() {
     fi
 }
 
-apm_main --apm-complete "$@"
+apm_main "$@" --apm-complete
