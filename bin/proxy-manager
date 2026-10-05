@@ -21,7 +21,10 @@ usage() {
 命令:
   --version     显示版本与 Build
   doctor        只读环境检查
-  core list     列出 Core 及安装状态
+  core list     列出 Core 及状态 (只读发现)
+  snell status  Snell 状态 (只读)
+  snell info    Snell 发现到的全部事实 (只读)
+  snell log [N] Snell 日志末尾 N 行 默认 20 (只读)
   help          显示本帮助
 EOF
 }
@@ -34,6 +37,18 @@ case ${1:-help} in
         case ${2:-list} in
             list) report_core_list ;;
             *) apm_err "未知的 core 子命令: $2"; usage >&2; exit 2 ;;
+        esac
+        ;;
+    snell)
+        case ${2:-status} in
+            status) report_snell_status ;;
+            info) report_snell_info ;;
+            log) report_snell_log "${3:-20}" ;;
+            install|uninstall|start|stop|restart|reload|update|config|adopt|migrate)
+                apm_err "Snell 目前只有只读 Adapter, $2 尚未实现"
+                exit 3
+                ;;
+            *) apm_err "未知的 snell 子命令: $2"; usage >&2; exit 2 ;;
         esac
         ;;
     help|--help|-h) usage ;;

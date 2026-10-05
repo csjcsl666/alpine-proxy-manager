@@ -74,38 +74,194 @@ report_doctor() {
     fi
 
     for _k in $CORE_KEYS; do
-        if core_installed "$_k"; then
-            printf '%s：Installed\n' "$(core_name "$_k")"
+        core_discover "$_k"
+        case $CF_INSTALLED in
+            yes) printf '%s：Installed (%s)\n' "$CF_NAME" "$(core_deployment_label "$CF_DEPLOYMENT")" ;;
+            unverified) printf '%s：Unverified (%s 不是已确认的 ELF, 未执行)\n' "$CF_NAME" "$CF_BINARY" ;;
+            *) printf '%s：Not installed\n' "$CF_NAME" ;;
+        esac
+        if [ "$CF_INSTALLED" = yes ]; then
+            printf '%s version：%s\n' "$CF_NAME" "${CF_VERSION_REPORTED:-unknown}"
         else
-            printf '%s：Not installed\n' "$(core_name "$_k")"
+            printf '%s version：-\n' "$CF_NAME"
         fi
     done
-    if core_installed singbox; then
-        printf 'sing-box version：%s\n' "$(core_version singbox || printf 'unknown')"
-    else
-        printf 'sing-box version：-\n'
-    fi
 
     [ "$_fails" -eq 0 ]
 }
 
+# 一个 Core 的摘要块, 消费 core_discover 已填好的 CF_* 事实
+_rpt_core_block() {
+    printf '%s\n' "$CF_NAME"
+    printf '  状态：%s\n' "$(core_state_label "$CF_STATE")"
+    if [ "$CF_INSTALLED" = yes ]; then
+        if [ -n "$CF_VERSION_REPORTED" ]; then
+            printf '  版本：%s (二进制自报)\n' "$CF_VERSION_REPORTED"
+        else
+            printf '  版本：未知\n'
+        fi
+        printf '  来源：%s\n' "$(core_deployment_label "$CF_DEPLOYMENT")"
+        printf '  管理状态：%s\n' "$(core_managed_label)"
+    fi
+}
+
 report_core_list() {
-    local _k _st _ver
+    local _k
     for _k in $CORE_KEYS; do
-        _st=$(core_state "$_k")
-        _ver=$(core_version "$_k" 2>/dev/null) || _ver=
-        printf '%s\t%s\t%s\n' "$(core_name "$_k")" "$(core_state_label "$_st")" "${_ver:--}"
+        core_discover "$_k"
+        _rpt_core_block
+        _rpt_notes
     done
 }
 
+# 提示行, 每行缩进显示
+_rpt_notes() {
+    [ -n "$CF_NOTES" ] || return 0
+    printf '%s' "$CF_NOTES" | sed 's/^/  注意：/'
+}
+
 report_status() {
-    local _k
+    local _k _extra
     printf '%s\n\n' "$APM_NAME"
     printf 'Core\n────────────────\n'
     for _k in $CORE_KEYS; do
-        printf '%-12s%s\n' "$(core_name "$_k")" "$(core_state_label "$(core_state "$_k")")"
+        core_discover "$_k"
+        _extra=
+        if [ "$CF_INSTALLED" = yes ]; then
+            _extra=" ($(core_deployment_label "$CF_DEPLOYMENT"), $(core_managed_label))"
+        fi
+        printf '%-12s%s%s\n' "$CF_NAME" "$(core_state_label "$CF_STATE")" "$_extra"
     done
     printf '\nFeatures\n────────────────\n'
     printf '%-22s%s\n' "Server SOCKS Egress" "$(state_socks_summary)"
     printf '%-22s%s\n' "Relay Access Policy" "$(state_relay_summary)"
+}
+
+# ---- Snell 只读 Adapter ----
+
+_rpt_yn() { case $1 in yes) printf '是' ;; no) printf '否' ;; *) printf '%s' "$1" ;; esac; }
+
+# 监听行, 如实说明归属依据
+_rpt_listeners() {
+    if [ -z "$CF_LISTEN" ]; then
+        printf '  监听：未观察到\n'
+        return 0
+    fi
+    case $CF_LISTEN_ATTRIB in
+        pid) printf '  监听 (按进程 %s 的 socket 确认)：\n' "$CF_PID" ;;
+        *) printf '  监听 (仅按配置端口匹配, 未确认进程)：\n' ;;
+    esac
+    printf '%s\n' "$CF_LISTEN" | awk '{ printf "    %s %s\n", $1, $2 }'
+    printf '  说明：以上是容器或系统内观察到的监听端口, 不是公网映射端口\n'
+}
+
+report_snell_status() {
+    core_discover snell
+    printf 'Snell\n'
+    printf '  状态：%s\n' "$(core_state_label "$CF_STATE")"
+    if [ "$CF_INSTALLED" != yes ]; then
+        _rpt_notes
+        return 0
+    fi
+    printf '  版本：%s (二进制自报)\n' "${CF_VERSION_REPORTED:-未知}"
+    printf '  来源：%s, %s\n' "$(core_deployment_label "$CF_DEPLOYMENT")" "$(core_managed_label)"
+    case $CF_SERVICE_STATE in
+        none) printf '  OpenRC：未找到服务脚本, 运行状态按进程命令行判断\n' ;;
+        *) printf '  OpenRC：服务 %s 状态 %s (来源 %s)\n' "$CF_SERVICE" "$CF_SERVICE_STATE" "$CF_SERVICE_SOURCE" ;;
+    esac
+    [ -z "$CF_PID" ] || printf '  进程：%s\n' "$CF_PID"
+    _rpt_listeners
+    _rpt_notes
+}
+
+report_snell_info() {
+    core_discover snell
+    printf 'Snell\n'
+    printf '  已安装：%s\n' "$(_rpt_yn "$CF_INSTALLED")"
+    printf '  状态：%s\n' "$(core_state_label "$CF_STATE")"
+    printf '  部署类型：%s\n' "$CF_DEPLOYMENT"
+    printf '  管理状态：%s\n' "$(core_managed_label)"
+    if [ -n "$CF_BINARY" ]; then
+        printf '  二进制：%s (类型 %s, 符号链接 %s)\n' "$CF_BINARY" "$CF_BINARY_KIND" "$(_rpt_yn "$CF_BINARY_LINK")"
+        [ "$CF_BINARY_LINK" != yes ] || printf '  二进制实际路径：%s\n' "$CF_BINARY_REAL"
+    fi
+    if [ "$CF_INSTALLED" != yes ]; then
+        _rpt_notes
+        return 0
+    fi
+    printf '  自报版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
+    printf '  精确发布：%s\n' "$CF_VERSION_EXACT"
+    printf '  版本来源：%s\n' "$CF_VERSION_SOURCE"
+    if [ -n "$CF_SERVICE" ]; then
+        printf '  服务：%s (%s)\n' "$CF_SERVICE" "$CF_SERVICE_FILE"
+        printf '  服务状态：%s (来源 %s)\n' "$CF_SERVICE_STATE" "$CF_SERVICE_SOURCE"
+        printf '  托管方式：%s\n' "${CF_SUPERVISOR:-未声明}"
+        printf '  服务用户：%s\n' "${CF_SERVICE_USER:-未声明}"
+        printf '  pidfile：%s\n' "${CF_PIDFILE:--}"
+        [ -z "$CF_SUP_PID" ] || printf '  监督进程 PID：%s\n' "$CF_SUP_PID"
+    else
+        printf '  服务：未找到\n'
+    fi
+    [ -z "$CF_PID" ] || printf '  服务进程 PID：%s\n' "$CF_PID"
+    if [ -n "$CF_CONFIG" ]; then
+        printf '  配置：%s (来源 %s)\n' "$CF_CONFIG" "$CF_CONFIG_SOURCE"
+        printf '  配置存在：%s\n' "$(_rpt_yn "$CF_CONFIG_EXISTS")"
+        [ -z "$CF_CONFIG_PERM" ] || printf '  配置权限：%s\n' "$CF_CONFIG_PERM"
+        if [ "$CF_CONFIG_READABLE" = yes ]; then
+            printf '  配置字段：%s\n' "${CF_CONFIG_KEYS:--}"
+            printf '  listen：%s\n' "${CF_SNELL_LISTEN:--}"
+            printf '  mode：%s\n' "${CF_SNELL_MODE:--}"
+            case $CF_PSK in
+                configured) printf '  psk：已配置\n' ;;
+                missing) printf '  psk：未配置\n' ;;
+            esac
+        fi
+    else
+        printf '  配置：未找到\n'
+    fi
+    _rpt_log_meta "access/output" "$CF_LOG_OUT" "$CF_LOG_OUT_EXISTS" "$CF_LOG_OUT_SIZE"
+    _rpt_log_meta "error" "$CF_LOG_ERR" "$CF_LOG_ERR_EXISTS" "$CF_LOG_ERR_SIZE"
+    _rpt_listeners
+    _rpt_notes
+}
+
+_rpt_log_meta() {
+    if [ -z "$2" ]; then
+        printf '  %s 日志：未声明\n' "$1"
+    elif [ "$3" = yes ]; then
+        printf '  %s 日志：%s (%s 字节)\n' "$1" "$2" "$4"
+    else
+        printf '  %s 日志：%s (不存在)\n' "$1" "$2"
+    fi
+}
+
+# snell log [N], 只读取末尾 N 行 默认 20 最多 200 优先 error 日志
+report_snell_log() {
+    local _n _f _fs
+    _n=${1:-20}
+    case $_n in ''|*[!0-9]*) apm_err "行数必须是正整数"; return 2 ;; esac
+    [ "$_n" -ge 1 ] || { apm_err "行数必须是正整数"; return 2; }
+    [ "$_n" -le 200 ] || _n=200
+    core_discover snell
+    if [ "$CF_INSTALLED" != yes ]; then
+        apm_err "未检测到已确认的 Snell"
+        return 1
+    fi
+    _f=$CF_LOG_ERR
+    [ -n "$_f" ] || _f=$CF_LOG_OUT
+    if [ -z "$_f" ]; then
+        apm_err "服务脚本没有声明日志路径"
+        return 1
+    fi
+    _fs=$(env_path "$_f")
+    if [ ! -f "$_fs" ]; then
+        apm_err "日志文件不存在: $_f"
+        return 1
+    fi
+    if ! _core_can_read "$_fs"; then
+        apm_err "没有读取权限: $_f"
+        return 1
+    fi
+    printf '%s 最后 %s 行 (日志可能包含访问的目标域名, 注意不要公开)\n' "$_f" "$_n"
+    tail -n "$_n" "$_fs"
 }
