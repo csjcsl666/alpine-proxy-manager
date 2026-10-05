@@ -1,0 +1,3 @@
+# lib/*.sh 互相 source, 跨文件变量会被误报
+shell=sh
+disable=SC2034,SC2153

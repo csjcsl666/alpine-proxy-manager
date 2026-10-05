@@ -9,7 +9,7 @@ APM_HOME=${_self%/*}
 APM_HOME=${APM_HOME%/*}
 export APM_HOME
 
-for _m in common; do
+for _m in common environment core report; do
     # shellcheck source=/dev/null
     . "$APM_HOME/lib/$_m.sh" || { echo "加载 lib/$_m.sh 失败" >&2; exit 1; }
 done
@@ -21,7 +21,6 @@ usage() {
 命令:
   --version     显示版本与 Build
   doctor        只读环境检查
-  status        显示 Core 与功能状态
   core list     列出 Core 及安装状态
   help          显示本帮助
 EOF
@@ -29,6 +28,13 @@ EOF
 
 case ${1:-help} in
     --version|-V|version) apm_print_version ;;
+    doctor) report_doctor ;;
+    core)
+        case ${2:-list} in
+            list) report_core_list ;;
+            *) apm_err "未知的 core 子命令: $2"; usage >&2; exit 2 ;;
+        esac
+        ;;
     help|--help|-h) usage ;;
     *) apm_err "未知命令: $1"; usage >&2; exit 2 ;;
 esac
