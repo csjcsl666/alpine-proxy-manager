@@ -2,7 +2,8 @@
 # 路径抽象与功能状态汇总
 #
 # 配置目录   /etc/alpine-proxy-manager/{instances,socks}   目录 0700, 文件 0600
-# 数据目录   /var/lib/alpine-proxy-manager/backups
+# 数据目录   /var/lib/alpine-proxy-manager/{backups,cores}
+# Core 归属元数据 cores/<key>.meta 只由 Manager 写入 内容 managed=true core=<key> binary= exact_release=
 # 以上路径均可被 APM_ETC / APM_VAR 覆盖, 默认带 APM_SYSROOT 前缀
 
 state_etc() { printf '%s' "${APM_ETC:-$(env_path /etc/alpine-proxy-manager)}"; }
@@ -10,11 +11,12 @@ state_var() { printf '%s' "${APM_VAR:-$(env_path /var/lib/alpine-proxy-manager)}
 state_instances_dir() { printf '%s/instances' "$(state_etc)"; }
 state_socks_dir() { printf '%s/socks' "$(state_etc)"; }
 state_backup_dir() { printf '%s/backups' "$(state_var)"; }
+state_cores_dir() { printf '%s/cores' "$(state_var)"; }
 
 # 创建目录, 仅供会写入的命令调用, 只读命令不得调用
 state_ensure_dirs() {
     local _d
-    for _d in "$(state_instances_dir)" "$(state_socks_dir)" "$(state_backup_dir)"; do
+    for _d in "$(state_instances_dir)" "$(state_socks_dir)" "$(state_backup_dir)" "$(state_cores_dir)"; do
         mkdir -p -- "$_d" && chmod 700 -- "$_d" || return 1
     done
 }
