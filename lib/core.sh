@@ -352,7 +352,8 @@ _core_find_pids() {
         for _pf in "$(env_path /proc)"/[0-9]*; do
             _pid=${_pf##*/}
             [ -r "$_pf/cmdline" ] || continue
-            [ "$(_core_argv0_base "$_pid")" = supervise-daemon ] && continue
+            # 排除监督进程, 以及版本查询时 timeout 留下的瞬时进程, 它们的命令行也含二进制路径
+            case $(_core_argv0_base "$_pid") in supervise-daemon|timeout) continue ;; esac
             case " $(_core_cmdline "$_pid")" in
                 *" $CF_BINARY "*|*" $CF_BINARY_REAL "*) CF_PID=$_pid; CF_PIDSRC=cmdline; break ;;
             esac

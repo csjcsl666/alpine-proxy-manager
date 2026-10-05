@@ -84,6 +84,12 @@ mk_proc "$A" 501 1 snell-server /bin/sleep 100
 core_discover snell
 assert_eq "只有 comm 等于 snell-server 不算运行" stopped "$CF_STATE"
 rm -rf "$A/proc/501"
+# 版本查询留下的瞬时 timeout 进程命令行里也有二进制路径, 不能算服务进程 (HK-IXP2 真机发现)
+mk_proc "$A" 502 1 timeout timeout 5 /usr/local/bin/snell-server -v
+core_discover snell
+assert_eq "timeout 包着的版本查询进程不算服务进程" stopped "$CF_STATE"
+assert_eq "timeout 包着的版本查询进程没有 PID" "" "$CF_PID"
+rm -rf "$A/proc/502"
 
 # ---- External + OpenRC running (tw-home 形态, gcompat) ----
 new_sys s2
