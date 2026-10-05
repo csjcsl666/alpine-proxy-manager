@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        alpine: ["3.22", "3.24"]
+        alpine: ["3.21", "3.22", "3.24"]
     steps:
       - uses: actions/checkout@v4
       - name: 在 Alpine 容器内检查并测试

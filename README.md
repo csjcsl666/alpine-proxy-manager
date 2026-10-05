@@ -133,6 +133,6 @@ sh install.sh --from-dir .
 sh tests/run.sh
 ```
 
-CI 在 Alpine 3.22 与 3.24 容器内运行 `sh -n` shellcheck 与全部测试 包括安装器集成测试 测试通过 `APM_ROOT` 隔离到临时目录 不会写入真实的 `/usr/local`
+CI 在 Alpine 3.21 3.22 与 3.24 容器内运行 `sh -n` shellcheck 与全部测试 包括安装器集成测试 测试通过 `APM_ROOT` 隔离到临时目录 不会写入真实的 `/usr/local`
 
 `doctor` `status` `core list` 无需 root 也可以运行 它们不会修改系统
