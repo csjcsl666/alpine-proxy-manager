@@ -9,7 +9,7 @@ APM_HOME=${_self%/*}
 APM_HOME=${APM_HOME%/*}
 export APM_HOME
 
-for _m in common environment core report; do
+for _m in common environment state core model policy report; do
     # shellcheck source=/dev/null
     . "$APM_HOME/lib/$_m.sh" || { echo "加载 lib/$_m.sh 失败" >&2; exit 1; }
 done
@@ -29,6 +29,7 @@ EOF
 case ${1:-help} in
     --version|-V|version) apm_print_version ;;
     doctor) report_doctor ;;
+    status) report_status ;;
     core)
         case ${2:-list} in
             list) report_core_list ;;

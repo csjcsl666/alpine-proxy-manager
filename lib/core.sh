@@ -32,6 +32,7 @@ core_binary_name() {
 
 # 输出二进制路径, 找不到返回 1
 core_binary() {
+    local _bn _d _p
     _bn=$(core_binary_name "$1")
     for _d in $CORE_BIN_DIRS; do
         _p=$(env_path "$_d/$_bn")
@@ -47,6 +48,7 @@ core_installed() { core_binary "$1" >/dev/null 2>&1; }
 
 # 通过 /proc/*/comm 判断进程是否存在, 不依赖 pgrep 与服务名
 core_process_running() {
+    local _bn _d _c
     _bn=$(core_binary_name "$1")
     for _d in "$(env_path /proc)"/[0-9]*; do
         [ -r "$_d/comm" ] || continue
@@ -60,6 +62,7 @@ core_process_running() {
 # 输出版本号, 未知时输出空并返回 1
 # Snell 的版本获取方式尚未调查, 不猜测
 core_version() {
+    local _bin _v
     case $1 in
         snell) return 1 ;;
         singbox)
@@ -97,6 +100,7 @@ core_state_label() {
 
 # 统一的生命周期分发
 core_op() {
+    local _key _op _fn
     _key=$1
     _op=$2
     shift 2
@@ -112,6 +116,7 @@ core_op() {
 
 # sing-box 配置校验, 供配置事务作为 validator 使用
 core_singbox_check_config() {
+    local _bin
     _bin=$(core_binary singbox) || { apm_err "sing-box 未安装, 无法校验配置"; return 1; }
     "$_bin" check -c "$1"
 }

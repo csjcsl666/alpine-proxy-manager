@@ -10,6 +10,7 @@ apm_err() { printf '错误: %s\n' "$*" >&2; }
 
 # 外部版本的唯一权威来源是 $APM_HOME/VERSION
 apm_version() {
+    local _v
     _v=
     if [ -r "$APM_HOME/VERSION" ]; then
         IFS= read -r _v < "$APM_HOME/VERSION" || :
@@ -19,6 +20,7 @@ apm_version() {
 
 # Build 来源优先级: 安装时写入的 BUILD 文件, 其次 git commit short SHA, 最后 unknown
 apm_build() {
+    local _b
     _b=
     if [ -r "$APM_HOME/BUILD" ]; then
         IFS= read -r _b < "$APM_HOME/BUILD" || :

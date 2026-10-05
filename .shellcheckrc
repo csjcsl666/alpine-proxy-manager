@@ -1,3 +1,4 @@
 # lib/*.sh 互相 source, 跨文件变量会被误报
+# 目标是 BusyBox ash, local 可用
 shell=sh
-disable=SC2034,SC2153
+disable=SC2034,SC2153,SC3043

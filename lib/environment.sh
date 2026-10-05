@@ -8,6 +8,7 @@
 env_path() { printf '%s%s' "${APM_SYSROOT:-}" "$1"; }
 
 env_alpine_version() {
+    local _f _v
     _f=$(env_path /etc/alpine-release)
     [ -r "$_f" ] || return 1
     _v=
@@ -18,6 +19,7 @@ env_alpine_version() {
 
 # 需要 alpine-release 存在, 且 os-release 若存在则 ID 必须是 alpine
 env_is_alpine() {
+    local _o
     env_alpine_version >/dev/null 2>&1 || return 1
     _o=$(env_path /etc/os-release)
     if [ -r "$_o" ]; then
@@ -49,6 +51,7 @@ _env_meminfo() {
 
 # 输出 cgroup v2 目录, 优先 cgroup namespace 根, 其次 /proc/self/cgroup 路径
 _env_cgroup_v2_dir() {
+    local _root _pf _p
     _root=$(env_path /sys/fs/cgroup)
     if [ -r "$_root/memory.max" ]; then
         printf '%s\n' "$_root"
@@ -73,6 +76,7 @@ _env_stat_field() { awk -v k="$2" '$1 == k { print $2; exit }' "$1" 2>/dev/null;
 #   ENV_SWAP_TOTAL / ENV_SWAP_FREE  字节
 # cgroup 上限大于等于 MemTotal 或为 max 时视为未限制, 回退 meminfo
 env_probe_memory() {
+    local _total _avail _lim _cur _d _anon _lsrc _csrc _v1
     _total=$(_env_meminfo MemTotal)
     _total=${_total:-0}
     ENV_MEM_LIMIT=$_total

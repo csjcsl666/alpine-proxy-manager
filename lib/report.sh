@@ -6,6 +6,7 @@ _rpt_mib() { printf '%s MiB' "$(apm_mib "$1")"; }
 
 # doctor 以 FAIL 计数决定退出码, WARN 不影响
 report_doctor() {
+    local _fails _lsrc _k
     _fails=0
 
     if env_is_alpine; then
@@ -76,9 +77,22 @@ report_doctor() {
 }
 
 report_core_list() {
+    local _k _st _ver
     for _k in $CORE_KEYS; do
         _st=$(core_state "$_k")
         _ver=$(core_version "$_k" 2>/dev/null) || _ver=
         printf '%s\t%s\t%s\n' "$(core_name "$_k")" "$(core_state_label "$_st")" "${_ver:--}"
     done
+}
+
+report_status() {
+    local _k
+    printf '%s\n\n' "$APM_NAME"
+    printf 'Core\n────────────────\n'
+    for _k in $CORE_KEYS; do
+        printf '%-12s%s\n' "$(core_name "$_k")" "$(core_state_label "$(core_state "$_k")")"
+    done
+    printf '\nFeatures\n────────────────\n'
+    printf '%-22s%s\n' "Server SOCKS Egress" "$(state_socks_summary)"
+    printf '%-22s%s\n' "Relay Access Policy" "$(state_relay_summary)"
 }
