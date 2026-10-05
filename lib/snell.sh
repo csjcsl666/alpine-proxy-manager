@@ -956,13 +956,18 @@ snell_uninstall() {
         for _f in "$_bk"/snell-server.conf.bak.*; do
             [ -e "$_f" ] && rm -f -- "$_f"
         done
-        if [ "$_cu" = yes ]; then
+        if [ "$_cu" = yes ] && _snell_user_exists; then
             _snell_run deluser "$SNELL_USER" >/dev/null 2>&1 || apm_warn "删除用户 $SNELL_USER 失败, 已保留"
         fi
-        if [ "$_cg" = yes ]; then
+        # Alpine 的 deluser 会顺带删除同名的空用户组, 所以先确认用户组还在
+        if [ "$_cg" = yes ] && _snell_group_exists; then
             _snell_run delgroup "$SNELL_GROUP" >/dev/null 2>&1 || apm_warn "删除用户组 $SNELL_GROUP 失败, 已保留"
         fi
     fi
+    # 元数据的备份在元数据删除后没有意义, 两种卸载都清理
+    for _f in "$(state_backup_dir)"/snell.meta.bak.*; do
+        [ -e "$_f" ] && rm -f -- "$_f"
+    done
     # 元数据最后删除, 前面失败时仍可证明归属
     rm -f -- "$(core_meta_file snell)"
     _snell_say "Snell 已卸载"

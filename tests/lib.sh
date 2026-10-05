@@ -323,6 +323,10 @@ EOS
 #!/bin/sh
 R=${APM_SYSROOT:?}
 grep -v "^$1:" "$R/etc/passwd" > "$R/etc/passwd.new"; mv "$R/etc/passwd.new" "$R/etc/passwd"
+# 与 Alpine 的 deluser 一致: 顺带删除同名的空用户组, 旋钮 deluser_keeps_group 可关闭
+if [ ! -e "${APM_FAKE_RC_DIR:?}/deluser_keeps_group" ]; then
+    grep -v "^$1:" "$R/etc/group" > "$R/etc/group.new"; mv "$R/etc/group.new" "$R/etc/group"
+fi
 EOS
     cat > "$_r/sbin/delgroup" <<'EOS'
 #!/bin/sh

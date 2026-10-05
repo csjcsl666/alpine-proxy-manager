@@ -658,6 +658,28 @@ assert_eq "purge 删除由 Manager 创建的用户" "" "$(cat "$A/etc/passwd")"
 assert_eq "purge 删除由 Manager 创建的用户组" "" "$(cat "$A/etc/group")"
 assert_fail "purge 后元数据已删" test -e "$A/var/lib/alpine-proxy-manager/cores/snell.meta"
 assert_eq "purge 后没有任何含 PSK 的文件" "" "$(grep -rl "$PSK" "$A" 2>/dev/null)"
+# deluser 不顺带删除用户组时, 仍由 delgroup 删除, 且不会重复警告
+new_m n1b
+touch "$K/deluser_keeps_group"
+"$PM" snell install --port 20000 >/dev/null 2>&1
+OUT=$("$PM" snell uninstall --purge 2>&1)
+assert_eq "deluser 不删组时 purge 成功" 0 $?
+assert_eq "deluser 不删组时用户组仍被删除" "" "$(cat "$A/etc/group")"
+assert_not_contains "deluser 不删组时没有警告" "$OUT" "警告"
+# deluser 顺带删除用户组 (Alpine 行为) 时, 不再调用 delgroup 也不警告
+new_m n1c
+"$PM" snell install --port 20000 >/dev/null 2>&1
+OUT=$("$PM" snell uninstall --purge 2>&1)
+assert_eq "deluser 顺带删组时 purge 成功" 0 $?
+assert_not_contains "deluser 顺带删组时没有警告" "$OUT" "警告"
+assert_eq "用户与用户组均已删除" "" "$(cat "$A/etc/passwd")$(cat "$A/etc/group")"
+# 元数据备份在两种卸载中都被清理
+new_m n1d
+"$PM" snell install --port 20000 >/dev/null 2>&1
+"$PM" snell update --force >/dev/null 2>&1
+assert_eq "update --force 产生了元数据备份" 1 "$(ls "$A/var/lib/alpine-proxy-manager/backups" | grep -c '^snell.meta.bak')"
+"$PM" snell uninstall >/dev/null 2>&1
+assert_eq "普通 uninstall 清理元数据备份" 0 "$(ls "$A/var/lib/alpine-proxy-manager/backups" 2>/dev/null | grep -c '^snell.meta.bak')"
 # purge 不删除原本就存在的用户
 new_m n2
 echo 'snell:x:100:101::/var/empty:/sbin/nologin' > "$A/etc/passwd"
