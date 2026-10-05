@@ -229,45 +229,95 @@ mk_sim_system() {
     printf 'libstdc++\nlibgcc\n' > "$_r/.apk-installed"
     cat > "$_r/sbin/rc-service" <<'EOS'
 #!/bin/sh
+# 模拟 OpenRC: 支持 snell 与 sing-box 两个服务, 状态, 进程, 监听都真实写入 sysroot 的 /proc
 R=${APM_SYSROOT:?}
 K=${APM_FAKE_RC_DIR:?}
 svc=$1
 act=${2:-}
 echo "$svc $act" >> "$K/calls"
-conf=$R/etc/snell/snell-server.conf
-bin=$R/usr/local/bin/snell-server
-state() { cat "$K/state" 2>/dev/null || echo stopped; }
-stop_proc() {
-    rm -rf "$R/proc/23754" "$R/proc/23755" "$R/run/snell.pid" "$R/proc/net/tcp"
+case $svc in
+    snell)
+        conf=$R/etc/snell/snell-server.conf
+        bin=$R/usr/local/bin/snell-server
+        sup=23754; wrk=23755
+        statef=$K/state
+        pidf=$R/run/snell.pid
+        ;;
+    sing-box)
+        conf=$R/etc/sing-box/config.json
+        bin=$R/usr/local/bin/sing-box
+        sup=33001; wrk=33002
+        statef=$K/state-sing-box
+        pidf=$R/run/sing-box.pid
+        ;;
+    *) echo "$*" >> "$K/violations"; exit 99 ;;
+esac
+# 旋钮: snell 沿用无后缀的旧名字, 两个服务都认 名字-服务名
+knob() { { [ "$svc" = snell ] && [ -e "$K/$1" ]; } || [ -e "$K/$1-$svc" ]; }
+state() { cat "$statef" 2>/dev/null || echo stopped; }
+ports_of() {
+    case $svc in
+        snell) sed -n 's/^listen[[:space:]]*=[[:space:]]*//p' "$1" | tr ',' '\n' | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p' ;;
+        sing-box) sed -n 's/.*"listen_port": *\([0-9][0-9]*\).*/\1/p' "$1" ;;
+    esac
 }
-start_proc() {
-    mkdir -p "$R/run" "$R/proc/23754" "$R/proc/23755/fd" "$R/proc/net"
-    printf '23754\n' > "$R/run/snell.pid"
-    printf '23754 (supervise-daemo) S 1 1 1 0 -1 4194560 1 0 0 0 1 1 0 0 20 0 1 0 100 1148000 83 1\n' > "$R/proc/23754/stat"
-    printf 'supervise-daemon\0snell\0--start\0' > "$R/proc/23754/cmdline"
-    printf '23755 (ld-musl-x86_64.) S 23754 1 1 0 -1 4194560 1 0 0 0 1 1 0 0 20 0 1 0 100 15292000 1047 1\n' > "$R/proc/23755/stat"
-    printf 'ld-linux-x86-64.so.2\0--argv0\0/usr/local/bin/snell-server\0--\0/usr/local/bin/snell-server\0-c\0/etc/snell/snell-server.conf\0' > "$R/proc/23755/cmdline"
+rebuild_net() {
+    mkdir -p "$R/proc/net"
     {
         printf '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n'
-        if [ ! -e "$K/no_listen" ]; then
+        for s in snell sing-box; do
+            case $s in
+                snell) sf=$K/state; c=$R/etc/snell/snell-server.conf; base=50000; w=23755; ng=no_listen ;;
+                sing-box) sf=$K/state-sing-box; c=$R/etc/sing-box/config.json; base=60000; w=33002; ng=no_listen-sing-box ;;
+            esac
+            [ "$(cat "$sf" 2>/dev/null)" = started ] || continue
+            [ ! -e "$K/$ng" ] || continue
+            [ -f "$c" ] || continue
             i=0
-            for p in $(sed -n 's/^listen[[:space:]]*=[[:space:]]*//p' "$conf" | tr ',' '\n' | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p'); do
-                printf '   %s: 00000000:%04X 00000000:0000 0A 00000000:00000000 00:00000000 00000000   100        0 %s 1 0\n' "$i" "$p" "$((50000 + i))"
-                ln -sf "socket:[$((50000 + i))]" "$R/proc/23755/fd/$((10 + i))"
+            svc_save=$svc; svc=$s
+            for p in $(ports_of "$c"); do
+                printf '   %s: 00000000:%04X 00000000:0000 0A 00000000:00000000 00:00000000 00000000   100        0 %s 1 0\n' "$i" "$p" "$((base + i))"
+                mkdir -p "$R/proc/$w/fd"
+                ln -sf "socket:[$((base + i))]" "$R/proc/$w/fd/$((10 + i))"
                 i=$((i + 1))
             done
-        fi
+            svc=$svc_save
+        done
     } > "$R/proc/net/tcp"
 }
+stop_proc() {
+    rm -rf "$R/proc/$sup" "$R/proc/$wrk" "$pidf"
+    rebuild_net
+    # 没有任何服务在运行时不留 tcp 表, 与未启动前一致
+    [ "$(cat "$K/state" 2>/dev/null)" = started ] || [ "$(cat "$K/state-sing-box" 2>/dev/null)" = started ] || rm -f "$R/proc/net/tcp"
+}
+start_proc() {
+    mkdir -p "$R/run" "$R/proc/$sup" "$R/proc/$wrk/fd" "$R/proc/net"
+    printf '%s\n' "$sup" > "$pidf"
+    printf '%s (supervise-daemo) S 1 1 1 0 -1 4194560 1 0 0 0 1 1 0 0 20 0 1 0 100 1148000 83 1\n' "$sup" > "$R/proc/$sup/stat"
+    printf 'supervise-daemon\0%s\0--start\0' "$svc" > "$R/proc/$sup/cmdline"
+    printf '%s (ld-musl-x86_64.) S %s 1 1 0 -1 4194560 1 0 0 0 1 1 0 0 20 0 1 0 100 15292000 1047 1\n' "$wrk" "$sup" > "$R/proc/$wrk/stat"
+    case $svc in
+        snell) printf 'ld-linux-x86-64.so.2\0--argv0\0/usr/local/bin/snell-server\0--\0/usr/local/bin/snell-server\0-c\0/etc/snell/snell-server.conf\0' > "$R/proc/$wrk/cmdline" ;;
+        sing-box) printf '/usr/local/bin/sing-box\0run\0--disable-color\0-D\0/var/lib/sing-box\0-c\0/etc/sing-box/config.json\0' > "$R/proc/$wrk/cmdline" ;;
+    esac
+    rebuild_net
+}
 do_start() {
-    [ ! -e "$K/fail_start" ] || return 1
+    knob fail_start && return 1
     [ -f "$conf" ] || return 1
     # BusyBox grep 对 NUL 与非法字节不可靠, 先把所有非字母数字换成空格
     tr -c 'A-Za-z0-9\n' ' ' < "$bin" 2>/dev/null | grep -q BADBIN && return 1
-    if [ -s "$K/fail_port" ]; then
-        grep -q ":$(cat "$K/fail_port")" "$conf" && return 1
+    if [ -s "$K/fail_port-$svc" ] || { [ "$svc" = snell ] && [ -s "$K/fail_port" ]; }; then
+        fp=$(cat "$K/fail_port-$svc" 2>/dev/null || cat "$K/fail_port")
+        grep -q ":$fp" "$conf" && return 1
+        grep -q "\"listen_port\": $fp" "$conf" && return 1
     fi
-    echo started > "$K/state"
+    # sing-box 的 start_pre 会先 check 配置
+    if [ "$svc" = sing-box ]; then
+        "$bin" check -c "$conf" >/dev/null 2>&1 || return 1
+    fi
+    echo started > "$statef"
     start_proc
     return 0
 }
@@ -279,14 +329,14 @@ case $act in
         ;;
     start) do_start; exit $? ;;
     stop)
-        [ ! -e "$K/fail_stop" ] || exit 1
-        echo stopped > "$K/state"
+        knob fail_stop && exit 1
+        echo stopped > "$statef"
         stop_proc
         exit 0
         ;;
     restart)
-        [ ! -e "$K/fail_restart" ] || exit 1
-        echo stopped > "$K/state"
+        knob fail_restart && exit 1
+        echo stopped > "$statef"
         stop_proc
         do_start
         exit $?
@@ -382,6 +432,98 @@ f=${APM_TEST_ZIPS:?}/${1##*/}
 cp "$f" "$dest"
 EOS
     chmod +x "$1"
+}
+
+
+# mk_elf_exec STUB SIDECAR, 生成一个真实的 x86_64 ELF, 运行时 execve(SIDECAR, argv, envp)
+# 这样既满足 "只执行 ELF", 又能由 SIDECAR 脚本模拟任意行为 (sing-box 的 version check generate)
+# shellcheck disable=SC2059
+mk_elf_exec() {
+    local _plen _total _lo _hi
+    [ "$(uname -m)" = x86_64 ] || return 1
+    _plen=${#2}
+    _total=$((160 + _plen + 1))
+    _lo=$((_total % 256))
+    _hi=$((_total / 256))
+    {
+        printf '\177ELF\002\001\001\000\000\000\000\000\000\000\000\000'
+        printf '\002\000\076\000\001\000\000\000'
+        printf '\170\000\100\000\000\000\000\000'
+        printf '\100\000\000\000\000\000\000\000'
+        printf '\000\000\000\000\000\000\000\000'
+        printf '\000\000\000\000'
+        printf '\100\000\070\000\001\000\000\000\000\000\000\000'
+        printf '\001\000\000\000\005\000\000\000'
+        printf '\000\000\000\000\000\000\000\000'
+        printf '\000\000\100\000\000\000\000\000'
+        printf '\000\000\100\000\000\000\000\000'
+        printf "\\$(printf '%03o' "$_lo")\\$(printf '%03o' "$_hi")\\000\\000\\000\\000\\000\\000"
+        printf "\\$(printf '%03o' "$_lo")\\$(printf '%03o' "$_hi")\\000\\000\\000\\000\\000\\000"
+        printf '\000\020\000\000\000\000\000\000'
+        # mov rdi,[rsp]; lea rsi,[rsp+8]; lea rdx,[rsi+rdi*8+8]; lea rdi,[rip+19]
+        printf '\110\213\074\044'
+        printf '\110\215\164\044\010'
+        printf '\110\215\124\376\010'
+        printf '\110\215\075\023\000\000\000'
+        # mov eax,59; syscall; mov eax,60; mov edi,127; syscall
+        printf '\270\073\000\000\000'
+        printf '\017\005'
+        printf '\270\074\000\000\000'
+        printf '\277\177\000\000\000'
+        printf '\017\005'
+        printf '%s\0' "$2"
+    } > "$1"
+    chmod +x "$1"
+}
+
+# mk_sb_sidecar PATH VERSION, 模拟 sing-box 的 version check generate, 行为由旋钮文件控制
+mk_sb_sidecar() {
+    mkdir -p "$(dirname "$1")"
+    cat > "$1" <<EOS
+#!/bin/sh
+V=$2
+K=\${APM_FAKE_RC_DIR:-/nonexistent}
+case \$1 in
+    version)
+        echo "sing-box version \$V"
+        echo
+        echo "Environment: go1.25.11 linux/amd64"
+        ;;
+    check)
+        f=\$3
+        [ -f "\$f" ] || { echo "FATAL read config" >&2; exit 1; }
+        grep -q INVALID_FOR_CHECK "\$f" && { echo "FATAL decode config" >&2; exit 1; }
+        for p in \$(sed -n 's/.*"\\(certificate_path\\|key_path\\)": "\\([^"]*\\)".*/\\2/p' "\$f"); do
+            [ -f "\${APM_SYSROOT:-}\$p" ] || { echo "FATAL read certificate: open \$p: no such file or directory" >&2; exit 1; }
+        done
+        [ ! -e "\$K/check_fail" ] || exit 1
+        [ ! -s "\$K/check_reject_version" ] || [ "\$(cat "\$K/check_reject_version")" != "\$V" ] || { echo "FATAL decode config: unknown field" >&2; exit 1; }
+        exit 0
+        ;;
+    generate)
+        [ ! -e "\$K/gen_fail" ] || exit 1
+        printf -- '-----BEGIN PRIVATE KEY-----\\nFAKEPRIVATEKEYDATA\\n-----END PRIVATE KEY-----\\n-----BEGIN CERTIFICATE-----\\nFAKECERTFOR_%s\\n-----END CERTIFICATE-----\\n' "\$3"
+        ;;
+esac
+exit 0
+EOS
+    chmod +x "$1"
+}
+
+# mk_sb_release DIR VERSION [SIDECAR_LABEL], 在 DIR 生成 sing-box-VERSION-linux-amd64-musl.tar.gz
+# 内含 sing-box (真实 ELF, 行为由 sidecar 脚本模拟) 与 LICENSE, 设置 SB_LAST_SHA
+mk_sb_release() {
+    local _w _d _side
+    _side=$1/sidecar-${3:-$2}.sh
+    mk_sb_sidecar "$_side" "${4:-$2}"
+    _w=$(mktemp -d)
+    _d=$_w/sing-box-$2-linux-amd64-musl
+    mkdir -p "$_d" "$1"
+    mk_elf_exec "$_d/sing-box" "$_side" || { rm -rf "$_w"; return 1; }
+    echo license > "$_d/LICENSE"
+    ( cd "$_w" && tar -czf "$1/sing-box-$2-linux-amd64-musl.tar.gz" "sing-box-$2-linux-amd64-musl" )
+    SB_LAST_SHA=$(sha256sum "$1/sing-box-$2-linux-amd64-musl.tar.gz" | awk '{ print $1 }')
+    rm -rf "$_w"
 }
 
 t_done() {
