@@ -2,7 +2,7 @@
 
 面向 Alpine Linux 低内存 VPS 的轻量 Snell + sing-box 统一管理器
 
-当前为早期开发版本 `0.1.0-dev.0` 还不能安装或管理 Snell 与 sing-box
+当前为早期开发版本 `0.1.0-dev.1` Snell 已支持安装与完整生命周期管理 sing-box 尚未支持
 
 ## 快速安装
 
@@ -86,6 +86,30 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 - sing-box 的协议以实例建模 例如 AnyTLS-01 AnyTLS-02 Hysteria2-01 而不是协议开关
 - 所有配置变更遵循 候选配置 校验 备份 原子替换 reload 的事务流程 校验失败绝不覆盖当前工作配置
 
+## Snell
+
+Alpine Proxy Manager 安装的 Snell 称为 Managed Snell 由 Manager 完整管理 其他方式部署的 Snell 称为现有部署 只读识别 绝不修改
+
+```sh
+proxy-manager snell install              # 下载官方 release 安装并启动 随机端口 自动生成 PSK
+proxy-manager snell install --port 20000 --psk-stdin
+proxy-manager snell status | info | log [N]
+proxy-manager snell start | stop | restart
+proxy-manager snell config               # 显示配置 PSK 脱敏
+proxy-manager snell config set listen 0.0.0.0:20001
+proxy-manager snell config set psk --generate
+proxy-manager snell update [标签] [--force]
+proxy-manager snell uninstall            # 保留配置与日志
+proxy-manager snell uninstall --purge    # 同时删除配置 日志与由 Manager 创建的用户
+```
+
+- 默认 release 是 `v6.0.0rc2` 官方二进制自报 `v6.0.0` 精确 release 记录在 Manager 元数据里 不从自报版本推断
+- 布局 二进制 `/usr/local/bin/snell-server` 配置 `/etc/snell/snell-server.conf` OpenRC `/etc/init.d/snell` 日志 `/var/log/snell/` 元数据 `/var/lib/alpine-proxy-manager/cores/snell.meta`
+- 运行依赖 `gcompat` `libstdc++` `libgcc` 只在 `snell install` 时通过 apk 安装缺失的包
+- 自动生成的 PSK 只在生成当次显示一次 之后任何命令都不会显示 需要时以 root 读取配置文件
+- 安装 配置修改 与更新都是事务式的 失败会回滚到之前的状态并恢复服务
+- 日志可能包含访问的目标域名 请不要公开
+
 ## 内存说明
 
 64 MiB 是 Manager 与安装流程必须考虑的最低资源基线 **不代表 sing-box 本身能在 64 MiB 内长期稳定运行** sing-box 的实际内存占用取决于版本 协议和连接数 目前没有足够数据承诺它在 64 MiB 下的稳定性
@@ -97,16 +121,19 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 - `proxy-manager doctor` 严格只读的环境检查 报告 Alpine OpenRC root 架构 cgroup 内存上限 当前内存 swap 以及 Snell 与 sing-box 安装情况 存在 cgroup 限制时优先报告 cgroup 上限
 - `proxy-manager status` 显示 Core 状态与功能配置状态
 - `proxy-manager core list` 只读发现 Core 并显示状态 版本 来源与管理状态 已有部署显示为 现有部署 未接管 本项目不会改动它
-- `proxy-manager snell status` `snell info` `snell log [N]` Snell 只读 Adapter 显示 OpenRC 状态 版本 配置元数据 日志位置与监听 PSK 一律脱敏 日志默认只读末尾 20 行
+- Snell Managed Core 完整生命周期 安装 启停 重启 配置修改 更新 卸载 已在真实 Alpine VPS 上完成验证 见下文 Snell 一节
+- `proxy-manager snell status` `snell info` `snell log [N]` 显示 OpenRC 状态 版本 配置元数据 日志位置与监听 PSK 一律脱敏 日志默认只读末尾 20 行
 - Core 发现只执行已确认为 ELF 的二进制 脚本与指向脚本的符号链接不会被执行 运行状态以 OpenRC 为准
-- Core Adapter 分发接口 生命周期写操作目前全部未实现 `snell install` `start` `stop` `restart` `update` `uninstall` 会被拒绝
+- 已有的 Snell 部署被识别为现有部署 不会被覆盖 接管或修改 `snell` 的写操作会拒绝 接管 adopt 与迁移 migrate 尚未实现
 - Protocol Instance Server SOCKS Profile Relay Access Policy 的数据模型与校验
 - 配置事务基础设施 候选文件 校验 hook 备份 原子替换 失败回滚
 - 基础测试与 GitHub Actions CI
 
 ## 尚未完成
 
-- Snell 与 sing-box 的安装 升级 卸载 启停 以及接管已有部署
+- sing-box 的安装 升级 卸载 启停
+- 接管已有的 Snell 部署
+- Snell 日志轮转
 - 任何 sing-box 协议的配置生成
 - Server SOCKS Egress 与 Relay Access Policy 的实际落地 目前只有数据模型和校验
 - 添加 删除 修改 查看实例的命令
