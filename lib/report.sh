@@ -235,16 +235,18 @@ _rpt_log_meta() {
     fi
 }
 
-# snell log [N], 只读取末尾 N 行 默认 20 最多 200 优先 error 日志
-report_snell_log() {
-    local _n _f _fs
+# Core 日志 [N], 只读取末尾 N 行 默认 20 最多 200 优先 error 日志
+_report_core_log() {
+    local _n _f _fs _key
+    _key=$1
+    shift
     _n=${1:-20}
     case $_n in ''|*[!0-9]*) apm_err "行数必须是正整数"; return 2 ;; esac
     [ "$_n" -ge 1 ] || { apm_err "行数必须是正整数"; return 2; }
     [ "$_n" -le 200 ] || _n=200
-    core_discover snell
+    core_discover "$_key"
     if [ "$CF_INSTALLED" != yes ]; then
-        apm_err "未检测到已确认的 Snell"
+        apm_err "未检测到已确认的 $(core_name "$_key")"
         return 1
     fi
     _f=$CF_LOG_ERR
@@ -264,4 +266,71 @@ report_snell_log() {
     fi
     printf '%s 最后 %s 行 (日志可能包含访问的目标域名, 注意不要公开)\n' "$_f" "$_n"
     tail -n "$_n" "$_fs"
+}
+
+report_snell_log() { _report_core_log snell "$@"; }
+report_singbox_log() { _report_core_log singbox "$@"; }
+
+# ---- sing-box 报告 ----
+
+report_singbox_status() {
+    core_discover singbox
+    printf 'sing-box\n'
+    printf '  状态：%s\n' "$(core_state_label "$CF_STATE")"
+    if [ "$CF_INSTALLED" != yes ]; then
+        _rpt_notes
+        return 0
+    fi
+    printf '  版本：%s (二进制自报)\n' "${CF_VERSION_REPORTED:-未知}"
+    printf '  来源：%s, %s\n' "$(core_deployment_label "$CF_DEPLOYMENT")" "$(core_managed_label)"
+    case $CF_SERVICE_STATE in
+        none) printf '  OpenRC：未找到服务脚本, 运行状态按进程命令行判断\n' ;;
+        *) printf '  OpenRC：服务 %s 状态 %s (来源 %s)\n' "$CF_SERVICE" "$CF_SERVICE_STATE" "$CF_SERVICE_SOURCE" ;;
+    esac
+    [ -z "$CF_PID" ] || printf '  进程：%s\n' "$CF_PID"
+    _rpt_listeners
+    _rpt_notes
+}
+
+report_singbox_info() {
+    core_discover singbox
+    printf 'sing-box\n'
+    printf '  已安装：%s\n' "$(_rpt_yn "$CF_INSTALLED")"
+    printf '  状态：%s\n' "$(core_state_label "$CF_STATE")"
+    printf '  部署类型：%s\n' "$CF_DEPLOYMENT"
+    printf '  管理状态：%s\n' "$(core_managed_label)"
+    if [ -n "$CF_BINARY" ]; then
+        printf '  二进制：%s (类型 %s, 符号链接 %s)\n' "$CF_BINARY" "$CF_BINARY_KIND" "$(_rpt_yn "$CF_BINARY_LINK")"
+        [ "$CF_BINARY_LINK" != yes ] || printf '  二进制实际路径：%s\n' "$CF_BINARY_REAL"
+    fi
+    if [ "$CF_INSTALLED" != yes ]; then
+        _rpt_notes
+        return 0
+    fi
+    printf '  自报版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
+    printf '  精确发布：%s\n' "$CF_VERSION_EXACT"
+    printf '  版本来源：%s\n' "$CF_VERSION_SOURCE"
+    if [ -n "$CF_SERVICE" ]; then
+        printf '  服务：%s (%s)\n' "$CF_SERVICE" "$CF_SERVICE_FILE"
+        printf '  服务状态：%s (来源 %s)\n' "$CF_SERVICE_STATE" "$CF_SERVICE_SOURCE"
+        printf '  托管方式：%s\n' "${CF_SUPERVISOR:-未声明}"
+        printf '  服务用户：%s\n' "${CF_SERVICE_USER:-未声明}"
+        printf '  pidfile：%s\n' "${CF_PIDFILE:--}"
+        [ -z "$CF_SUP_PID" ] || printf '  监督进程 PID：%s\n' "$CF_SUP_PID"
+    else
+        printf '  服务：未找到\n'
+    fi
+    [ -z "$CF_PID" ] || printf '  服务进程 PID：%s\n' "$CF_PID"
+    if [ -n "$CF_CONFIG" ]; then
+        printf '  配置：%s (来源 %s)\n' "$CF_CONFIG" "$CF_CONFIG_SOURCE"
+        printf '  配置存在：%s\n' "$(_rpt_yn "$CF_CONFIG_EXISTS")"
+        [ -z "$CF_CONFIG_PERM" ] || printf '  配置权限：%s\n' "$CF_CONFIG_PERM"
+    else
+        printf '  配置：未找到\n'
+    fi
+    [ -z "$CF_CONFIG_DIR" ] || printf '  配置目录：%s\n' "$CF_CONFIG_DIR"
+    _rpt_log_meta "access/output" "$CF_LOG_OUT" "$CF_LOG_OUT_EXISTS" "$CF_LOG_OUT_SIZE"
+    _rpt_log_meta "error" "$CF_LOG_ERR" "$CF_LOG_ERR_EXISTS" "$CF_LOG_ERR_SIZE"
+    _rpt_listeners
+    _rpt_notes
 }

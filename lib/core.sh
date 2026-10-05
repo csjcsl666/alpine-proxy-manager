@@ -58,6 +58,7 @@ core_version_arg() {
 core_config_candidates() {
     case $1 in
         snell) printf '%s\n' /etc/snell-server.conf /etc/snell/snell-server.conf ;;
+        singbox) printf '%s\n' /etc/sing-box/config.json ;;
     esac
 }
 
@@ -701,6 +702,65 @@ core_snell_discover_extra() {
         if [ -n "$CF_PID" ]; then
             CF_NOTES="${CF_NOTES}无法读取服务进程的 socket, 监听按配置端口匹配, 未确认归属于该进程
 "
+        fi
+    fi
+}
+
+# sing-box 通用事实: 配置路径 (OpenRC 脚本 -c, 其次默认路径), 日志 metadata, 按服务进程 socket 归属的监听
+# 不解析配置 JSON, 因为外部部署的配置组织各不相同
+core_singbox_discover_extra() {
+    local _argc _argd _fs _inodes _c
+    CF_CONFIG=
+    CF_CONFIG_SOURCE=none
+    CF_CONFIG_EXISTS=no
+    CF_CONFIG_READABLE=unknown
+    CF_CONFIG_PERM=
+    CF_CONFIG_DIR=
+    CF_LISTEN=
+    CF_LISTEN_ATTRIB=none
+    _argc=$(printf '%s' "$CF_INIT_ARGS" | awk '{ for (i = 1; i < NF; i++) if ($i == "-c" || $i == "--config") { print $(i + 1); exit } }')
+    _argd=$(printf '%s' "$CF_INIT_ARGS" | awk '{ for (i = 1; i < NF; i++) if ($i == "-C" || $i == "--config-directory") { print $(i + 1); exit } }')
+    CF_CONFIG_DIR=$_argd
+    if [ -n "$_argc" ]; then
+        CF_CONFIG=$_argc
+        CF_CONFIG_SOURCE=service
+    else
+        for _c in $(core_config_candidates singbox); do
+            if [ -e "$(env_path "$_c")" ]; then
+                CF_CONFIG=$_c
+                CF_CONFIG_SOURCE=default-candidate
+                break
+            fi
+        done
+    fi
+    if [ -n "$CF_CONFIG" ]; then
+        _fs=$(env_path "$CF_CONFIG")
+        if [ -f "$_fs" ]; then
+            CF_CONFIG_EXISTS=yes
+            CF_CONFIG_PERM=$(stat -c '%a %U:%G' "$_fs" 2>/dev/null)
+            if _core_can_read "$_fs"; then CF_CONFIG_READABLE=yes; else CF_CONFIG_READABLE=no; fi
+        else
+            CF_NOTES="${CF_NOTES}配置路径 $CF_CONFIG 不存在
+"
+        fi
+    fi
+    CF_LOG_OUT_EXISTS=no
+    CF_LOG_OUT_SIZE=
+    CF_LOG_ERR_EXISTS=no
+    CF_LOG_ERR_SIZE=
+    if [ -n "$CF_LOG_OUT" ] && [ -f "$(env_path "$CF_LOG_OUT")" ]; then
+        CF_LOG_OUT_EXISTS=yes
+        CF_LOG_OUT_SIZE=$(_core_file_size "$(env_path "$CF_LOG_OUT")")
+    fi
+    if [ -n "$CF_LOG_ERR" ] && [ -f "$(env_path "$CF_LOG_ERR")" ]; then
+        CF_LOG_ERR_EXISTS=yes
+        CF_LOG_ERR_SIZE=$(_core_file_size "$(env_path "$CF_LOG_ERR")")
+    fi
+    if [ -n "$CF_PID" ] && [ -r "$(env_path "/proc/$CF_PID/fd")" ]; then
+        _inodes=$(_core_socket_inodes "$CF_PID")
+        if [ "$_inodes" != " " ]; then
+            CF_LISTEN=$(_core_proc_listeners "$_inodes" "")
+            CF_LISTEN_ATTRIB=pid
         fi
     fi
 }
