@@ -37,22 +37,35 @@ report_doctor() {
 
     env_probe_memory
     case $ENV_MEM_LIMIT_SRC in
-        meminfo) _lsrc="/proc/meminfo, 未检测到更小的 cgroup 限制" ;;
-        *) _lsrc=$ENV_MEM_LIMIT_SRC ;;
+        cgroup-v2) _lsrc="cgroup v2" ;;
+        cgroup-v1) _lsrc="cgroup v1" ;;
+        *)
+            if [ "$ENV_CG_VER" = none ]; then
+                _lsrc="/proc/meminfo, 未找到 cgroup 内存控制器"
+            elif [ -n "$ENV_CG_LIMIT" ]; then
+                _lsrc="/proc/meminfo, cgroup 限制 $(_rpt_mib "$ENV_CG_LIMIT") 更宽松"
+            else
+                _lsrc="/proc/meminfo, cgroup 无数值上限"
+            fi
+            ;;
     esac
     printf '内存上限：%s (%s)\n' "$(_rpt_mib "$ENV_MEM_LIMIT")" "$_lsrc"
     if [ "$ENV_MEM_CUR_SRC" = meminfo ]; then
-        printf '当前内存：%s (已用, 不含可回收缓存)\n' "$(_rpt_mib "$ENV_MEM_CUR")"
+        printf '当前内存：%s (/proc/meminfo 已用, 不含可回收缓存)\n' "$(_rpt_mib "$ENV_MEM_CUR")"
     else
-        printf '当前内存：%s (%s, 含页缓存)\n' "$(_rpt_mib "$ENV_MEM_CUR")" "$ENV_MEM_CUR_SRC"
+        printf '当前内存：%s (cgroup memory.current, 含页缓存)\n' "$(_rpt_mib "$ENV_MEM_CUR")"
     fi
     if [ -n "$ENV_MEM_ANON" ]; then
         printf '其中匿名内存：%s\n' "$(_rpt_mib "$ENV_MEM_ANON")"
     fi
     if [ "$ENV_SWAP_TOTAL" -eq 0 ]; then
-        printf 'swap：未启用\n'
+        if [ "$ENV_SWAP_SRC" = cgroup-v2 ] && [ "$ENV_SWAP_CG_MAX" = 0 ]; then
+            printf 'swap：未启用 (cgroup memory.swap.max 为 0)\n'
+        else
+            printf 'swap：未启用\n'
+        fi
     else
-        printf 'swap：%s / %s (空闲 / 总计)\n' "$(_rpt_mib "$ENV_SWAP_FREE")" "$(_rpt_mib "$ENV_SWAP_TOTAL")"
+        printf 'swap：%s / %s (空闲 / 总计, %s)\n' "$(_rpt_mib "$ENV_SWAP_FREE")" "$(_rpt_mib "$ENV_SWAP_TOTAL")" "$ENV_SWAP_SRC"
     fi
     if [ "$ENV_MEM_LIMIT" -lt $((64 * 1048576)) ]; then
         printf '64 MiB 基线：WARN (有效内存上限低于 64 MiB)\n'
