@@ -2,7 +2,7 @@
 
 面向 Alpine Linux 低内存 VPS 的轻量 Snell + sing-box 统一管理器
 
-当前为早期开发版本 `0.1.0-dev.4` Snell 与 sing-box 已支持安装与完整生命周期管理 sing-box 目前提供 AnyTLS Hysteria2 TUIC 与 Shadowsocks 四种协议实例 VLESS Reality 与 Trojan 不在支持计划内
+当前为早期开发版本 `0.1.0-dev.5` Snell 与 sing-box 已支持安装与完整生命周期管理 sing-box 目前提供 AnyTLS Hysteria2 TUIC 与 Shadowsocks 四种协议实例 VLESS Reality 与 Trojan 不在支持计划内
 
 ## 快速安装
 
@@ -131,6 +131,11 @@ proxy-manager sing-box set ID port|listen|server-name|congestion-control 值
 proxy-manager sing-box set ID uuid UUID | --generate
 proxy-manager sing-box set ID password --stdin | --generate
 proxy-manager sing-box set ID method 方法 [--stdin | --generate]
+
+proxy-manager sing-box access ID [show]
+proxy-manager sing-box access ID unrestricted | allowlist | clear
+proxy-manager sing-box access ID add 地址 端口
+proxy-manager sing-box access ID delete 地址 端口
 ```
 
 - 默认 release 固定为 `v1.13.14` 不会自动取 latest 内置了该 release 的 sha256 其他 release 通过发布页的资产 digest 校验 都取不到就拒绝安装 选择 1.13.14 的依据是同一份 AnyTLS 配置空闲内存实测明显低于更新的 1.14.2
@@ -145,6 +150,25 @@ proxy-manager sing-box set ID method 方法 [--stdin | --generate]
 - 自动生成的密码只在生成当次显示一次 之后任何命令都不会显示 需要时以 root 读取实例文件
 - 卸载默认保留配置 证书 日志与实例 重新安装会沿用 `--purge` 才会删除 并且只删除由 Manager 创建的内容
 - 日志级别默认 warn 日志可能包含访问的目标域名 请不要公开
+
+## 目标访问限制
+
+目标访问限制 Relay Access Policy 控制通过某个实例的入站进入的客户端 允许访问哪些目标 IP 与端口
+
+- 按实例配置 同一个 sing-box 里的实例可以各自不同 AnyTLS Hysteria2 TUIC Shadowsocks 四种协议用同一套命令
+- 默认不限制 没有设置过的实例不会生成任何限制规则 升级 Manager 不会改动现有实例与配置
+- `allowlist` 模式只放行明确列出的目标 其他目标一律拒绝 allowlist 为空时拒绝全部目标 不会退回不限制
+- 第一版只支持 IPv4 与 IPv6 加端口 不支持域名 CIDR 与端口范围
+- 规则只按入站实例匹配 限制一个实例不会影响其他实例 禁用或删除实例时它的规则一并消失
+- 限制配置无效时整体拒绝生成配置 不会悄悄变成不限制
+- 修改沿用实例事务 sing-box check 重启与健康检查失败都会回滚到旧实例与旧配置
+- 可用于客户端链式访问某个指定的 SOCKS 网关 例如只允许 `10.91.0.1:8080` 服务器只做转发 不保存也看不到客户端的 SOCKS 用户名与密码 当前不支持服务器自身的 SOCKS 出口
+
+```sh
+proxy-manager sing-box access AnyTLS-01 allowlist
+proxy-manager sing-box access AnyTLS-01 add 10.91.0.1 8080
+proxy-manager sing-box access AnyTLS-01 show
+```
 
 ## 内存说明
 
@@ -162,7 +186,7 @@ proxy-manager sing-box set ID method 方法 [--stdin | --generate]
 - `proxy-manager snell status` `snell info` `snell log [N]` 显示 OpenRC 状态 版本 配置元数据 日志位置与监听 PSK 一律脱敏 日志默认只读末尾 20 行
 - Core 发现只执行已确认为 ELF 的二进制 脚本与指向脚本的符号链接不会被执行 运行状态以 OpenRC 为准
 - 已有的 Snell 部署被识别为现有部署 不会被覆盖 接管或修改 `snell` 的写操作会拒绝 接管 adopt 与迁移 migrate 尚未实现
-- Protocol Instance Server SOCKS Profile Relay Access Policy 的数据模型与校验
+- Protocol Instance Server SOCKS Profile Relay Access Policy 的数据模型与校验 其中 Relay Access Policy 已在 sing-box 四种协议实例上落地
 - 配置事务基础设施 候选文件 校验 hook 备份 原子替换 失败回滚
 - 基础测试与 GitHub Actions CI
 
@@ -174,7 +198,7 @@ proxy-manager sing-box set ID method 方法 [--stdin | --generate]
 - 接管已有的 Snell 部署
 - Snell 日志轮转
 - 任何 sing-box 协议的配置生成
-- Server SOCKS Egress 与 Relay Access Policy 的实际落地 目前只有数据模型和校验
+- Server SOCKS Egress 服务器自身通过 SOCKS 出口转发
 - 添加 删除 修改 查看实例的命令
 - URL 与二维码导出
 - 正式 Release
