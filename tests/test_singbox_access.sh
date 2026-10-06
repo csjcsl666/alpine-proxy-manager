@@ -57,7 +57,8 @@ for p in 0 65536 99999 abc '' -1 '8 0' 080a; do
 done
 assert_eq "端口 1 合法" ok "$(bn 10.0.0.1 1)"
 assert_eq "端口 65535 合法" ok "$(bn 10.0.0.1 65535)"
-assert_eq "域名给出明确原因" "目标访问限制第一版只支持 IP 地址, 不支持域名: example.com" "$(_sb_dest_normalize example.com 80 2>&1; echo "$SB_DEST_ERR" | tail -1)"
+assert_eq "域名给出明确原因" "目标访问限制第一版只支持 IP 地址, 不支持域名: example.com" "$(_sb_dest_normalize example.com 80)"
+assert_eq "端口错误给出原因" "端口无效: 70000 (需要 1 到 65535)" "$(_sb_dest_normalize 10.0.0.1 70000)"
 
 # ---- 生成: 模型 ----
 G=$T_TMP/gen
@@ -263,9 +264,13 @@ for id in AnyTLS-01 Hysteria2-01 TUIC-01 Shadowsocks-01; do
     assert_eq "$id 同一 IPv6 不同写法算重复" 1 $?
     for bad in "256.1.1.1 80" "10.91.0.1 0" "10.91.0.1 65536" "example.com 80" "10.91.0.1 abc"; do
         # shellcheck disable=SC2086
-        "$PM" sing-box access $id add $bad >/dev/null 2>&1
+        OUT=$("$PM" sing-box access $id add $bad 2>&1)
         assert_eq "$id add [$bad] 被拒绝" 2 $?
+        assert_contains "$id add [$bad] 给出具体原因" "$OUT" "错误: "
+        assert_not_contains "$id add [$bad] 没有 shell 报错" "$OUT" "parameter not set"
     done
+    OUT=$("$PM" sing-box access $id add example.com 80 2>&1)
+    assert_contains "$id 域名的原因" "$OUT" "第一版只支持 IP 地址, 不支持域名: example.com"
     "$PM" sing-box access $id add 10.91.0.1 >/dev/null 2>&1
     assert_eq "$id add 缺少端口返回 2" 2 $?
     OUT=$("$PM" sing-box show $id)

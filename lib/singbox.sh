@@ -413,12 +413,13 @@ _sb_valid_ipv6_dest() {
         exit 0 }'
 }
 
-# 把用户输入的 HOST PORT 规范化为 host:port 形式, IPv6 带方括号并转小写, 失败时返回 1 并设置 SB_DEST_ERR
+# 把用户输入的 HOST PORT 规范化为 host:port 形式, IPv6 带方括号并转小写
+# 成功时在标准输出给出规范形式并返回 0, 失败时在标准输出给出原因并返回 1
+# 调用方通常在命令替换里使用, 所以原因必须走标准输出, 不能依赖全局变量
 _sb_dest_normalize() { # HOST PORT
     local _h _b
-    SB_DEST_ERR=
     _h=$1
-    is_port "$2" || { SB_DEST_ERR="端口无效: $2 (需要 1 到 65535)"; return 1; }
+    is_port "$2" || { printf '端口无效: %s (需要 1 到 65535)' "$2"; return 1; }
     _b=no
     case $_h in
         \[*\]) _h=${_h#\[}; _h=${_h%\]}; _b=yes ;;
@@ -426,19 +427,19 @@ _sb_dest_normalize() { # HOST PORT
     case $_h in
         *:*)
             _h=$(printf '%s' "$_h" | tr 'A-F' 'a-f')
-            _sb_valid_ipv6_dest "$_h" || { SB_DEST_ERR="IPv6 地址无效: $1"; return 1; }
+            _sb_valid_ipv6_dest "$_h" || { printf 'IPv6 地址无效: %s' "$1"; return 1; }
             printf '[%s]:%s' "$_h" "$2"
             ;;
-        '') SB_DEST_ERR="地址为空"; return 1 ;;
+        '') printf '地址为空'; return 1 ;;
         *)
             if [ "$_b" = yes ]; then
-                SB_DEST_ERR="方括号只用于 IPv6 地址: $1"
+                printf '方括号只用于 IPv6 地址: %s' "$1"
                 return 1
             elif printf '%s' "$_h" | grep -Eq '^[0-9.]+$'; then
-                _sb_valid_ipv4_dest "$_h" || { SB_DEST_ERR="IPv4 地址无效: $1"; return 1; }
+                _sb_valid_ipv4_dest "$_h" || { printf 'IPv4 地址无效: %s' "$1"; return 1; }
                 printf '%s:%s' "$_h" "$2"
             else
-                SB_DEST_ERR="目标访问限制第一版只支持 IP 地址, 不支持域名: $1"
+                printf '目标访问限制第一版只支持 IP 地址, 不支持域名: %s' "$1"
                 return 1
             fi
             ;;
@@ -1637,7 +1638,7 @@ singbox_access() {
             ;;
         add|delete)
             [ $# -eq 2 ] || { apm_err "用法: sing-box access $_id $_act 地址 端口"; return 2; }
-            _norm=$(_sb_dest_normalize "$1" "$2") || { apm_err "$SB_DEST_ERR"; return 2; }
+            _norm=$(_sb_dest_normalize "$1" "$2") || { apm_err "$_norm"; return 2; }
             ;;
         *) apm_err "未知的 access 操作: $_act"; return 2 ;;
     esac
