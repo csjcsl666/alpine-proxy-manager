@@ -162,11 +162,11 @@ proxy-manager sing-box access ID delete 地址 端口
 - 规则只按入站实例匹配 限制一个实例不会影响其他实例 禁用或删除实例时它的规则一并消失
 - 限制配置无效时整体拒绝生成配置 不会悄悄变成不限制
 - 修改沿用实例事务 sing-box check 重启与健康检查失败都会回滚到旧实例与旧配置
-- 可用于客户端链式访问某个指定的 SOCKS 网关 例如只允许 `10.91.0.1:8080` 服务器只做转发 不保存也看不到客户端的 SOCKS 用户名与密码 当前不支持服务器自身的 SOCKS 出口
+- 可用于限制客户端只能访问你指定的一个或多个目标 例如客户端链式访问某个 SOCKS 网关 例如只允许 `192.0.2.10:1080` 目标完全由你指定 没有任何内置地址 服务器只做转发 不保存也看不到客户端的 SOCKS 用户名与密码 当前不支持服务器自身的 SOCKS 出口
 
 ```sh
 proxy-manager sing-box access AnyTLS-01 allowlist
-proxy-manager sing-box access AnyTLS-01 add 10.91.0.1 8080
+proxy-manager sing-box access AnyTLS-01 add 192.0.2.10 1080
 proxy-manager sing-box access AnyTLS-01 show
 ```
 
