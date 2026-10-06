@@ -84,7 +84,7 @@ assert_eq "destination 按序号数值排序" "192.0.2.10 8080
 example.com 8443" "$(policy_destinations "$I/GLB2.conf")"
 
 inst P1 relay_access.enabled=true relay_access.mode=allowlist relay_access.default_action=reject
-assert_fail "启用但无 destination 被拒绝" valid_inst P1
+assert_ok "启用但无 destination 合法 (空 allowlist 拒绝全部)" valid_inst P1
 inst P2 relay_access.enabled=true relay_access.mode=allowlist relay_access.destination.1=192.0.2.10:8080
 assert_fail "启用但缺 default_action 被拒绝" valid_inst P2
 inst P3 relay_access.enabled=true relay_access.default_action=reject relay_access.destination.1=192.0.2.10:8080

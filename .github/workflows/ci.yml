@@ -46,3 +46,7 @@ jobs:
 
       - name: 同一份四协议配置在 v1.14.2 上的兼容性
         run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-smoke.sh 1.14.2
+      - name: 目标访问限制真实流量测试 v1.13.14
+        run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-relay-smoke.sh 1.13.14
+      - name: 目标访问限制真实流量测试 v1.14.2
+        run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-relay-smoke.sh 1.14.2
