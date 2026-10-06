@@ -1,5 +1,5 @@
 # shellcheck shell=sh
-# sing-box Managed Core 与 AnyTLS Protocol Instance
+# sing-box Managed Core 与 Protocol Instance (AnyTLS, Hysteria2)
 #
 # 与 Snell Managed Core 使用同一套已验证的模式 (归属元数据, 事务, 回滚, 卸载与 purge),
 # 复用 lib/snell.sh 里的通用工具 (_snell_tool _snell_run _snell_chown _snell_lock _snell_fetch ...)
@@ -156,77 +156,136 @@ _sb_json_safe() { printf '%s' "$1" | grep -Eq '^[][A-Za-z0-9_./:@-]*$'; }
 
 _sb_valid_sni() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$'; }
 
-# AnyTLS 实例校验: 通用模型校验加 AnyTLS 专有字段
+# 支持的协议类型, 内部统一使用规范化的 anytls 与 hysteria2
+SB_TYPES="anytls hysteria2"
+
+_sb_type_valid() {
+    local _t
+    for _t in $SB_TYPES; do
+        [ "$1" = "$_t" ] && return 0
+    done
+    return 1
+}
+
+# 实例 ID 前缀与用户界面显示名
+_sb_type_prefix() {
+    case $1 in
+        anytls) printf 'AnyTLS' ;;
+        hysteria2) printf 'Hysteria2' ;;
+    esac
+}
+
+# 协议使用的传输层, 端口冲突按 协议加地址加端口 判断, tcp 与 udp 的同号端口互不冲突
+_sb_type_proto() {
+    case $1 in
+        anytls) printf 'tcp' ;;
+        hysteria2) printf 'udp' ;;
+    esac
+}
+
+_sb_proto_label() { case $1 in tcp) printf 'TCP' ;; udp) printf 'UDP' ;; esac; }
+
+# 实例校验: 通用模型校验加协议专有字段
+# anytls 与 hysteria2 的必填字段相同 (密码, TLS 证书与私钥, 端口), 协议差异在生成器与传输层
 sb_instance_validate() {
-    local _f _rc _v
+    local _f _rc _v _t
     _f=$1
     _rc=0
     instance_validate "$_f" || _rc=1
-    case $(kv_get "$_f" type) in
-        anytls)
-            _v=$(kv_get "$_f" credential.password)
-            _snell_valid_psk "$_v" || { apm_err "$_f: credential.password 无效 (16 到 128 位字母数字或 _ -)"; _rc=1; }
-            _v=$(kv_get "$_f" tls.server_name)
-            _sb_valid_sni "$_v" || { apm_err "$_f: tls.server_name 无效"; _rc=1; }
-            for _v in tls.certificate_path tls.key_path; do
-                case $(kv_get "$_f" "$_v") in
-                    /*) _sb_json_safe "$(kv_get "$_f" "$_v")" || { apm_err "$_f: $_v 含有不允许的字符"; _rc=1; } ;;
-                    *) apm_err "$_f: $_v 必须是绝对路径"; _rc=1 ;;
-                esac
-            done
-            _v=$(kv_get "$_f" listen_port)
-            _snell_valid_port "$_v" || { apm_err "$_f: listen_port 需要 1025 到 65535"; _rc=1; }
-            ;;
-        *) apm_err "$_f: sing-box 目前只支持 anytls 实例"; _rc=1 ;;
-    esac
+    _t=$(kv_get "$_f" type)
+    if _sb_type_valid "$_t"; then
+        _v=$(kv_get "$_f" credential.password)
+        _snell_valid_psk "$_v" || { apm_err "$_f: credential.password 无效 (16 到 128 位字母数字或 _ -)"; _rc=1; }
+        _v=$(kv_get "$_f" tls.server_name)
+        _sb_valid_sni "$_v" || { apm_err "$_f: tls.server_name 无效"; _rc=1; }
+        for _v in tls.certificate_path tls.key_path; do
+            case $(kv_get "$_f" "$_v") in
+                /*) _sb_json_safe "$(kv_get "$_f" "$_v")" || { apm_err "$_f: $_v 含有不允许的字符"; _rc=1; } ;;
+                *) apm_err "$_f: $_v 必须是绝对路径"; _rc=1 ;;
+            esac
+        done
+        _v=$(kv_get "$_f" listen_port)
+        _snell_valid_port "$_v" || { apm_err "$_f: listen_port 需要 1025 到 65535"; _rc=1; }
+    else
+        apm_err "$_f: sing-box 目前只支持 $SB_TYPES 实例"
+        _rc=1
+    fi
     return "$_rc"
 }
 
-# 一个 AnyTLS inbound 的 JSON
-_sb_inbound_anytls() {
-    printf '\n    {\n      "type": "anytls",\n      "tag": "%s",\n      "listen": "%s",\n      "listen_port": %s,\n      "users": [\n        {\n          "password": "%s"\n        }\n      ],\n      "tls": {\n        "enabled": true,\n        "certificate_path": "%s",\n        "key_path": "%s"\n      }\n    }' \
-        "$(kv_get "$1" id)" "$(kv_get "$1" listen)" "$(kv_get "$1" listen_port)" "$(kv_get "$1" credential.password)" \
+# 一个 inbound 的 JSON, anytls 与 hysteria2 的结构相同: users 里一个 password, tls 里证书与私钥路径
+# Hysteria2 的带宽与 masquerade 都是可选的, v1 不配置, 经官方 check 与真实运行验证
+# Hysteria2 的 ALPN 由 sing-box 自行处理
+_sb_inbound() { # FILE
+    printf '\n    {\n      "type": "%s",\n      "tag": "%s",\n      "listen": "%s",\n      "listen_port": %s,\n      "users": [\n        {\n          "password": "%s"\n        }\n      ],\n      "tls": {\n        "enabled": true,\n        "certificate_path": "%s",\n        "key_path": "%s"\n      }\n    }' \
+        "$(kv_get "$1" type)" "$(kv_get "$1" id)" "$(kv_get "$1" listen)" "$(kv_get "$1" listen_port)" "$(kv_get "$1" credential.password)" \
         "$(kv_get "$1" tls.certificate_path)" "$(kv_get "$1" tls.key_path)"
 }
 
-# 由实例目录生成完整的 sing-box 配置到标准输出, 只包含启用的实例
+# 由实例目录生成完整的 sing-box 配置到标准输出, 只包含启用的实例, 按实例 ID 排序, 输出稳定
 sb_generate_config() { # INSTANCES_DIR
     local _f _first
     printf '{\n  "log": {\n    "level": "warn",\n    "timestamp": true\n  },\n  "inbounds": ['
     _first=1
     for _f in $(state_list_confs "$1"); do
         [ "$(kv_get "$_f" enabled)" = true ] || continue
-        case $(kv_get "$_f" type) in
-            anytls)
-                [ "$_first" = 1 ] || printf ','
-                _first=0
-                _sb_inbound_anytls "$_f"
-                ;;
-        esac
+        _sb_type_valid "$(kv_get "$_f" type)" || continue
+        [ "$_first" = 1 ] || printf ','
+        _first=0
+        _sb_inbound "$_f"
     done
     [ "$_first" = 1 ] || printf '\n  '
     printf '],\n  "outbounds": [\n    {\n      "type": "direct",\n      "tag": "direct"\n    }\n  ]\n}\n'
 }
 
-# 启用实例的端口, 空格分隔
+# 启用实例的监听, 形如 tcp:20443 udp:20443, 空格分隔
 _sb_expected_ports() {
     local _f _r
     _r=
     for _f in $(state_list_confs "$1"); do
         [ "$(kv_get "$_f" enabled)" = true ] || continue
-        _r="$_r $(kv_get "$_f" listen_port)"
+        _r="$_r $(_sb_type_proto "$(kv_get "$_f" type)"):$(kv_get "$_f" listen_port)"
     done
     printf '%s' "${_r# }"
 }
 
-# 全部实例 (启用或禁用) 里是否已有该端口
-_sb_port_taken_by_instance() { # DIR PORT [EXCEPT_ID]
+# 两个监听地址是否重叠: 相同, 或任一方是通配地址
+_sb_addr_overlap() {
+    [ "$1" = "$2" ] && return 0
+    case $1 in ::|0.0.0.0) return 0 ;; esac
+    case $2 in ::|0.0.0.0) return 0 ;; esac
+    return 1
+}
+
+# 实例间冲突: 全部实例 (启用或禁用) 里是否已有 同协议同端口且地址重叠 的实例
+_sb_port_taken_by_instance() { # DIR PROTO PORT LISTEN [EXCEPT_ID]
     local _f
     for _f in $(state_list_confs "$1"); do
-        [ "$(kv_get "$_f" id)" != "${3:-}" ] || continue
-        [ "$(kv_get "$_f" listen_port)" = "$2" ] && return 0
+        [ "$(kv_get "$_f" id)" != "${5:-}" ] || continue
+        [ "$(_sb_type_proto "$(kv_get "$_f" type)")" = "$2" ] || continue
+        [ "$(kv_get "$_f" listen_port)" = "$3" ] || continue
+        _sb_addr_overlap "$(kv_get "$_f" listen)" "$4" && return 0
     done
     return 1
+}
+
+# 系统冲突: /proc/net 里是否已有 同协议同端口且地址重叠 的监听, tcp 与 udp 分开判断
+_sb_port_busy() { # PROTO PORT LISTEN
+    local _pr _ad _ino _a
+    _core_proc_listeners "" " $2 " | while read -r _pr _ad _ino; do
+        [ "$_pr" = "$1" ] || continue
+        _a=${_ad%:*}
+        _a=${_a#[}
+        _a=${_a%]}
+        _sb_addr_overlap "$_a" "$3" && echo busy
+    done | grep -q busy
+}
+
+# 当前发现到的监听里是否有 PROTO 与 PORT, 依据 CF_LISTEN 即服务进程自己的 socket
+_sb_listening() { # PROTO PORT
+    printf '%s\n' "$CF_LISTEN" | awk -v p="$1" -v t=":$2" '
+        $1 == p { n = length($2); if (substr($2, n - length(t) + 1) == t) f = 1 }
+        END { exit !f }'
 }
 
 _sb_next_id() { # DIR TYPE_PREFIX
@@ -268,7 +327,7 @@ _sb_wait_healthy() {
         if [ "$CF_STATE" = running ] && [ -n "$CF_PID" ]; then
             _ok=1
             for _p in $(_sb_expected_ports "$_dir"); do
-                printf '%s\n' "$CF_LISTEN" | grep -q ":$_p " || _ok=0
+                _sb_listening "${_p%%:*}" "${_p#*:}" || _ok=0
             done
             [ "$_ok" = 1 ] && return 0
         fi
@@ -487,8 +546,8 @@ singbox_install() {
         done
         _ports=$(_sb_expected_ports "$(state_instances_dir)")
         for _p in $_ports; do
-            if _snell_port_in_use "$_p"; then
-                apm_err "已保留的实例使用的端口 $_p 已被占用"
+            if _sb_port_busy "${_p%%:*}" "${_p#*:}" "::"; then
+                apm_err "已保留的实例使用的 ${_p%%:*} 端口 ${_p#*:} 已被占用"
                 return 1
             fi
         done
@@ -591,7 +650,7 @@ singbox_install() {
     _sb_say "  release：$_tag (二进制自报 $SB_NEW_REPORTED)"
     _sb_say "  配置：$SB_CONF (由实例生成, 请用 proxy-manager sing-box add 管理, 不要手工编辑)"
     _sb_say "  日志：$SB_LOG_DIR"
-    _sb_say "  添加实例：proxy-manager sing-box add anytls"
+    _sb_say "  添加实例：proxy-manager sing-box add anytls 或 hysteria2"
     trap - EXIT
     _snell_cleanup
 }
@@ -664,8 +723,8 @@ singbox_check() {
 _sb_commit_instances() { # NEWDIR WAS_RUNNING
     local _cand _rc _cfg
     _cfg=$(env_path "$SB_CONF")
-    _cand=$(txn_new_candidate "$_cfg") || return 1
-    sb_generate_config "$1" > "$_cand" || { rm -f -- "$_cand"; return 1; }
+    _cand=$(txn_new_candidate "$_cfg") || { apm_err "无法创建候选配置"; return 1; }
+    sb_generate_config "$1" > "$_cand" || { rm -f -- "$_cand"; apm_err "生成配置失败"; return 1; }
     _snell_chown "root:$SB_GROUP" "$_cand"
     chmod 640 -- "$_cand"
     APM_BACKUP_KEEP=${APM_BACKUP_KEEP:-2}
@@ -707,6 +766,13 @@ _sb_propose_dir() {
     for _f in $(state_list_confs "$(state_instances_dir)"); do
         cp -p -- "$_f" "$_d/" || return 1
     done
+    # 原样保留一份, 保存实例失败时用它恢复旧配置
+    rm -rf -- "$SNELL_STAGING/instances.orig"
+    mkdir -p -- "$SNELL_STAGING/instances.orig" || return 1
+    chmod 700 -- "$SNELL_STAGING/instances.orig"
+    for _f in $(state_list_confs "$(state_instances_dir)"); do
+        cp -p -- "$_f" "$SNELL_STAGING/instances.orig/" || return 1
+    done
     printf '%s' "$_d"
 }
 
@@ -721,6 +787,17 @@ _sb_sync_instances() { # NEWDIR
         _id=${_f##*/}
         [ -e "$1/$_id" ] || rm -f -- "$_f"
     done
+}
+
+# 配置已经提交后保存实例文件, 保存失败则把配置与服务恢复为旧实例, 不留下配置与实例不一致的状态
+_sb_finish() { # NEWDIR WAS_STATE
+    if _sb_sync_instances "$1"; then
+        return 0
+    fi
+    apm_err "保存实例失败, 正在恢复旧配置"
+    _sb_sync_instances "$SNELL_STAGING/instances.orig" >/dev/null 2>&1
+    _sb_commit_instances "$SNELL_STAGING/instances.orig" "$2" >/dev/null 2>&1
+    return 1
 }
 
 # 生成自签名证书对, 输出写到 CRT 与 KEY, 通过已确认为 ELF 的 sing-box generate tls-keypair
@@ -744,13 +821,15 @@ _sb_gen_tls() { # SNI CRT KEY
 
 # ---- 实例命令 ----
 
-# add anytls [--name ID] [--port N | --listen ADDR] [--server-name NAME] [--password-stdin]
+# add anytls|hysteria2 [--name ID] [--port N | --listen ADDR] [--server-name NAME] [--password-stdin]
 singbox_add() {
-    local _type _name _port _listen _sni _pwmode _pw _dir _id _crt _key _f _was _a _p
+    local _type _name _port _listen _sni _pwmode _pw _dir _id _crt _key _f _was _a _p _proto _prefix
     _type=${1:-}
-    [ -n "$_type" ] || { apm_err "用法: sing-box add anytls [选项]"; return 2; }
+    [ -n "$_type" ] || { apm_err "用法: sing-box add anytls|hysteria2 [选项]"; return 2; }
     shift
-    case $_type in anytls) ;; *) apm_err "不支持的协议: $_type (目前只支持 anytls)"; return 2 ;; esac
+    _sb_type_valid "$_type" || { apm_err "不支持的协议: $_type (支持 $SB_TYPES)"; return 2; }
+    _proto=$(_sb_type_proto "$_type")
+    _prefix=$(_sb_type_prefix "$_type")
     _name=
     _port=
     _listen=::
@@ -792,14 +871,14 @@ singbox_add() {
             return 1
         fi
     else
-        _id=$(_sb_next_id "$_dir" AnyTLS) || { apm_err "没有可用的实例编号"; return 1; }
+        _id=$(_sb_next_id "$_dir" "$_prefix") || { apm_err "没有可用的实例编号"; return 1; }
     fi
     if [ -z "$_port" ]; then
         _a=0
         while [ "$_a" -lt 30 ]; do
             _p=$(od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -d ' \n')
             _p=$((10240 + _p % 21760))
-            if ! _snell_port_in_use "$_p" && ! _sb_port_taken_by_instance "$_dir" "$_p"; then
+            if ! _sb_port_busy "$_proto" "$_p" "$_listen" && ! _sb_port_taken_by_instance "$_dir" "$_proto" "$_p" "$_listen"; then
                 _port=$_p
                 break
             fi
@@ -807,12 +886,12 @@ singbox_add() {
         done
         [ -n "$_port" ] || { apm_err "无法选出可用的随机端口"; return 1; }
     else
-        if _sb_port_taken_by_instance "$_dir" "$_port"; then
-            apm_err "端口 $_port 已被其他实例使用"
+        if _sb_port_taken_by_instance "$_dir" "$_proto" "$_port" "$_listen"; then
+            apm_err "$_proto 端口 $_port 已被其他实例使用"
             return 1
         fi
-        if _snell_port_in_use "$_port"; then
-            apm_err "端口 $_port 已被占用"
+        if _sb_port_busy "$_proto" "$_port" "$_listen"; then
+            apm_err "$_proto 端口 $_port 已被占用"
             return 1
         fi
     fi
@@ -824,10 +903,10 @@ singbox_add() {
     _f=$_dir/$_id.conf
     (
         umask 077
-        printf 'id=%s\nname=%s\ntype=anytls\nenabled=true\nlisten=%s\nlisten_port=%s\n' "$_id" "$_id" "$_listen" "$_port"
+        printf 'id=%s\nname=%s\ntype=%s\nenabled=true\nlisten=%s\nlisten_port=%s\n' "$_id" "$_id" "$_type" "$_listen" "$_port"
         printf 'credential.password=%s\n' "$_pw"
         printf 'tls.mode=self-signed\ntls.server_name=%s\ntls.certificate_path=%s\ntls.key_path=%s\n' "$_sni" "$_crt" "$_key"
-        printf 'transport.type=tcp\n'
+        printf 'transport.type=%s\n' "$_proto"
     ) > "$_f" || { rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"; return 1; }
     if ! sb_instance_validate "$_f" >/dev/null 2>&1; then
         rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"
@@ -839,9 +918,12 @@ singbox_add() {
         rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"
         return 1
     fi
-    _sb_sync_instances "$_dir" || { apm_err "保存实例失败"; return 1; }
+    if ! _sb_finish "$_dir" "$_was"; then
+        rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"
+        return 1
+    fi
     _sb_say "已添加实例 $_id"
-    _sb_say "  协议：anytls, 监听：$_listen 端口 $_port, 证书：自签名 (server-name $_sni)"
+    _sb_say "  协议：$_type ($_proto), 监听：$_listen 端口 $_port, 证书：自签名 (server-name $_sni)"
     if [ "$_pwmode" = generate ]; then
         _sb_say "  密码：$_pw"
         _sb_say "  这是自动生成的密码, 只在此处显示一次, 之后 proxy-manager 不会再显示它, 请自行保存"
@@ -865,7 +947,7 @@ singbox_list() {
         _port=$(kv_get "$_f" listen_port)
         if [ "$(kv_get "$_f" enabled)" = true ]; then
             _st=启用
-            printf '%s\n' "$CF_LISTEN" | grep -q ":$_port " && _st="启用, 监听中"
+            _sb_listening "$(_sb_type_proto "$(kv_get "$_f" type)")" "$_port" && _st="启用, 监听中"
         else
             _st=禁用
         fi
@@ -875,7 +957,7 @@ singbox_list() {
 }
 
 singbox_show() {
-    local _f
+    local _f _p
     [ -n "${1:-}" ] || { apm_err "用法: sing-box show 实例ID"; return 2; }
     _f=$(state_instances_dir)/$1.conf
     [ -f "$_f" ] || { apm_err "实例 $1 不存在"; return 1; }
@@ -892,13 +974,19 @@ singbox_show() {
     else
         printf '  密码：未配置\n'
     fi
-    printf '%s\n' "$CF_LISTEN" | grep -q ":$(kv_get "$_f" listen_port) " && printf '  当前监听：是\n' || printf '  当前监听：否\n'
+    _p=$(_sb_type_proto "$(kv_get "$_f" type)")
+    if _sb_listening "$_p" "$(kv_get "$_f" listen_port)"; then
+        printf '  内部 %s Listener：正常\n' "$(_sb_proto_label "$_p")"
+    else
+        printf '  内部 %s Listener：未监听\n' "$(_sb_proto_label "$_p")"
+    fi
+    printf '  说明：这是容器或系统内部的监听状态, 公网可达性 (NAT 与防火墙) 没有验证\n'
 }
 
 # 通用: 以提案目录修改后提交
 # _sb_change ID ACTION ...  ACTION: enable disable delete set KEY VALUE [--stdin|--generate]
 singbox_change() {
-    local _id _action _dir _f _was _key _val _port _crt _key_path _sni _cleanup_tls _old_crt _old_key _bk
+    local _id _action _dir _f _was _key _val _port _crt _key_path _sni _cleanup_tls _old_crt _old_key _bk _p
     _id=${1:-}
     _action=${2:-}
     if [ -z "$_id" ] || [ -z "$_action" ]; then
@@ -947,11 +1035,16 @@ singbox_change() {
         set)
             case $_key in
                 port)
-                    if _sb_port_taken_by_instance "$_dir" "$_val" "$_id"; then apm_err "端口 $_val 已被其他实例使用"; return 1; fi
-                    if [ "$_val" != "$(kv_get "$_f" listen_port)" ] && _snell_port_in_use "$_val"; then apm_err "端口 $_val 已被占用"; return 1; fi
+                    _p=$(_sb_type_proto "$(kv_get "$_f" type)")
+                    if _sb_port_taken_by_instance "$_dir" "$_p" "$_val" "$(kv_get "$_f" listen)" "$_id"; then apm_err "$_p 端口 $_val 已被其他实例使用"; return 1; fi
+                    if [ "$_val" != "$(kv_get "$_f" listen_port)" ] && _sb_port_busy "$_p" "$_val" "$(kv_get "$_f" listen)"; then apm_err "$_p 端口 $_val 已被占用"; return 1; fi
                     _sb_inst_set "$_f" listen_port "$_val"
                     ;;
-                listen) _sb_inst_set "$_f" listen "$_val" ;;
+                listen)
+                    _p=$(_sb_type_proto "$(kv_get "$_f" type)")
+                    if _sb_port_taken_by_instance "$_dir" "$_p" "$(kv_get "$_f" listen_port)" "$_val" "$_id"; then apm_err "$_p 端口 $(kv_get "$_f" listen_port) 在地址 $_val 上已被其他实例使用"; return 1; fi
+                    _sb_inst_set "$_f" listen "$_val"
+                    ;;
                 password) _sb_inst_set "$_f" credential.password "$_val" ;;
                 server-name)
                     # 更换证书: 先把旧证书放到 staging, 失败时放回
@@ -980,7 +1073,10 @@ singbox_change() {
         [ -z "${_old_crt:-}" ] || { cp -p -- "$_old_crt" "$(env_path "$_crt")"; cp -p -- "$_old_key" "$(env_path "$_key_path")"; }
         return 1
     fi
-    _sb_sync_instances "$_dir" || { apm_err "保存实例失败"; return 1; }
+    if ! _sb_finish "$_dir" "$_was"; then
+        [ -z "${_old_crt:-}" ] || { cp -p -- "$_old_crt" "$(env_path "$_crt")"; cp -p -- "$_old_key" "$(env_path "$_key_path")"; }
+        return 1
+    fi
     if [ "$_action" = delete ]; then
         rm -f -- "$(env_path "$_crt")" "$(env_path "$_key_path")"
     fi
@@ -1142,7 +1238,7 @@ singbox_uninstall() {
         fi
         rm -rf -- "$(env_path "$SB_LOG_DIR")" "$(env_path "$SB_WORK_DIR")"
         for _f in $(state_list_confs "$(state_instances_dir)"); do
-            case $(kv_get "$_f" type) in anytls) rm -f -- "$_f" ;; esac
+            _sb_type_valid "$(kv_get "$_f" type)" && rm -f -- "$_f"
         done
         for _f in "$(state_backup_dir)"/config.json.bak.*; do
             [ -e "$_f" ] && rm -f -- "$_f"
