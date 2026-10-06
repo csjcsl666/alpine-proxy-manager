@@ -39,6 +39,7 @@ usage() {
   sing-box list | show ID | enable ID | disable ID | delete ID
   sing-box set ID port|listen|server-name|congestion-control 值 | set ID uuid UUID|--generate
   sing-box set ID password --stdin|--generate | set ID method 方法 [--stdin|--generate]
+  sing-box access ID [show|unrestricted|allowlist|clear | add 地址 端口 | delete 地址 端口]  目标访问限制 (按实例, 跨协议)
   help          显示本帮助
 EOF
 }

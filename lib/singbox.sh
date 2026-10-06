@@ -356,6 +356,7 @@ sb_instance_validate() {
             fi
             ;;
     esac
+    _sb_policy_check "$_f" || _rc=1
     return "$_rc"
 }
 
@@ -388,9 +389,147 @@ _sb_inbound() { # FILE
     esac
 }
 
+# ---- 目标访问限制 (Relay Access Policy) ----
+# 内部模型沿用 policy.sh 的 relay_access.* 键, 没有任何键就是不限制, 旧实例无需迁移
+# 第一版只支持 IPv4 与 [IPv6] 加端口, 不支持域名, 不支持 CIDR 与端口范围
+
+_sb_valid_ipv4_dest() {
+    is_ipv4 "$1" || return 1
+    ! printf '%s' "$1" | grep -Eq '(^|\.)0[0-9]'
+}
+
+# 不带方括号的 IPv6, 小写十六进制, 至多一个 ::, 不接受内嵌 IPv4 与区域标识
+_sb_valid_ipv6_dest() {
+    awk -v a="$1" 'BEGIN {
+        if (a !~ /^[0-9a-f:]+$/ || a ~ /:::/) exit 1
+        b = a; c = gsub(/::/, "X", b)
+        if (c > 1) exit 1
+        if (a ~ /^:/ && a !~ /^::/) exit 1
+        if (a ~ /:$/ && a !~ /::$/) exit 1
+        k = split(a, g, ":"); ne = 0
+        for (i = 1; i <= k; i++) { if (g[i] != "") { ne++; if (length(g[i]) > 4) exit 1 } }
+        if (c == 0 && ne != 8) exit 1
+        if (c == 1 && ne > 7) exit 1
+        exit 0 }'
+}
+
+# 把用户输入的 HOST PORT 规范化为 host:port 形式, IPv6 带方括号并转小写, 失败时返回 1 并设置 SB_DEST_ERR
+_sb_dest_normalize() { # HOST PORT
+    local _h _b
+    SB_DEST_ERR=
+    _h=$1
+    is_port "$2" || { SB_DEST_ERR="端口无效: $2 (需要 1 到 65535)"; return 1; }
+    _b=no
+    case $_h in
+        \[*\]) _h=${_h#\[}; _h=${_h%\]}; _b=yes ;;
+    esac
+    case $_h in
+        *:*)
+            _h=$(printf '%s' "$_h" | tr 'A-F' 'a-f')
+            _sb_valid_ipv6_dest "$_h" || { SB_DEST_ERR="IPv6 地址无效: $1"; return 1; }
+            printf '[%s]:%s' "$_h" "$2"
+            ;;
+        '') SB_DEST_ERR="地址为空"; return 1 ;;
+        *)
+            if [ "$_b" = yes ]; then
+                SB_DEST_ERR="方括号只用于 IPv6 地址: $1"
+                return 1
+            elif printf '%s' "$_h" | grep -Eq '^[0-9.]+$'; then
+                _sb_valid_ipv4_dest "$_h" || { SB_DEST_ERR="IPv4 地址无效: $1"; return 1; }
+                printf '%s:%s' "$_h" "$2"
+            else
+                SB_DEST_ERR="目标访问限制第一版只支持 IP 地址, 不支持域名: $1"
+                return 1
+            fi
+            ;;
+    esac
+}
+
+# 已存储的 host:port 是否是规范化的 IP 目标
+_sb_dest_stored_ok() { # host:port
+    local _n
+    _n=$(_sb_dest_normalize "${1%:*}" "${1##*:}") || return 1
+    [ "$_n" = "$1" ]
+}
+
+# 实例的目标列表, 每行 host:port, 按地址再按端口排序且去重前保持原样 以便校验发现重复
+_sb_policy_dests() { # FILE
+    policy_destinations "$1" | LC_ALL=C sort -k1,1 -k2,2n | while read -r _h _p; do printf '%s:%s\n' "$_h" "$_p"; done
+}
+
+# 实例是否带有任何 relay_access 键, 带有键就必须显式声明 enabled, 否则不能静默当作不限制
+_sb_policy_present() { kv_keys "$1" | grep -q '^relay_access\.'; }
+
+# 目标访问限制是否生效 (fail-closed 校验见 _sb_policy_check)
+_sb_policy_on() { policy_enabled "$1"; }
+
+# 校验实例的目标访问限制, 任何问题都返回 1, 调用方必须拒绝而不是当作不限制
+_sb_policy_check() { # FILE
+    local _f _rc _en _d _seen
+    _f=$1
+    _rc=0
+    _sb_policy_present "$_f" || return 0
+    policy_validate "$_f" >/dev/null 2>&1 || { policy_validate "$_f" 2>&1 | sed 's/^/  /' >&2; _rc=1; }
+    _en=$(kv_get "$_f" relay_access.enabled)
+    if [ "$_en" != true ] && [ "$_en" != false ]; then
+        apm_err "$_f: 存在 relay_access 配置但 relay_access.enabled 没有显式设为 true 或 false"
+        _rc=1
+    fi
+    _seen=
+    for _d in $(_sb_policy_dests "$_f"); do
+        if ! _sb_dest_stored_ok "$_d"; then
+            apm_err "$_f: relay_access 的目标不是有效的规范化 IP 目标: $_d"
+            _rc=1
+            continue
+        fi
+        case " $_seen " in *" $_d "*) apm_err "$_f: relay_access 目标重复: $_d"; _rc=1 ;; esac
+        _seen="$_seen $_d"
+    done
+    return "$_rc"
+}
+
+# 一个目标的 route 规则: 命中该实例入站且目标是这个 IP 与端口就走 direct
+_sb_route_allow_rule() { # TAG host:port
+    local _h _p _cidr
+    _h=${2%:*}
+    _p=${2##*:}
+    case $_h in
+        \[*\]) _h=${_h#\[}; _h=${_h%\]}; _cidr=$_h/128 ;;
+        *) _cidr=$_h/32 ;;
+    esac
+    printf '\n      {\n        "inbound": ["%s"],\n        "ip_cidr": ["%s"],\n        "port": [%s],\n        "action": "route",\n        "outbound": "direct"\n      }' "$1" "$_cidr" "$_p"
+}
+
+# 全部启用且开启目标访问限制的实例的 route.rules 内容, 没有则输出为空
+# 每个实例先列出它的允许规则 (地址与端口排序) 再列一条只对该入站生效的 reject 兜底
+# 规则只按入站 tag 匹配, 不限制的实例与其他实例完全不受影响
+_sb_route_rules() { # INSTANCES_DIR
+    local _f _tag _d _first
+    _first=1
+    for _f in $(state_list_confs "$1"); do
+        [ "$(kv_get "$_f" enabled)" = true ] || continue
+        _sb_type_valid "$(kv_get "$_f" type)" || continue
+        _sb_policy_present "$_f" || continue
+        _sb_policy_check "$_f" || return 1
+        _sb_policy_on "$_f" || continue
+        _tag=$(kv_get "$_f" id)
+        for _d in $(_sb_policy_dests "$_f"); do
+            [ "$_first" = 1 ] || printf ','
+            _first=0
+            _sb_route_allow_rule "$_tag" "$_d"
+        done
+        [ "$_first" = 1 ] || printf ','
+        _first=0
+        printf '\n      {\n        "inbound": ["%s"],\n        "action": "reject"\n      }' "$_tag"
+    done
+}
+
 # 由实例目录生成完整的 sing-box 配置到标准输出, 只包含启用的实例, 按实例 ID 排序, 输出稳定
+# 没有任何实例开启目标访问限制时不输出 route, 配置与没有这个功能时逐字节相同
+# 任何实例的限制配置无效都整体失败, 绝不退回不限制
 sb_generate_config() { # INSTANCES_DIR
-    local _f _first
+    local _f _first _rules
+    _rules=$(_sb_route_rules "$1") || return 1
     printf '{\n  "log": {\n    "level": "warn",\n    "timestamp": true\n  },\n  "inbounds": ['
     _first=1
     for _f in $(state_list_confs "$1"); do
@@ -401,7 +540,11 @@ sb_generate_config() { # INSTANCES_DIR
         _sb_inbound "$_f"
     done
     [ "$_first" = 1 ] || printf '\n  '
-    printf '],\n  "outbounds": [\n    {\n      "type": "direct",\n      "tag": "direct"\n    }\n  ]\n}\n'
+    printf '],\n  "outbounds": [\n    {\n      "type": "direct",\n      "tag": "direct"\n    }\n  ]'
+    if [ -n "$_rules" ]; then
+        printf ',\n  "route": {\n    "rules": [%s\n    ]\n  }' "$_rules"
+    fi
+    printf '\n}\n'
 }
 
 # 启用实例的监听, 形如 tcp:20443 udp:20443, 空格分隔, 实例要求几种传输层就有几项
@@ -501,6 +644,18 @@ _sb_inst_set() { # FILE KEY VALUE  -> 结果写回 FILE
         index($0, k "=") == 1 { print k "=" ENVIRON["V"]; done = 1; next }
         { print }
         END { if (!done) print k "=" ENVIRON["V"] }' "$1" > "$_tmp" || { rm -f -- "$_tmp"; return 1; }
+    chmod 600 -- "$_tmp"
+    mv -f -- "$_tmp" "$1"
+}
+
+# 删除精确键或某个前缀下的全部键 (前缀以点结尾)
+_sb_inst_unset() { # FILE KEY | FILE PREFIX.
+    local _tmp
+    _tmp=$1.new
+    awk -v k="$2" '
+        k ~ /\.$/ { if (index($0, k) == 1) next; print; next }
+        index($0, k "=") == 1 { next }
+        { print }' "$1" > "$_tmp" || { rm -f -- "$_tmp"; return 1; }
     chmod 600 -- "$_tmp"
     mv -f -- "$_tmp" "$1"
 }
@@ -1232,6 +1387,7 @@ singbox_show() {
             printf '  内部 %s Listener：未监听\n' "$(_sb_proto_label "$_p")"
         fi
     done
+    _sb_policy_show "$_f"
     printf '  说明：这是容器或系统内部的监听状态, 公网可达性 (NAT 与防火墙) 没有验证\n'
 }
 
@@ -1431,6 +1587,135 @@ singbox_change() {
     fi
 }
 
+# 目标访问限制的展示, 实例文件没有任何 relay_access 键就是不限制
+_sb_policy_show() { # FILE
+    local _d
+    if ! _sb_policy_present "$1"; then
+        printf '  目标访问限制：未启用\n'
+        return 0
+    fi
+    if ! _sb_policy_check "$1" >/dev/null 2>&1; then
+        printf '  目标访问限制：配置无效, 生成配置会被拒绝 (不会退回不限制)\n'
+        return 0
+    fi
+    if ! _sb_policy_on "$1"; then
+        printf '  目标访问限制：未启用\n'
+        return 0
+    fi
+    printf '  目标访问限制：Allowlist\n'
+    if [ -z "$(_sb_policy_dests "$1")" ]; then
+        printf '  允许目标：(空) 当前 allowlist 为空, 所有目标将被拒绝\n'
+    else
+        printf '  允许目标：\n'
+        for _d in $(_sb_policy_dests "$1"); do
+            printf '    %s\n' "$_d"
+        done
+    fi
+    printf '  默认动作：拒绝\n'
+}
+
+# access ID [show] | unrestricted | allowlist | add HOST PORT | delete HOST PORT | clear
+# 跨协议通用, 只改实例文件里的 relay_access 键, 沿用实例事务, 失败回滚到旧实例与旧配置
+singbox_access() {
+    local _id _act _f _dir _was _norm _d _n _max _k _v _msg _tmpf
+    _id=${1:-}
+    [ -n "$_id" ] || { apm_err "用法: sing-box access 实例ID [show|unrestricted|allowlist|add 地址 端口|delete 地址 端口|clear]"; return 2; }
+    shift
+    _act=${1:-show}
+    [ $# -eq 0 ] || shift
+    _f=$(state_instances_dir)/$_id.conf
+    [ -f "$_f" ] || { apm_err "实例 $_id 不存在"; return 1; }
+    case $_act in
+        show)
+            [ $# -eq 0 ] || { apm_err "show 不需要参数"; return 2; }
+            printf '实例 %s\n' "$_id"
+            _sb_policy_show "$_f"
+            return 0
+            ;;
+        unrestricted|allowlist|clear)
+            [ $# -eq 0 ] || { apm_err "$_act 不需要参数"; return 2; }
+            ;;
+        add|delete)
+            [ $# -eq 2 ] || { apm_err "用法: sing-box access $_id $_act 地址 端口"; return 2; }
+            _norm=$(_sb_dest_normalize "$1" "$2") || { apm_err "$SB_DEST_ERR"; return 2; }
+            ;;
+        *) apm_err "未知的 access 操作: $_act"; return 2 ;;
+    esac
+    _snell_need_root || return 4
+    _snell_lock || return 4
+    trap '_snell_cleanup' EXIT
+    _sb_require_managed no || return 4
+    _was=$CF_STATE
+    _snell_ensure_staging || return 1
+    _dir=$(_sb_propose_dir) || return 1
+    _f=$_dir/$_id.conf
+    _msg=
+    case $_act in
+        unrestricted)
+            if ! _sb_policy_present "$_f"; then
+                _sb_say "实例 $_id 已经不限制目标, 没有改动"
+                return 0
+            fi
+            _sb_inst_unset "$_f" relay_access. || return 1
+            ;;
+        allowlist)
+            if _sb_policy_check "$_f" >/dev/null 2>&1 && _sb_policy_on "$_f"; then
+                _sb_say "实例 $_id 已经是 allowlist, 没有改动"
+                return 0
+            fi
+            # 从无到有或修复无效配置: 只保留合法的目标, 重新写入完整的声明
+            _sb_inst_unset "$_f" relay_access.enabled || return 1
+            _sb_inst_set "$_f" relay_access.enabled true || return 1
+            _sb_inst_set "$_f" relay_access.mode allowlist || return 1
+            _sb_inst_set "$_f" relay_access.default_action reject || return 1
+            ;;
+        clear)
+            _sb_policy_on "$_f" || { apm_err "实例 $_id 当前不是 allowlist, 没有目标可清空"; return 2; }
+            _sb_inst_unset "$_f" relay_access.destination. || return 1
+            ;;
+        add|delete)
+            _sb_policy_on "$_f" || { apm_err "实例 $_id 当前不限制目标, 请先执行 sing-box access $_id allowlist"; return 2; }
+            _n=
+            _max=0
+            for _k in $(kv_keys "$_f" | grep '^relay_access\.destination\.'); do
+                _v=$(kv_get "$_f" "$_k")
+                [ "$_v" != "$_norm" ] || _n=$_k
+                _d=${_k#relay_access.destination.}
+                is_uint "$_d" && [ "$_d" -gt "$_max" ] && _max=$_d
+            done
+            if [ "$_act" = add ]; then
+                [ -z "$_n" ] || { apm_err "目标 $_norm 已经在 allowlist 里"; return 1; }
+                _sb_inst_set "$_f" "relay_access.destination.$((_max + 1))" "$_norm" || return 1
+            else
+                [ -n "$_n" ] || { apm_err "目标 $_norm 不在 allowlist 里"; return 1; }
+                _sb_inst_unset "$_f" "$_n" || return 1
+            fi
+            ;;
+    esac
+    if ! sb_instance_validate "$_f" >/dev/null 2>&1; then
+        sb_instance_validate "$_f" 2>&1 | sed 's/^/  /' >&2
+        apm_err "修改后的实例未通过校验"
+        return 1
+    fi
+    _sb_commit_instances "$_dir" "$_was" || return 1
+    _sb_finish "$_dir" "$_was" || return 1
+    case $_act in
+        unrestricted) _sb_say "实例 $_id 已改为不限制目标" ;;
+        allowlist) _sb_say "实例 $_id 已启用目标访问限制 (allowlist), 白名单之外的目标一律拒绝" ;;
+        clear) _sb_say "实例 $_id 的 allowlist 已清空" ;;
+        add) _sb_say "实例 $_id 已允许目标 $_norm" ;;
+        delete) _sb_say "实例 $_id 已移除目标 $_norm" ;;
+    esac
+    if [ "$_act" != unrestricted ] && [ -z "$(_sb_policy_dests "$_f")" ]; then
+        _sb_say "  注意: 当前 allowlist 为空, 所有目标将被拒绝"
+    fi
+    if [ "$_was" = running ]; then
+        _sb_say "sing-box 已重启并验证"
+    else
+        _sb_say "sing-box 当前未运行, 配置已写入, 下次启动生效"
+    fi
+}
+
 # ---- update ----
 
 singbox_update() {
@@ -1610,6 +1895,7 @@ singbox_cli() {
         add) singbox_add "$@" ;;
         list) singbox_list ;;
         show) singbox_show "$@" ;;
+        access) singbox_access "$@" ;;
         enable|disable|delete)
             [ -n "${1:-}" ] || { apm_err "用法: sing-box $_sub 实例ID"; return 2; }
             singbox_change "$1" "$_sub"
