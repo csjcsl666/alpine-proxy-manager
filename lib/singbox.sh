@@ -156,8 +156,17 @@ _sb_json_safe() { printf '%s' "$1" | grep -Eq '^[][A-Za-z0-9_./:@-]*$'; }
 
 _sb_valid_sni() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$'; }
 
-# 支持的协议类型, 内部统一使用规范化的 anytls 与 hysteria2
-SB_TYPES="anytls hysteria2"
+# 支持的协议类型, 内部统一使用规范化的小写名, 不接受别名
+# 每个协议在这里登记 传输层 是否需要 TLS 与凭据规格, 再提供校验与 inbound 生成
+SB_TYPES="anytls hysteria2 tuic shadowsocks"
+
+# Shadowsocks 只支持官方当前版本 (1.13.14 与 1.14.2) 都确认可用且值得支持的现代 AEAD 方法
+# 2022 系列要求 base64 编码的固定长度密钥, 传统 AEAD 方法使用普通密码
+# 不支持 none rc4-md5 等已不安全或官方不支持的方法, 也不支持 aes-192 与 xchacha 等小众方法
+SB_SS_METHODS="2022-blake3-aes-128-gcm 2022-blake3-aes-256-gcm 2022-blake3-chacha20-poly1305 aes-128-gcm aes-256-gcm chacha20-ietf-poly1305"
+SB_SS_DEFAULT_METHOD="2022-blake3-aes-128-gcm"
+# TUIC 的拥塞控制, 官方确认的取值, 其他值 sing-box 会拒绝
+SB_TUIC_CC="cubic new_reno bbr"
 
 _sb_type_valid() {
     local _t
@@ -172,30 +181,149 @@ _sb_type_prefix() {
     case $1 in
         anytls) printf 'AnyTLS' ;;
         hysteria2) printf 'Hysteria2' ;;
+        tuic) printf 'TUIC' ;;
+        shadowsocks) printf 'Shadowsocks' ;;
     esac
 }
 
-# 协议使用的传输层, 端口冲突按 协议加地址加端口 判断, tcp 与 udp 的同号端口互不冲突
-_sb_type_proto() {
+# 协议实际监听的传输层列表, Shadowsocks 的 inbound 同时监听 TCP 与 UDP
+# 端口冲突与健康检查对列表里的每个协议分别判断, 纯 TCP 与纯 UDP 的同号端口互不冲突
+_sb_type_protos() {
     case $1 in
         anytls) printf 'tcp' ;;
-        hysteria2) printf 'udp' ;;
+        hysteria2|tuic) printf 'udp' ;;
+        shadowsocks) printf 'tcp udp' ;;
+    esac
+}
+
+# 写进实例文件与界面的传输层名称
+_sb_type_transport() {
+    case $1 in
+        anytls) printf 'tcp' ;;
+        hysteria2|tuic) printf 'udp' ;;
+        shadowsocks) printf 'tcp+udp' ;;
+    esac
+}
+
+_sb_type_has_proto() { # TYPE PROTO
+    local _p
+    for _p in $(_sb_type_protos "$1"); do
+        [ "$_p" = "$2" ] && return 0
+    done
+    return 1
+}
+
+# 协议是否需要 TLS, Shadowsocks 不需要, 也就不生成证书
+_sb_type_tls() {
+    case $1 in
+        anytls|hysteria2|tuic) return 0 ;;
+        *) return 1 ;;
     esac
 }
 
 _sb_proto_label() { case $1 in tcp) printf 'TCP' ;; udp) printf 'UDP' ;; esac; }
 
-# 实例校验: 通用模型校验加协议专有字段
-# anytls 与 hysteria2 的必填字段相同 (密码, TLS 证书与私钥, 端口), 协议差异在生成器与传输层
+_sb_valid_uuid() { printf '%s' "$1" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; }
+
+# 生成标准的 UUID v4: 16 个随机字节, 版本位固定为 4, 变体位取 8 9 a b, 不依赖 uuidgen
+_sb_gen_uuid() {
+    local _h _v
+    _h=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+    [ "${#_h}" -eq 32 ] || return 1
+    case $(printf '%s' "$_h" | cut -c17) in
+        0|4|8|c) _v=8 ;;
+        1|5|9|d) _v=9 ;;
+        2|6|a|e) _v=a ;;
+        *) _v=b ;;
+    esac
+    printf '%s-%s-4%s-%s%s-%s' "$(printf '%s' "$_h" | cut -c1-8)" "$(printf '%s' "$_h" | cut -c9-12)" \
+        "$(printf '%s' "$_h" | cut -c14-16)" "$_v" "$(printf '%s' "$_h" | cut -c18-20)" "$(printf '%s' "$_h" | cut -c21-32)"
+}
+
+_sb_ss_method_valid() {
+    local _m
+    for _m in $SB_SS_METHODS; do
+        [ "$1" = "$_m" ] && return 0
+    done
+    return 1
+}
+
+_sb_tuic_cc_valid() {
+    local _c
+    for _c in $SB_TUIC_CC; do
+        [ "$1" = "$_c" ] && return 0
+    done
+    return 1
+}
+
+# 凭据规格: psk 为 16 到 128 位字母数字或 _ -, b64:N 为 base64 编码的 N 字节密钥
+# 只有 Shadowsocks 的 2022 方法使用 b64, 规格取决于协议与 method, 不同 method 的密钥格式不通用
+_sb_secret_kind() { # TYPE METHOD
+    case $1 in
+        shadowsocks)
+            case $2 in
+                2022-blake3-aes-128-gcm) printf 'b64:16' ;;
+                2022-*) printf 'b64:32' ;;
+                *) printf 'psk' ;;
+            esac
+            ;;
+        *) printf 'psk' ;;
+    esac
+}
+
+# base64 密钥必须是带填充的标准编码, 长度精确, 解码后字节数精确
+_sb_valid_b64key() { # VALUE BYTES
+    local _len
+    _len=$(( (($2 + 2) / 3) * 4 ))
+    printf '%s' "$1" | grep -Eq '^[A-Za-z0-9+/]+={0,2}$' || return 1
+    [ "${#1}" -eq "$_len" ] || return 1
+    [ "$(printf '%s' "$1" | base64 -d 2>/dev/null | wc -c | tr -d ' ')" = "$2" ]
+}
+
+_sb_valid_secret() { # KIND VALUE
+    case $1 in
+        psk) _snell_valid_psk "$2" ;;
+        b64:*) _sb_valid_b64key "$2" "${1#b64:}" ;;
+        *) return 1 ;;
+    esac
+}
+
+_sb_gen_secret() { # KIND
+    local _k
+    case $1 in
+        psk) _snell_gen_psk ;;
+        b64:*)
+            _k=$(head -c "${1#b64:}" /dev/urandom 2>/dev/null | base64 | tr -d '\n')
+            _sb_valid_b64key "$_k" "${1#b64:}" || return 1
+            printf '%s' "$_k"
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+_sb_secret_hint() { # KIND
+    case $1 in
+        psk) printf '16 到 128 位字母数字或 _ -' ;;
+        b64:16) printf 'base64 编码的 16 字节密钥, 24 个字符' ;;
+        b64:32) printf 'base64 编码的 32 字节密钥, 44 个字符' ;;
+    esac
+}
+
+# 实例校验: 通用模型校验加协议专有字段, 各协议的凭据字段由自己定义
+# anytls 与 hysteria2 是 password, tuic 是 uuid 加 password, shadowsocks 是 method 加按 method 决定格式的密钥
 sb_instance_validate() {
-    local _f _rc _v _t
+    local _f _rc _v _t _m
     _f=$1
     _rc=0
     instance_validate "$_f" || _rc=1
     _t=$(kv_get "$_f" type)
-    if _sb_type_valid "$_t"; then
-        _v=$(kv_get "$_f" credential.password)
-        _snell_valid_psk "$_v" || { apm_err "$_f: credential.password 无效 (16 到 128 位字母数字或 _ -)"; _rc=1; }
+    if ! _sb_type_valid "$_t"; then
+        apm_err "$_f: sing-box 目前只支持 $SB_TYPES 实例"
+        return 1
+    fi
+    _v=$(kv_get "$_f" listen_port)
+    _snell_valid_port "$_v" || { apm_err "$_f: listen_port 需要 1025 到 65535"; _rc=1; }
+    if _sb_type_tls "$_t"; then
         _v=$(kv_get "$_f" tls.server_name)
         _sb_valid_sni "$_v" || { apm_err "$_f: tls.server_name 无效"; _rc=1; }
         for _v in tls.certificate_path tls.key_path; do
@@ -204,22 +332,60 @@ sb_instance_validate() {
                 *) apm_err "$_f: $_v 必须是绝对路径"; _rc=1 ;;
             esac
         done
-        _v=$(kv_get "$_f" listen_port)
-        _snell_valid_port "$_v" || { apm_err "$_f: listen_port 需要 1025 到 65535"; _rc=1; }
-    else
-        apm_err "$_f: sing-box 目前只支持 $SB_TYPES 实例"
-        _rc=1
     fi
+    case $_t in
+        anytls|hysteria2)
+            _snell_valid_psk "$(kv_get "$_f" credential.password)" || { apm_err "$_f: credential.password 无效 ($(_sb_secret_hint psk))"; _rc=1; }
+            ;;
+        tuic)
+            _sb_valid_uuid "$(kv_get "$_f" credential.uuid)" || { apm_err "$_f: credential.uuid 不是有效的 UUID"; _rc=1; }
+            _snell_valid_psk "$(kv_get "$_f" credential.password)" || { apm_err "$_f: credential.password 无效 ($(_sb_secret_hint psk))"; _rc=1; }
+            _v=$(kv_get "$_f" transport.congestion_control)
+            if [ -n "$_v" ]; then
+                _sb_tuic_cc_valid "$_v" || { apm_err "$_f: transport.congestion_control 不在允许的取值内 ($SB_TUIC_CC)"; _rc=1; }
+            fi
+            ;;
+        shadowsocks)
+            _m=$(kv_get "$_f" credential.method)
+            if _sb_ss_method_valid "$_m"; then
+                _sb_valid_secret "$(_sb_secret_kind shadowsocks "$_m")" "$(kv_get "$_f" credential.password)" \
+                    || { apm_err "$_f: credential.password 不符合 method $_m 的要求 ($(_sb_secret_hint "$(_sb_secret_kind shadowsocks "$_m")"))"; _rc=1; }
+            else
+                apm_err "$_f: credential.method 不在允许的取值内 ($SB_SS_METHODS)"
+                _rc=1
+            fi
+            ;;
+    esac
     return "$_rc"
 }
 
-# 一个 inbound 的 JSON, anytls 与 hysteria2 的结构相同: users 里一个 password, tls 里证书与私钥路径
-# Hysteria2 的带宽与 masquerade 都是可选的, v1 不配置, 经官方 check 与真实运行验证
-# Hysteria2 的 ALPN 由 sing-box 自行处理
+# 一个 inbound 的 JSON, 各协议自己的结构, 已有协议的输出保持逐字节不变
+# anytls 与 hysteria2: users 里一个 password, tls 里证书与私钥路径, Hysteria2 的带宽与 masquerade 可选 v1 不配置
+# tuic: users 里 uuid 加 password, 可选 congestion_control, tls
+# shadowsocks: method 与 password 直接在 inbound 上, 同时监听 TCP 与 UDP, 没有 tls
 _sb_inbound() { # FILE
-    printf '\n    {\n      "type": "%s",\n      "tag": "%s",\n      "listen": "%s",\n      "listen_port": %s,\n      "users": [\n        {\n          "password": "%s"\n        }\n      ],\n      "tls": {\n        "enabled": true,\n        "certificate_path": "%s",\n        "key_path": "%s"\n      }\n    }' \
-        "$(kv_get "$1" type)" "$(kv_get "$1" id)" "$(kv_get "$1" listen)" "$(kv_get "$1" listen_port)" "$(kv_get "$1" credential.password)" \
-        "$(kv_get "$1" tls.certificate_path)" "$(kv_get "$1" tls.key_path)"
+    local _t
+    _t=$(kv_get "$1" type)
+    case $_t in
+        anytls|hysteria2)
+            printf '\n    {\n      "type": "%s",\n      "tag": "%s",\n      "listen": "%s",\n      "listen_port": %s,\n      "users": [\n        {\n          "password": "%s"\n        }\n      ],\n      "tls": {\n        "enabled": true,\n        "certificate_path": "%s",\n        "key_path": "%s"\n      }\n    }' \
+                "$_t" "$(kv_get "$1" id)" "$(kv_get "$1" listen)" "$(kv_get "$1" listen_port)" "$(kv_get "$1" credential.password)" \
+                "$(kv_get "$1" tls.certificate_path)" "$(kv_get "$1" tls.key_path)"
+            ;;
+        tuic)
+            printf '\n    {\n      "type": "tuic",\n      "tag": "%s",\n      "listen": "%s",\n      "listen_port": %s,\n      "users": [\n        {\n          "uuid": "%s",\n          "password": "%s"\n        }\n      ],\n' \
+                "$(kv_get "$1" id)" "$(kv_get "$1" listen)" "$(kv_get "$1" listen_port)" "$(kv_get "$1" credential.uuid)" "$(kv_get "$1" credential.password)"
+            if [ -n "$(kv_get "$1" transport.congestion_control)" ]; then
+                printf '      "congestion_control": "%s",\n' "$(kv_get "$1" transport.congestion_control)"
+            fi
+            printf '      "tls": {\n        "enabled": true,\n        "certificate_path": "%s",\n        "key_path": "%s"\n      }\n    }' \
+                "$(kv_get "$1" tls.certificate_path)" "$(kv_get "$1" tls.key_path)"
+            ;;
+        shadowsocks)
+            printf '\n    {\n      "type": "shadowsocks",\n      "tag": "%s",\n      "listen": "%s",\n      "listen_port": %s,\n      "method": "%s",\n      "password": "%s"\n    }' \
+                "$(kv_get "$1" id)" "$(kv_get "$1" listen)" "$(kv_get "$1" listen_port)" "$(kv_get "$1" credential.method)" "$(kv_get "$1" credential.password)"
+            ;;
+    esac
 }
 
 # 由实例目录生成完整的 sing-box 配置到标准输出, 只包含启用的实例, 按实例 ID 排序, 输出稳定
@@ -238,13 +404,15 @@ sb_generate_config() { # INSTANCES_DIR
     printf '],\n  "outbounds": [\n    {\n      "type": "direct",\n      "tag": "direct"\n    }\n  ]\n}\n'
 }
 
-# 启用实例的监听, 形如 tcp:20443 udp:20443, 空格分隔
+# 启用实例的监听, 形如 tcp:20443 udp:20443, 空格分隔, 实例要求几种传输层就有几项
 _sb_expected_ports() {
-    local _f _r
+    local _f _r _pr
     _r=
     for _f in $(state_list_confs "$1"); do
         [ "$(kv_get "$_f" enabled)" = true ] || continue
-        _r="$_r $(_sb_type_proto "$(kv_get "$_f" type)"):$(kv_get "$_f" listen_port)"
+        for _pr in $(_sb_type_protos "$(kv_get "$_f" type)"); do
+            _r="$_r $_pr:$(kv_get "$_f" listen_port)"
+        done
     done
     printf '%s' "${_r# }"
 }
@@ -262,7 +430,7 @@ _sb_port_taken_by_instance() { # DIR PROTO PORT LISTEN [EXCEPT_ID]
     local _f
     for _f in $(state_list_confs "$1"); do
         [ "$(kv_get "$_f" id)" != "${5:-}" ] || continue
-        [ "$(_sb_type_proto "$(kv_get "$_f" type)")" = "$2" ] || continue
+        _sb_type_has_proto "$(kv_get "$_f" type)" "$2" || continue
         [ "$(kv_get "$_f" listen_port)" = "$3" ] || continue
         _sb_addr_overlap "$(kv_get "$_f" listen)" "$4" && return 0
     done
@@ -279,6 +447,31 @@ _sb_port_busy() { # PROTO PORT LISTEN
         _a=${_a%]}
         _sb_addr_overlap "$_a" "$3" && echo busy
     done | grep -q busy
+}
+
+# 一个实例类型的所有传输层上, 端口是否都可用: 先查实例间冲突, 再查系统监听, 任何一个协议冲突整体拒绝
+# 第 6 个参数 no 时不查系统监听, 用于只更换监听地址而端口不变的场景
+_sb_check_ports() { # DIR TYPE PORT LISTEN [EXCEPT_ID] [CHECK_SYSTEM]
+    local _pr
+    for _pr in $(_sb_type_protos "$2"); do
+        if _sb_port_taken_by_instance "$1" "$_pr" "$3" "$4" "${5:-}"; then
+            apm_err "$_pr 端口 $3 已被其他实例使用"
+            return 1
+        fi
+        if [ "${6:-yes}" = yes ] && _sb_port_busy "$_pr" "$3" "$4"; then
+            apm_err "$_pr 端口 $3 已被占用"
+            return 1
+        fi
+    done
+    return 0
+}
+
+# 实例当前是否在它要求的每个传输层上都有自己的监听
+_sb_inst_listening() { # FILE
+    local _pr
+    for _pr in $(_sb_type_protos "$(kv_get "$1" type)"); do
+        _sb_listening "$_pr" "$(kv_get "$1" listen_port)" || return 1
+    done
 }
 
 # 当前发现到的监听里是否有 PROTO 与 PORT, 依据 CF_LISTEN 即服务进程自己的 socket
@@ -650,7 +843,7 @@ singbox_install() {
     _sb_say "  release：$_tag (二进制自报 $SB_NEW_REPORTED)"
     _sb_say "  配置：$SB_CONF (由实例生成, 请用 proxy-manager sing-box add 管理, 不要手工编辑)"
     _sb_say "  日志：$SB_LOG_DIR"
-    _sb_say "  添加实例：proxy-manager sing-box add anytls 或 hysteria2"
+    _sb_say "  添加实例：proxy-manager sing-box add anytls hysteria2 tuic 或 shadowsocks"
     trap - EXIT
     _snell_cleanup
 }
@@ -821,27 +1014,53 @@ _sb_gen_tls() { # SNI CRT KEY
 
 # ---- 实例命令 ----
 
-# add anytls|hysteria2 [--name ID] [--port N | --listen ADDR] [--server-name NAME] [--password-stdin]
+# add TYPE [--name ID] [--port N | --listen ADDR] [--password-stdin]
+#   TLS 协议 (anytls hysteria2 tuic) 另有 [--server-name NAME]
+#   tuic 另有 [--uuid UUID] [--congestion-control cubic|new_reno|bbr]
+#   shadowsocks 另有 [--method METHOD]
 singbox_add() {
-    local _type _name _port _listen _sni _pwmode _pw _dir _id _crt _key _f _was _a _p _proto _prefix
+    local _type _name _port _listen _sni _pwmode _pw _dir _id _crt _key _f _was _a _p _prefix _transport
+    local _uuid _cc _method _kind _tls _pr _bad
     _type=${1:-}
-    [ -n "$_type" ] || { apm_err "用法: sing-box add anytls|hysteria2 [选项]"; return 2; }
+    [ -n "$_type" ] || { apm_err "用法: sing-box add $SB_TYPES [选项]"; return 2; }
     shift
     _sb_type_valid "$_type" || { apm_err "不支持的协议: $_type (支持 $SB_TYPES)"; return 2; }
-    _proto=$(_sb_type_proto "$_type")
     _prefix=$(_sb_type_prefix "$_type")
+    _transport=$(_sb_type_transport "$_type")
+    _tls=no
+    _sb_type_tls "$_type" && _tls=yes
     _name=
     _port=
     _listen=::
     _sni=$SB_DEFAULT_SNI
     _pwmode=generate
+    _uuid=
+    _cc=
+    _method=
+    [ "$_type" != shadowsocks ] || _method=$SB_SS_DEFAULT_METHOD
+    _bad=
     while [ $# -gt 0 ]; do
         case $1 in
             --name) [ $# -ge 2 ] || { apm_err "--name 需要参数"; return 2; }; _name=$2; shift ;;
             --port) [ $# -ge 2 ] || { apm_err "--port 需要参数"; return 2; }; _port=$2; shift ;;
             --listen) [ $# -ge 2 ] || { apm_err "--listen 需要参数"; return 2; }; _listen=$2; shift ;;
-            --server-name) [ $# -ge 2 ] || { apm_err "--server-name 需要参数"; return 2; }; _sni=$2; shift ;;
+            --server-name)
+                [ $# -ge 2 ] || { apm_err "--server-name 需要参数"; return 2; }
+                [ "$_tls" = yes ] || { apm_err "$_type 不使用 TLS, 没有 --server-name"; return 2; }
+                _sni=$2; shift ;;
             --password-stdin) _pwmode=stdin ;;
+            --uuid)
+                [ $# -ge 2 ] || { apm_err "--uuid 需要参数"; return 2; }
+                [ "$_type" = tuic ] || { apm_err "只有 tuic 有 --uuid"; return 2; }
+                _uuid=$2; shift ;;
+            --congestion-control)
+                [ $# -ge 2 ] || { apm_err "--congestion-control 需要参数"; return 2; }
+                [ "$_type" = tuic ] || { apm_err "只有 tuic 有 --congestion-control"; return 2; }
+                _cc=$2; shift ;;
+            --method)
+                [ $# -ge 2 ] || { apm_err "--method 需要参数"; return 2; }
+                [ "$_type" = shadowsocks ] || { apm_err "只有 shadowsocks 有 --method"; return 2; }
+                _method=$2; shift ;;
             *) apm_err "未知参数: $1"; return 2 ;;
         esac
         shift
@@ -849,11 +1068,15 @@ singbox_add() {
     [ -z "$_name" ] || is_ident "$_name" || { apm_err "名称无效: $_name"; return 2; }
     [ -z "$_port" ] || _snell_valid_port "$_port" || { apm_err "端口无效: $_port (需要 1025 到 65535)"; return 2; }
     is_listen_addr "$_listen" || { apm_err "listen 无效: $_listen"; return 2; }
-    _sb_valid_sni "$_sni" || { apm_err "server-name 无效: $_sni"; return 2; }
+    [ "$_tls" = no ] || _sb_valid_sni "$_sni" || { apm_err "server-name 无效: $_sni"; return 2; }
+    [ -z "$_uuid" ] || _sb_valid_uuid "$_uuid" || { apm_err "uuid 无效 (需要小写的标准 UUID 格式)"; return 2; }
+    [ -z "$_cc" ] || _sb_tuic_cc_valid "$_cc" || { apm_err "congestion-control 无效 (允许 $SB_TUIC_CC)"; return 2; }
+    [ "$_type" != shadowsocks ] || _sb_ss_method_valid "$_method" || { apm_err "method 不在允许的取值内 ($SB_SS_METHODS)"; return 2; }
+    _kind=$(_sb_secret_kind "$_type" "$_method")
     _pw=
     if [ "$_pwmode" = stdin ]; then
         IFS= read -r _pw || _pw=
-        _snell_valid_psk "$_pw" || { apm_err "从标准输入读取的密码无效 (16 到 128 位字母数字或 _ -)"; return 2; }
+        _sb_valid_secret "$_kind" "$_pw" || { apm_err "从标准输入读取的密码无效 ($(_sb_secret_hint "$_kind"))"; return 2; }
     fi
     _snell_need_root || return 4
     _snell_lock || return 4
@@ -878,7 +1101,7 @@ singbox_add() {
         while [ "$_a" -lt 30 ]; do
             _p=$(od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -d ' \n')
             _p=$((10240 + _p % 21760))
-            if ! _sb_port_busy "$_proto" "$_p" "$_listen" && ! _sb_port_taken_by_instance "$_dir" "$_proto" "$_p" "$_listen"; then
+            if _sb_check_ports "$_dir" "$_type" "$_p" "$_listen" "" yes >/dev/null 2>&1; then
                 _port=$_p
                 break
             fi
@@ -886,44 +1109,59 @@ singbox_add() {
         done
         [ -n "$_port" ] || { apm_err "无法选出可用的随机端口"; return 1; }
     else
-        if _sb_port_taken_by_instance "$_dir" "$_proto" "$_port" "$_listen"; then
-            apm_err "$_proto 端口 $_port 已被其他实例使用"
-            return 1
-        fi
-        if _sb_port_busy "$_proto" "$_port" "$_listen"; then
-            apm_err "$_proto 端口 $_port 已被占用"
-            return 1
-        fi
+        # 要求多个传输层的协议 (shadowsocks) 任何一个传输层冲突都整体拒绝
+        _sb_check_ports "$_dir" "$_type" "$_port" "$_listen" "" yes || return 1
     fi
-    [ "$_pwmode" = stdin ] || _pw=$(_snell_gen_psk) || { apm_err "生成密码失败 (/dev/urandom 不可用?)"; return 1; }
+    [ "$_pwmode" = stdin ] || _pw=$(_sb_gen_secret "$_kind") || { apm_err "生成密码失败 (/dev/urandom 不可用?)"; return 1; }
+    if [ "$_type" = tuic ] && [ -z "$_uuid" ]; then
+        _uuid=$(_sb_gen_uuid) || { apm_err "生成 UUID 失败"; return 1; }
+    fi
 
-    _crt=$SB_TLS_DIR/$_id.crt
-    _key=$SB_TLS_DIR/$_id.key
-    _sb_gen_tls "$_sni" "$(env_path "$_crt")" "$(env_path "$_key")" || { rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"; return 1; }
+    _crt=
+    _key=
+    if [ "$_tls" = yes ]; then
+        _crt=$SB_TLS_DIR/$_id.crt
+        _key=$SB_TLS_DIR/$_id.key
+        _sb_gen_tls "$_sni" "$(env_path "$_crt")" "$(env_path "$_key")" || { rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"; return 1; }
+    fi
     _f=$_dir/$_id.conf
     (
         umask 077
         printf 'id=%s\nname=%s\ntype=%s\nenabled=true\nlisten=%s\nlisten_port=%s\n' "$_id" "$_id" "$_type" "$_listen" "$_port"
+        case $_type in
+            tuic) printf 'credential.uuid=%s\n' "$_uuid" ;;
+            shadowsocks) printf 'credential.method=%s\n' "$_method" ;;
+        esac
         printf 'credential.password=%s\n' "$_pw"
-        printf 'tls.mode=self-signed\ntls.server_name=%s\ntls.certificate_path=%s\ntls.key_path=%s\n' "$_sni" "$_crt" "$_key"
-        printf 'transport.type=%s\n' "$_proto"
-    ) > "$_f" || { rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"; return 1; }
+        if [ "$_tls" = yes ]; then
+            printf 'tls.mode=self-signed\ntls.server_name=%s\ntls.certificate_path=%s\ntls.key_path=%s\n' "$_sni" "$_crt" "$_key"
+        fi
+        printf 'transport.type=%s\n' "$_transport"
+        [ -z "$_cc" ] || printf 'transport.congestion_control=%s\n' "$_cc"
+    ) > "$_f" || { [ -z "$_crt" ] || rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"; return 1; }
     if ! sb_instance_validate "$_f" >/dev/null 2>&1; then
-        rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"
+        [ -z "$_crt" ] || rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"
         sb_instance_validate "$_f" 2>&1 | sed 's/^/  /' >&2
         apm_err "实例未通过校验"
         return 1
     fi
     if ! _sb_commit_instances "$_dir" "$_was"; then
-        rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"
+        [ -z "$_crt" ] || rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"
         return 1
     fi
     if ! _sb_finish "$_dir" "$_was"; then
-        rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"
+        [ -z "$_crt" ] || rm -f -- "$(env_path "$_crt")" "$(env_path "$_key")"
         return 1
     fi
     _sb_say "已添加实例 $_id"
-    _sb_say "  协议：$_type ($_proto), 监听：$_listen 端口 $_port, 证书：自签名 (server-name $_sni)"
+    if [ "$_tls" = yes ]; then
+        _sb_say "  协议：$_type ($_transport), 监听：$_listen 端口 $_port, 证书：自签名 (server-name $_sni)"
+    else
+        _sb_say "  协议：$_type ($_transport), 监听：$_listen 端口 $_port, 不使用 TLS"
+    fi
+    [ "$_type" != tuic ] || _sb_say "  UUID：$_uuid"
+    [ -z "$_cc" ] || _sb_say "  拥塞控制：$_cc"
+    [ "$_type" != shadowsocks ] || _sb_say "  method：$_method"
     if [ "$_pwmode" = generate ]; then
         _sb_say "  密码：$_pw"
         _sb_say "  这是自动生成的密码, 只在此处显示一次, 之后 proxy-manager 不会再显示它, 请自行保存"
@@ -938,55 +1176,72 @@ singbox_add() {
 }
 
 singbox_list() {
-    local _f _any _st _port
+    local _f _any _st
     core_discover singbox
     _any=0
     printf 'sing-box 实例\n'
     for _f in $(state_list_confs "$(state_instances_dir)"); do
         _any=1
-        _port=$(kv_get "$_f" listen_port)
         if [ "$(kv_get "$_f" enabled)" = true ]; then
             _st=启用
-            _sb_listening "$(_sb_type_proto "$(kv_get "$_f" type)")" "$_port" && _st="启用, 监听中"
+            _sb_inst_listening "$_f" && _st="启用, 监听中"
         else
             _st=禁用
         fi
-        printf '  %s  %s  %s  %s 端口 %s  %s\n' "$(kv_get "$_f" id)" "$(kv_get "$_f" type)" "$_st" "$(kv_get "$_f" listen)" "$_port" "SNI $(kv_get "$_f" tls.server_name)"
+        printf '  %s  %s  %s  %s 端口 %s  %s\n' "$(kv_get "$_f" id)" "$(kv_get "$_f" type)" "$_st" "$(kv_get "$_f" listen)" "$(kv_get "$_f" listen_port)" \
+            "$(if _sb_type_tls "$(kv_get "$_f" type)"; then printf 'SNI %s' "$(kv_get "$_f" tls.server_name)"; else printf 'method %s' "$(kv_get "$_f" credential.method)"; fi)"
     done
     [ "$_any" = 1 ] || printf '  (没有实例)\n'
 }
 
 singbox_show() {
-    local _f _p
+    local _f _p _t
     [ -n "${1:-}" ] || { apm_err "用法: sing-box show 实例ID"; return 2; }
     _f=$(state_instances_dir)/$1.conf
     [ -f "$_f" ] || { apm_err "实例 $1 不存在"; return 1; }
     core_discover singbox
+    _t=$(kv_get "$_f" type)
     printf '实例 %s\n' "$1"
-    printf '  类型：%s\n' "$(kv_get "$_f" type)"
+    printf '  类型：%s\n' "$_t"
+    printf '  传输层：%s\n' "$(_sb_type_transport "$_t")"
     printf '  启用：%s\n' "$(kv_get "$_f" enabled)"
     printf '  监听：%s\n' "$(kv_get "$_f" listen)"
     printf '  端口：%s\n' "$(kv_get "$_f" listen_port)"
-    printf '  server-name：%s\n' "$(kv_get "$_f" tls.server_name)"
-    printf '  TLS：%s (证书 %s)\n' "$(kv_get "$_f" tls.mode)" "$(kv_get "$_f" tls.certificate_path)"
+    if _sb_type_tls "$_t"; then
+        printf '  server-name：%s\n' "$(kv_get "$_f" tls.server_name)"
+        printf '  TLS：%s (证书 %s)\n' "$(kv_get "$_f" tls.mode)" "$(kv_get "$_f" tls.certificate_path)"
+    else
+        printf '  TLS：不使用\n'
+    fi
+    # UUID 是用户标识不是密钥, 可以显示, 密码与密钥一律只显示已配置
+    [ "$_t" != tuic ] || printf '  UUID：%s\n' "$(kv_get "$_f" credential.uuid)"
+    if [ "$_t" = tuic ]; then
+        _p=$(kv_get "$_f" transport.congestion_control)
+        printf '  拥塞控制：%s\n' "${_p:-默认 (cubic)}"
+    fi
+    [ "$_t" != shadowsocks ] || printf '  method：%s\n' "$(kv_get "$_f" credential.method)"
     if [ -n "$(kv_get "$_f" credential.password)" ]; then
         printf '  密码：已配置\n'
     else
         printf '  密码：未配置\n'
     fi
-    _p=$(_sb_type_proto "$(kv_get "$_f" type)")
-    if _sb_listening "$_p" "$(kv_get "$_f" listen_port)"; then
-        printf '  内部 %s Listener：正常\n' "$(_sb_proto_label "$_p")"
-    else
-        printf '  内部 %s Listener：未监听\n' "$(_sb_proto_label "$_p")"
-    fi
+    for _p in $(_sb_type_protos "$_t"); do
+        if _sb_listening "$_p" "$(kv_get "$_f" listen_port)"; then
+            printf '  内部 %s Listener：正常\n' "$(_sb_proto_label "$_p")"
+        else
+            printf '  内部 %s Listener：未监听\n' "$(_sb_proto_label "$_p")"
+        fi
+    done
     printf '  说明：这是容器或系统内部的监听状态, 公网可达性 (NAT 与防火墙) 没有验证\n'
 }
 
 # 通用: 以提案目录修改后提交
-# _sb_change ID ACTION ...  ACTION: enable disable delete set KEY VALUE [--stdin|--generate]
+# singbox_change ID ACTION ...  ACTION: enable disable delete set
+# set 的键: port listen server-name(TLS 协议) password uuid(tuic) congestion-control(tuic) method(shadowsocks)
+#   password 与 method 的密钥参数 --stdin 或 --generate, 密钥格式取决于协议与 method
 singbox_change() {
-    local _id _action _dir _f _was _key _val _port _crt _key_path _sni _cleanup_tls _old_crt _old_key _bk _p
+    local _id _action _dir _f _was _key _val _crt _key_path _old_crt _old_key _bk _p _t
+    local _secmode _method _kind _newm _cur _curkind _ok
     _id=${1:-}
     _action=${2:-}
     if [ -z "$_id" ] || [ -z "$_action" ]; then
@@ -995,8 +1250,10 @@ singbox_change() {
     fi
     shift 2
     GENERATED_PW=
+    GENERATED_UUID=
     _val=
     _key=
+    _secmode=
     if [ "$_action" = set ]; then
         _key=${1:-}
         shift
@@ -1004,15 +1261,33 @@ singbox_change() {
             port) _val=${1:-}; _snell_valid_port "$_val" || { apm_err "端口无效 (需要 1025 到 65535)"; return 2; } ;;
             listen) _val=${1:-}; is_listen_addr "$_val" || { apm_err "listen 无效"; return 2; } ;;
             server-name) _val=${1:-}; _sb_valid_sni "$_val" || { apm_err "server-name 无效"; return 2; } ;;
+            congestion-control) _val=${1:-}; _sb_tuic_cc_valid "$_val" || { apm_err "congestion-control 无效 (允许 $SB_TUIC_CC)"; return 2; } ;;
+            uuid)
+                _val=${1:-}
+                if [ "$_val" = --generate ]; then
+                    _val=$(_sb_gen_uuid) || { apm_err "生成 UUID 失败"; return 1; }
+                    GENERATED_UUID=$_val
+                fi
+                _sb_valid_uuid "$_val" || { apm_err "uuid 无效 (需要小写的标准 UUID 格式, 或 --generate)"; return 2; }
+                ;;
             password)
                 case ${1:-} in
-                    --stdin) IFS= read -r _val || _val= ;;
-                    --generate) _val=$(_snell_gen_psk) || { apm_err "生成密码失败"; return 1; }; GENERATED_PW=$_val ;;
+                    --stdin) _secmode=stdin; IFS= read -r _val || _val= ;;
+                    --generate) _secmode=generate ;;
                     *) apm_err "密码不接受命令行明文参数, 请使用 --stdin 或 --generate"; return 2 ;;
                 esac
-                _snell_valid_psk "$_val" || { apm_err "密码无效 (16 到 128 位字母数字或 _ -)"; return 2; }
                 ;;
-            *) apm_err "不支持的键: $_key (支持 port listen server-name password)"; return 2 ;;
+            method)
+                _val=${1:-}
+                _sb_ss_method_valid "$_val" || { apm_err "method 不在允许的取值内 ($SB_SS_METHODS)"; return 2; }
+                case ${2:-} in
+                    --stdin) _secmode=stdin; IFS= read -r _newm || _newm=; ;;
+                    --generate) _secmode=generate ;;
+                    '') ;;
+                    *) apm_err "method 之后只接受 --stdin 或 --generate 来同时更换密钥"; return 2 ;;
+                esac
+                ;;
+            *) apm_err "不支持的键: $_key (支持 port listen server-name password uuid congestion-control method)"; return 2 ;;
         esac
     fi
     case $_action in enable|disable|delete|set) ;; *) apm_err "未知操作: $_action"; return 2 ;; esac
@@ -1025,9 +1300,19 @@ singbox_change() {
     _dir=$(_sb_propose_dir) || return 1
     _f=$_dir/$_id.conf
     [ -f "$_f" ] || { apm_err "实例 $_id 不存在"; return 1; }
+    _t=$(kv_get "$_f" type)
     _crt=$(kv_get "$_f" tls.certificate_path)
     _key_path=$(kv_get "$_f" tls.key_path)
-    _cleanup_tls=
+    _old_crt=
+    _old_key=
+    # 键与协议的匹配
+    if [ "$_action" = set ]; then
+        case $_key in
+            server-name) _sb_type_tls "$_t" || { apm_err "$_t 不使用 TLS, 没有 server-name"; return 2; } ;;
+            uuid|congestion-control) [ "$_t" = tuic ] || { apm_err "只有 tuic 有 $_key"; return 2; } ;;
+            method) [ "$_t" = shadowsocks ] || { apm_err "只有 shadowsocks 有 method"; return 2; } ;;
+        esac
+    fi
     case $_action in
         enable) _sb_inst_set "$_f" enabled true ;;
         disable) _sb_inst_set "$_f" enabled false ;;
@@ -1035,17 +1320,45 @@ singbox_change() {
         set)
             case $_key in
                 port)
-                    _p=$(_sb_type_proto "$(kv_get "$_f" type)")
-                    if _sb_port_taken_by_instance "$_dir" "$_p" "$_val" "$(kv_get "$_f" listen)" "$_id"; then apm_err "$_p 端口 $_val 已被其他实例使用"; return 1; fi
-                    if [ "$_val" != "$(kv_get "$_f" listen_port)" ] && _sb_port_busy "$_p" "$_val" "$(kv_get "$_f" listen)"; then apm_err "$_p 端口 $_val 已被占用"; return 1; fi
+                    _sb_check_ports "$_dir" "$_t" "$_val" "$(kv_get "$_f" listen)" "$_id" "$([ "$_val" != "$(kv_get "$_f" listen_port)" ] && echo yes || echo no)" || return 1
                     _sb_inst_set "$_f" listen_port "$_val"
                     ;;
                 listen)
-                    _p=$(_sb_type_proto "$(kv_get "$_f" type)")
-                    if _sb_port_taken_by_instance "$_dir" "$_p" "$(kv_get "$_f" listen_port)" "$_val" "$_id"; then apm_err "$_p 端口 $(kv_get "$_f" listen_port) 在地址 $_val 上已被其他实例使用"; return 1; fi
+                    _sb_check_ports "$_dir" "$_t" "$(kv_get "$_f" listen_port)" "$_val" "$_id" no || return 1
                     _sb_inst_set "$_f" listen "$_val"
                     ;;
-                password) _sb_inst_set "$_f" credential.password "$_val" ;;
+                congestion-control) _sb_inst_set "$_f" transport.congestion_control "$_val" ;;
+                uuid) _sb_inst_set "$_f" credential.uuid "$_val" ;;
+                password)
+                    _kind=$(_sb_secret_kind "$_t" "$(kv_get "$_f" credential.method)")
+                    if [ "$_secmode" = generate ]; then
+                        _val=$(_sb_gen_secret "$_kind") || { apm_err "生成密码失败"; return 1; }
+                        GENERATED_PW=$_val
+                    fi
+                    _sb_valid_secret "$_kind" "$_val" || { apm_err "密码无效 ($(_sb_secret_hint "$_kind"))"; return 2; }
+                    _sb_inst_set "$_f" credential.password "$_val"
+                    ;;
+                method)
+                    # 不同 method 的密钥格式不通用, 绝不做不可见的转换:
+                    # 新 method 与当前密钥兼容才保留, 否则必须同时用 --generate 或 --stdin 更换密钥
+                    _kind=$(_sb_secret_kind shadowsocks "$_val")
+                    _cur=$(kv_get "$_f" credential.password)
+                    case $_secmode in
+                        generate) _cur=$(_sb_gen_secret "$_kind") || { apm_err "生成密钥失败"; return 1; }; GENERATED_PW=$_cur ;;
+                        stdin)
+                            _sb_valid_secret "$_kind" "$_newm" || { apm_err "从标准输入读取的密钥不符合 $_val 的要求 ($(_sb_secret_hint "$_kind"))"; return 2; }
+                            _cur=$_newm
+                            ;;
+                        *)
+                            if ! _sb_valid_secret "$_kind" "$_cur"; then
+                                apm_err "当前密钥不符合 $_val 的要求 ($(_sb_secret_hint "$_kind")), 请在 method 之后加 --generate 或 --stdin 同时更换密钥"
+                                return 2
+                            fi
+                            ;;
+                    esac
+                    _sb_inst_set "$_f" credential.method "$_val"
+                    [ "$_secmode" = "" ] || _sb_inst_set "$_f" credential.password "$_cur"
+                    ;;
                 server-name)
                     # 更换证书: 先把旧证书放到 staging, 失败时放回
                     _bk=$SNELL_STAGING/oldtls
@@ -1066,18 +1379,18 @@ singbox_change() {
     if [ "$_action" != delete ] && ! sb_instance_validate "$_f" >/dev/null 2>&1; then
         sb_instance_validate "$_f" 2>&1 | sed 's/^/  /' >&2
         apm_err "修改后的实例未通过校验"
-        [ -z "${_old_crt:-}" ] || { cp -p -- "$_old_crt" "$(env_path "$_crt")"; cp -p -- "$_old_key" "$(env_path "$_key_path")"; }
+        [ -z "$_old_crt" ] || { cp -p -- "$_old_crt" "$(env_path "$_crt")"; cp -p -- "$_old_key" "$(env_path "$_key_path")"; }
         return 1
     fi
     if ! _sb_commit_instances "$_dir" "$_was"; then
-        [ -z "${_old_crt:-}" ] || { cp -p -- "$_old_crt" "$(env_path "$_crt")"; cp -p -- "$_old_key" "$(env_path "$_key_path")"; }
+        [ -z "$_old_crt" ] || { cp -p -- "$_old_crt" "$(env_path "$_crt")"; cp -p -- "$_old_key" "$(env_path "$_key_path")"; }
         return 1
     fi
     if ! _sb_finish "$_dir" "$_was"; then
-        [ -z "${_old_crt:-}" ] || { cp -p -- "$_old_crt" "$(env_path "$_crt")"; cp -p -- "$_old_key" "$(env_path "$_key_path")"; }
+        [ -z "$_old_crt" ] || { cp -p -- "$_old_crt" "$(env_path "$_crt")"; cp -p -- "$_old_key" "$(env_path "$_key_path")"; }
         return 1
     fi
-    if [ "$_action" = delete ]; then
+    if [ "$_action" = delete ] && [ -n "$_crt" ]; then
         rm -f -- "$(env_path "$_crt")" "$(env_path "$_key_path")"
     fi
     case $_action in
@@ -1085,15 +1398,30 @@ singbox_change() {
         disable) _sb_say "实例 $_id 已禁用" ;;
         delete) _sb_say "实例 $_id 已删除" ;;
         set)
-            if [ "$_key" = password ]; then
-                _sb_say "实例 $_id 的密码已更新"
-                if [ -n "$GENERATED_PW" ]; then
-                    _sb_say "  新密码：$GENERATED_PW"
-                    _sb_say "  这是自动生成的密码, 只在此处显示一次, 请自行保存"
-                fi
-            else
-                _sb_say "实例 $_id 的 $_key 已更新为 $_val"
-            fi
+            case $_key in
+                password)
+                    _sb_say "实例 $_id 的密码已更新"
+                    if [ -n "$GENERATED_PW" ]; then
+                        _sb_say "  新密码：$GENERATED_PW"
+                        _sb_say "  这是自动生成的密码, 只在此处显示一次, 请自行保存"
+                    fi
+                    ;;
+                method)
+                    _sb_say "实例 $_id 的 method 已更新为 $_val"
+                    if [ -n "$GENERATED_PW" ]; then
+                        _sb_say "  新密码：$GENERATED_PW"
+                        _sb_say "  这是自动生成的密码, 只在此处显示一次, 请自行保存"
+                    elif [ "$_secmode" = stdin ]; then
+                        _sb_say "  密码已更换为你提供的值"
+                    else
+                        _sb_say "  原密钥与新 method 兼容, 已保留"
+                    fi
+                    ;;
+                uuid)
+                    _sb_say "实例 $_id 的 uuid 已更新为 $_val"
+                    ;;
+                *) _sb_say "实例 $_id 的 $_key 已更新为 $_val" ;;
+            esac
             ;;
     esac
     if [ "$_was" = running ]; then

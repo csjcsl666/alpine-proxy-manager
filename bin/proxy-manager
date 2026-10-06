@@ -33,9 +33,12 @@ usage() {
   sing-box status | info | log [N] | check            状态 事实 日志 配置检查
   sing-box install [--release 标签]    下载官方 musl release 安装并启动 默认 v1.13.14
   sing-box start | stop | restart | update [标签] [--force] | uninstall [--purge]
-  sing-box add anytls [--name ID] [--port N | --listen ADDR] [--server-name 名] [--password-stdin]
+  sing-box add anytls|hysteria2|tuic|shadowsocks [--name ID] [--port N | --listen ADDR] [--password-stdin]
+                [--server-name 名 (TLS 协议)] [--uuid UUID --congestion-control cubic|new_reno|bbr (tuic)]
+                [--method 方法 (shadowsocks, 默认 2022-blake3-aes-128-gcm)]
   sing-box list | show ID | enable ID | disable ID | delete ID
-  sing-box set ID port|listen|server-name 值 | set ID password --stdin|--generate
+  sing-box set ID port|listen|server-name|congestion-control 值 | set ID uuid UUID|--generate
+  sing-box set ID password --stdin|--generate | set ID method 方法 [--stdin|--generate]
   help          显示本帮助
 EOF
 }

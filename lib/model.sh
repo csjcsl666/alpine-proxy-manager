@@ -102,7 +102,7 @@ is_display_name() {
 #   relay_access.* 目标访问限制, 见 policy.sh
 # 未列出的前缀一律拒绝, 避免拼写错误被静默忽略
 
-INSTANCE_TYPES="snell anytls hysteria2 tuic reality"
+INSTANCE_TYPES="snell anytls hysteria2 tuic shadowsocks"
 
 instance_valid_type() {
     local _t
