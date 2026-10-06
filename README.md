@@ -2,7 +2,7 @@
 
 面向 Alpine Linux 低内存 VPS 的轻量 Snell + sing-box 统一管理器
 
-当前为早期开发版本 `0.1.0-dev.2` Snell 与 sing-box 已支持安装与完整生命周期管理 sing-box 目前提供 AnyTLS 与 Hysteria2 两种协议实例
+当前为早期开发版本 `0.1.0-dev.4` Snell 与 sing-box 已支持安装与完整生命周期管理 sing-box 目前提供 AnyTLS Hysteria2 TUIC 与 Shadowsocks 四种协议实例 VLESS Reality 与 Trojan 不在支持计划内
 
 ## 快速安装
 
@@ -121,11 +121,16 @@ proxy-manager sing-box start | stop | restart
 proxy-manager sing-box update [标签] [--force]
 proxy-manager sing-box uninstall [--purge]
 
-proxy-manager sing-box add anytls|hysteria2 [--name ID] [--port 端口 | --listen 地址] [--server-name 名称] [--password-stdin]
+proxy-manager sing-box add anytls|hysteria2|tuic|shadowsocks [--name ID] [--port 端口 | --listen 地址] [--password-stdin]
+proxy-manager sing-box add anytls|hysteria2|tuic [--server-name 名称]
+proxy-manager sing-box add tuic [--uuid UUID] [--congestion-control cubic|new_reno|bbr]
+proxy-manager sing-box add shadowsocks [--method 方法]
 proxy-manager sing-box list | show ID
 proxy-manager sing-box enable ID | disable ID | delete ID
-proxy-manager sing-box set ID port|listen|server-name 值
+proxy-manager sing-box set ID port|listen|server-name|congestion-control 值
+proxy-manager sing-box set ID uuid UUID | --generate
 proxy-manager sing-box set ID password --stdin | --generate
+proxy-manager sing-box set ID method 方法 [--stdin | --generate]
 ```
 
 - 默认 release 固定为 `v1.13.14` 不会自动取 latest 内置了该 release 的 sha256 其他 release 通过发布页的资产 digest 校验 都取不到就拒绝安装 选择 1.13.14 的依据是同一份 AnyTLS 配置空闲内存实测明显低于更新的 1.14.2
@@ -134,8 +139,9 @@ proxy-manager sing-box set ID password --stdin | --generate
 - 配置由实例生成 请使用 `add` `set` 等命令 不要手工编辑 `config.json` 每次变更都经官方 `sing-box check` 通过后才原子替换并重启 失败会恢复旧配置与服务
 - 更新前先用新二进制对当前配置执行 check 不兼容就拒绝升级 新版本启动失败会回滚旧二进制
 - 服务以专用用户 `sing-box` 运行 因此监听端口需要 1025 以上
-- 端口冲突按 协议加地址加端口 判断 AnyTLS 使用 TCP Hysteria2 使用 UDP 所以同一个端口数字可以同时给 AnyTLS 与 Hysteria2 使用 不同的具体监听地址也不冲突 通配地址与具体地址冲突 `show` 只报告容器或系统内部的监听状态 不代表公网可达 NAT 与防火墙需要自行配置
-- AnyTLS 与 Hysteria2 使用自签名证书 由 `sing-box generate tls-keypair` 生成 客户端需要信任或忽略证书校验
+- 端口冲突按 协议加地址加端口 判断 AnyTLS 使用 TCP Hysteria2 与 TUIC 使用 UDP Shadowsocks 同时使用 TCP 与 UDP 任何一个传输层冲突都会整体拒绝 所以同一个端口数字可以同时给 AnyTLS 与 Hysteria2 使用 但 Shadowsocks 不能与它们共用端口 不同的具体监听地址也不冲突 通配地址与具体地址冲突 `show` 只报告容器或系统内部的监听状态 不代表公网可达 NAT 与防火墙需要自行配置
+- AnyTLS Hysteria2 与 TUIC 使用自签名证书 由 `sing-box generate tls-keypair` 生成 客户端需要信任或忽略证书校验 Shadowsocks 不使用 TLS 也不会生成证书
+- TUIC 的凭据是 UUID 加密码 UUID 默认自动生成 Shadowsocks 的凭据是 method 加密钥 默认 method 为 `2022-blake3-aes-128-gcm` 只允许 2022-blake3-aes-128-gcm 2022-blake3-aes-256-gcm 2022-blake3-chacha20-poly1305 aes-128-gcm aes-256-gcm chacha20-ietf-poly1305 2022 系列要求 base64 编码的 16 或 32 字节密钥 传统方法使用普通密码 更换 method 时如果现有密钥格式不兼容 必须同时用 `--generate` 或 `--stdin` 更换密钥
 - 自动生成的密码只在生成当次显示一次 之后任何命令都不会显示 需要时以 root 读取实例文件
 - 卸载默认保留配置 证书 日志与实例 重新安装会沿用 `--purge` 才会删除 并且只删除由 Manager 创建的内容
 - 日志级别默认 warn 日志可能包含访问的目标域名 请不要公开
@@ -151,7 +157,7 @@ proxy-manager sing-box set ID password --stdin | --generate
 - `proxy-manager doctor` 严格只读的环境检查 报告 Alpine OpenRC root 架构 cgroup 内存上限 当前内存 swap 以及 Snell 与 sing-box 安装情况 存在 cgroup 限制时优先报告 cgroup 上限
 - `proxy-manager status` 显示 Core 状态与功能配置状态
 - `proxy-manager core list` 只读发现 Core 并显示状态 版本 来源与管理状态 已有部署显示为 现有部署 未接管 本项目不会改动它
-- sing-box Managed Core 完整生命周期与 AnyTLS 与 Hysteria2 协议实例 安装 启停 配置检查 更新 卸载 实例的添加 修改 启用 禁用 删除 已在真实 Alpine VPS 上完成验证 见下文 sing-box 一节 Hysteria2 的验证范围是容器内部的 UDP 监听与完整生命周期 公网 UDP 客户端连通尚未验证
+- sing-box Managed Core 完整生命周期与 AnyTLS Hysteria2 TUIC Shadowsocks 协议实例 安装 启停 配置检查 更新 卸载 实例的添加 修改 启用 禁用 删除 已在真实 Alpine VPS 上完成验证 见下文 sing-box 一节 Hysteria2 TUIC 与 Shadowsocks 的验证范围是 sing-box 官方 check 与内部 TCP 与 UDP 监听以及完整生命周期 公网 UDP 客户端连通尚未验证
 - Snell Managed Core 完整生命周期 安装 启停 重启 配置修改 更新 卸载 已在真实 Alpine VPS 上完成验证 见下文 Snell 一节
 - `proxy-manager snell status` `snell info` `snell log [N]` 显示 OpenRC 状态 版本 配置元数据 日志位置与监听 PSK 一律脱敏 日志默认只读末尾 20 行
 - Core 发现只执行已确认为 ELF 的二进制 脚本与指向脚本的符号链接不会被执行 运行状态以 OpenRC 为准
@@ -162,7 +168,6 @@ proxy-manager sing-box set ID password --stdin | --generate
 
 ## 尚未完成
 
-- TUIC Reality 等其他 sing-box 协议实例
 - Hysteria2 的带宽 混淆 masquerade 等可选参数 以及公网 UDP 端到端验收
 - 接管已有的 sing-box 部署
 - 实例的 URL 与二维码导出 ACME 自动证书
