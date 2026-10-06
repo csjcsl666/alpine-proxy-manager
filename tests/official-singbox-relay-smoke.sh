@@ -17,7 +17,12 @@ ASSET="sing-box-$VER-linux-$ARCH-musl.tar.gz"
 URL="https://github.com/SagerNet/sing-box/releases/download/v$VER/$ASSET"
 W=$(mktemp -d)
 PIDS=
-trap 'for p in $PIDS; do kill "$p" 2>/dev/null; done; rm -rf "$W"' EXIT
+cleanup() {
+    local p
+    for p in $PIDS; do kill "$p" 2>/dev/null; done
+    rm -rf "$W"
+}
+trap cleanup EXIT
 
 n=1
 while [ "$n" -le 3 ]; do
