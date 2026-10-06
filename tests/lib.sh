@@ -255,41 +255,63 @@ esac
 # 旋钮: snell 沿用无后缀的旧名字, 两个服务都认 名字-服务名
 knob() { { [ "$svc" = snell ] && [ -e "$K/$1" ]; } || [ -e "$K/$1-$svc" ]; }
 state() { cat "$statef" 2>/dev/null || echo stopped; }
-ports_of() {
+ports_of() { # 输出 "协议 端口" 每行一个
     case $svc in
-        snell) sed -n 's/^listen[[:space:]]*=[[:space:]]*//p' "$1" | tr ',' '\n' | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p' ;;
-        sing-box) sed -n 's/.*"listen_port": *\([0-9][0-9]*\).*/\1/p' "$1" ;;
+        snell) sed -n 's/^listen[[:space:]]*=[[:space:]]*//p' "$1" | tr ',' '\n' | sed -n 's/.*:\([0-9][0-9]*\)$/tcp \1 00000000/p' ;;
+        sing-box)
+            # 输出 协议 端口 地址十六进制, 具体 IPv4 地址按 /proc/net 的小端写法, 通配地址为 00000000
+            awk '
+                /"type": *"(anytls|hysteria2)"/ { t = ($0 ~ /hysteria2/) ? "udp" : "tcp"; h = "00000000"; next }
+                /"listen":/ && t != "" {
+                    a = $0; sub(/.*"listen": *"/, "", a); sub(/".*/, "", a)
+                    if (split(a, o, ".") == 4) h = sprintf("%02X%02X%02X%02X", o[4], o[3], o[2], o[1])
+                    next
+                }
+                /"listen_port"/ && t != "" { n = $0; gsub(/[^0-9]/, "", n); print t, n, h; t = "" }' "$1" ;;
     esac
 }
 rebuild_net() {
     mkdir -p "$R/proc/net"
-    {
-        printf '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n'
-        for s in snell sing-box; do
-            case $s in
-                snell) sf=$K/state; c=$R/etc/snell/snell-server.conf; base=50000; w=23755; ng=no_listen ;;
-                sing-box) sf=$K/state-sing-box; c=$R/etc/sing-box/config.json; base=60000; w=33002; ng=no_listen-sing-box ;;
-            esac
-            [ "$(cat "$sf" 2>/dev/null)" = started ] || continue
-            [ ! -e "$K/$ng" ] || continue
-            [ -f "$c" ] || continue
-            i=0
-            svc_save=$svc; svc=$s
-            for p in $(ports_of "$c"); do
-                printf '   %s: 00000000:%04X 00000000:0000 0A 00000000:00000000 00:00000000 00000000   100        0 %s 1 0\n' "$i" "$p" "$((base + i))"
-                mkdir -p "$R/proc/$w/fd"
-                ln -sf "socket:[$((base + i))]" "$R/proc/$w/fd/$((10 + i))"
-                i=$((i + 1))
-            done
-            svc=$svc_save
-        done
-    } > "$R/proc/net/tcp"
+    : > "$K/tcp.rows"
+    : > "$K/udp.rows"
+    for s in snell sing-box; do
+        case $s in
+            snell) sf=$K/state; c=$R/etc/snell/snell-server.conf; base=50000; w=23755; ng=no_listen ;;
+            sing-box) sf=$K/state-sing-box; c=$R/etc/sing-box/config.json; base=60000; w=33002; ng=no_listen-sing-box ;;
+        esac
+        [ "$(cat "$sf" 2>/dev/null)" = started ] || continue
+        [ ! -e "$K/$ng" ] || continue
+        [ -f "$c" ] || continue
+        i=0
+        svc_save=$svc; svc=$s
+        ports_of "$c" > "$K/ports.tmp"
+        svc=$svc_save
+        while read -r pr p ha; do
+            [ -n "$p" ] || continue
+            if [ "$pr" = udp ]; then
+                printf '   %s: %s:%04X 00000000:0000 07 00000000:00000000 00:00000000 00000000   100        0 %s 2 0\n' "$i" "${ha:-00000000}" "$p" "$((base + i))" >> "$K/udp.rows"
+            else
+                printf '   %s: %s:%04X 00000000:0000 0A 00000000:00000000 00:00000000 00000000   100        0 %s 1 0\n' "$i" "${ha:-00000000}" "$p" "$((base + i))" >> "$K/tcp.rows"
+            fi
+            mkdir -p "$R/proc/$w/fd"
+            ln -sf "socket:[$((base + i))]" "$R/proc/$w/fd/$((10 + i))"
+            i=$((i + 1))
+        done < "$K/ports.tmp"
+    done
+    for f in tcp udp; do
+        {
+            printf '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n'
+            cat "$K/$f.rows"
+            # 其他进程的监听 (旋钮文件 foreign.tcp 与 foreign.udp), 重建时保留
+            cat "$K/foreign.$f" 2>/dev/null
+        } > "$R/proc/net/$f"
+    done
 }
 stop_proc() {
     rm -rf "$R/proc/$sup" "$R/proc/$wrk" "$pidf"
     rebuild_net
-    # 没有任何服务在运行时不留 tcp 表, 与未启动前一致
-    [ "$(cat "$K/state" 2>/dev/null)" = started ] || [ "$(cat "$K/state-sing-box" 2>/dev/null)" = started ] || rm -f "$R/proc/net/tcp"
+    # 没有任何服务在运行时不留 tcp 与 udp 表, 与未启动前一致
+    [ "$(cat "$K/state" 2>/dev/null)" = started ] || [ "$(cat "$K/state-sing-box" 2>/dev/null)" = started ] || rm -f "$R/proc/net/tcp" "$R/proc/net/udp"
 }
 start_proc() {
     mkdir -p "$R/run" "$R/proc/$sup" "$R/proc/$wrk/fd" "$R/proc/net"

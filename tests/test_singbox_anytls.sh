@@ -70,13 +70,13 @@ bad "证书路径是相对路径" 's#^tls.certificate_path=.*#tls.certificate_pa
 bad "证书路径含引号" 's#^tls.key_path=.*#tls.key_path=/etc/a"b#'
 bad "缺少密码" '/^credential.password=/d'
 bad "缺少 key_path" '/^tls.key_path=/d'
-bad "类型不支持" 's/^type=anytls/type=hysteria2/'
+bad "类型不支持" 's/^type=anytls/type=tuic/'
 bad "listen 无效" 's/^listen=.*/listen=not an addr/'
 rm -f "$G/Bad-01.conf"
 assert_eq "下一个编号" AnyTLS-04 "$(_sb_next_id "$G" AnyTLS)"
-assert_eq "端口占用检测" yes "$(_sb_port_taken_by_instance "$G" 20002 && echo yes || echo no)"
-assert_eq "排除自身的端口占用检测" no "$(_sb_port_taken_by_instance "$G" 20002 AnyTLS-02 && echo yes || echo no)"
-assert_eq "期望端口只含启用的" "20001 20003" "$(_sb_expected_ports "$G")"
+assert_eq "端口占用检测" yes "$(_sb_port_taken_by_instance "$G" tcp 20002 :: && echo yes || echo no)"
+assert_eq "排除自身的端口占用检测" no "$(_sb_port_taken_by_instance "$G" tcp 20002 :: AnyTLS-02 && echo yes || echo no)"
+assert_eq "期望监听只含启用的并带协议" "tcp:20001 tcp:20003" "$(_sb_expected_ports "$G")"
 
 # ---- add ----
 ready a1
@@ -120,7 +120,8 @@ assert_contains "list 含实例" "$out" "AnyTLS-01  anytls  启用, 监听中"
 out=$("$PM" sing-box show AnyTLS-01)
 assert_contains "show 密码已配置" "$out" "密码：已配置"
 assert_contains "show 端口" "$out" "端口：20443"
-assert_contains "show 当前监听" "$out" "当前监听：是"
+assert_contains "show 内部 TCP Listener" "$out" "内部 TCP Listener：正常"
+assert_contains "show 说明公网未验证" "$out" "公网可达性"
 assert_eq "备份目录权限" 700 "$(stat -c %a "$A/var/lib/alpine-proxy-manager/backups")"
 assert_eq "配置备份权限" 600 "$(stat -c %a "$A/var/lib/alpine-proxy-manager/backups"/config.json.bak.* | head -n 1)"
 assert_eq "没有遗留候选文件" 0 "$(ls -A "$A/etc/sing-box" | grep -c 'cand')"
@@ -158,7 +159,7 @@ for a in "--port 80" "--port abc" "--listen bad" "--server-name bad_name" "--nam
     "$PM" sing-box add anytls $a >/dev/null 2>&1
     assert_eq "参数错误 [$a] 返回 2" 2 $?
 done
-"$PM" sing-box add hysteria2 >/dev/null 2>&1
+"$PM" sing-box add tuic >/dev/null 2>&1
 assert_eq "不支持的协议返回 2" 2 $?
 "$PM" sing-box add >/dev/null 2>&1
 assert_eq "缺少协议返回 2" 2 $?

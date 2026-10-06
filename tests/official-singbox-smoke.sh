@@ -54,13 +54,21 @@ cat > "$W/config.json" <<EOC
       "listen_port": 20443,
       "users": [{"password": "SmokeTestPasswordNotSecret0123456789"}],
       "tls": {"enabled": true, "certificate_path": "$W/cert.pem", "key_path": "$W/key.pem"}
+    },
+    {
+      "type": "hysteria2",
+      "tag": "Hysteria2-01",
+      "listen": "127.0.0.1",
+      "listen_port": 20443,
+      "users": [{"password": "SmokeTestHy2PasswordNotSecret012345678"}],
+      "tls": {"enabled": true, "certificate_path": "$W/cert.pem", "key_path": "$W/key.pem"}
     }
   ],
   "outbounds": [{"type": "direct", "tag": "direct"}]
 }
 EOC
 "$B" check -c "$W/config.json"
-echo "最小 AnyTLS 配置 check 通过"
+echo "AnyTLS 加 Hysteria2 的配置 check 通过 (TCP 与 UDP 同端口号)"
 echo '{ not json' > "$W/bad.json"
 if "$B" check -c "$W/bad.json" >/dev/null 2>&1; then echo "损坏的配置不应通过 check" >&2; exit 1; fi
 echo "损坏的配置被 check 拒绝"
@@ -72,12 +80,14 @@ echo "缺失证书被 check 拒绝"
 PID=$!
 i=0
 while [ "$i" -lt 10 ]; do
-    grep -q ':4FDB ' /proc/net/tcp 2>/dev/null && break
+    if grep -q ':4FDB ' /proc/net/tcp 2>/dev/null && grep -q ':4FDB ' /proc/net/udp 2>/dev/null; then break; fi
     sleep 1
     i=$((i + 1))
 done
-grep -q ':4FDB ' /proc/net/tcp || { cat "$W/run.log" >&2; echo "20443 没有进入监听" >&2; exit 1; }
-echo "20443 正在监听"
+# TCP 表里状态 0A 是监听, UDP 表里状态 07 是未连接的监听 socket
+awk '$2 ~ /:4FDB$/ && $4 == "0A" { f = 1 } END { exit !f }' /proc/net/tcp || { cat "$W/run.log" >&2; echo "TCP 20443 没有进入监听" >&2; exit 1; }
+awk '$2 ~ /:4FDB$/ && $4 == "07" { f = 1 } END { exit !f }' /proc/net/udp || { cat "$W/run.log" >&2; echo "UDP 20443 没有进入监听" >&2; exit 1; }
+echo "TCP 20443 (AnyTLS) 与 UDP 20443 (Hysteria2) 同时在监听"
 grep -E '^(VmRSS|VmHWM|Threads)' "/proc/$PID/status" | tr '\n\t' '  '
 echo
 kill "$PID"
