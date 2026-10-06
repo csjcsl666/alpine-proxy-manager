@@ -1,7 +1,7 @@
 #!/bin/sh
 # 官方 sing-box release 的真实 smoke test, 需要网络, 在 Alpine 容器内运行
 # 下载官方 musl 构建, 核对 sha256, 只解压 sing-box, 确认 ELF, version, 生成自签名证书,
-# 用最小的 AnyTLS 配置执行 check, 并实际运行几秒确认监听与内存
+# 用 AnyTLS Hysteria2 TUIC Shadowsocks 四协议配置执行 check, 并实际运行几秒确认监听与内存
 # 不属于 tests/run.sh, 单元测试不依赖网络, 由 CI 单独的 job 执行
 set -eu
 
@@ -62,13 +62,30 @@ cat > "$W/config.json" <<EOC
       "listen_port": 20443,
       "users": [{"password": "SmokeTestHy2PasswordNotSecret012345678"}],
       "tls": {"enabled": true, "certificate_path": "$W/cert.pem", "key_path": "$W/key.pem"}
+    },
+    {
+      "type": "tuic",
+      "tag": "TUIC-01",
+      "listen": "127.0.0.1",
+      "listen_port": 20444,
+      "users": [{"uuid": "11111111-2222-4333-8444-555555555555", "password": "SmokeTestTuicPasswordNotSecret01234567"}],
+      "congestion_control": "bbr",
+      "tls": {"enabled": true, "certificate_path": "$W/cert.pem", "key_path": "$W/key.pem"}
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "Shadowsocks-01",
+      "listen": "127.0.0.1",
+      "listen_port": 20445,
+      "method": "2022-blake3-aes-128-gcm",
+      "password": "AAAAAAAAAAAAAAAAAAAAAA=="
     }
   ],
   "outbounds": [{"type": "direct", "tag": "direct"}]
 }
 EOC
 "$B" check -c "$W/config.json"
-echo "AnyTLS 加 Hysteria2 的配置 check 通过 (TCP 与 UDP 同端口号)"
+echo "四协议配置 check 通过 (AnyTLS 与 Hysteria2 的 TCP 与 UDP 同端口号)"
 echo '{ not json' > "$W/bad.json"
 if "$B" check -c "$W/bad.json" >/dev/null 2>&1; then echo "损坏的配置不应通过 check" >&2; exit 1; fi
 echo "损坏的配置被 check 拒绝"
@@ -80,14 +97,18 @@ echo "缺失证书被 check 拒绝"
 PID=$!
 i=0
 while [ "$i" -lt 10 ]; do
-    if grep -q ':4FDB ' /proc/net/tcp 2>/dev/null && grep -q ':4FDB ' /proc/net/udp 2>/dev/null; then break; fi
+    if grep -q ':4FDB ' /proc/net/tcp 2>/dev/null && grep -q ':4FDB ' /proc/net/udp 2>/dev/null && grep -q ':4FDD ' /proc/net/udp 2>/dev/null; then break; fi
     sleep 1
     i=$((i + 1))
 done
 # TCP 表里状态 0A 是监听, UDP 表里状态 07 是未连接的监听 socket
 awk '$2 ~ /:4FDB$/ && $4 == "0A" { f = 1 } END { exit !f }' /proc/net/tcp || { cat "$W/run.log" >&2; echo "TCP 20443 没有进入监听" >&2; exit 1; }
 awk '$2 ~ /:4FDB$/ && $4 == "07" { f = 1 } END { exit !f }' /proc/net/udp || { cat "$W/run.log" >&2; echo "UDP 20443 没有进入监听" >&2; exit 1; }
-echo "TCP 20443 (AnyTLS) 与 UDP 20443 (Hysteria2) 同时在监听"
+# 4FDC 是 20444 (TUIC, UDP), 4FDD 是 20445 (Shadowsocks, TCP 与 UDP)
+awk '$2 ~ /:4FDC$/ && $4 == "07" { f = 1 } END { exit !f }' /proc/net/udp || { cat "$W/run.log" >&2; echo "UDP 20444 没有进入监听" >&2; exit 1; }
+awk '$2 ~ /:4FDD$/ && $4 == "0A" { f = 1 } END { exit !f }' /proc/net/tcp || { cat "$W/run.log" >&2; echo "TCP 20445 没有进入监听" >&2; exit 1; }
+awk '$2 ~ /:4FDD$/ && $4 == "07" { f = 1 } END { exit !f }' /proc/net/udp || { cat "$W/run.log" >&2; echo "UDP 20445 没有进入监听" >&2; exit 1; }
+echo "TCP 20443 (AnyTLS) UDP 20443 (Hysteria2) UDP 20444 (TUIC) TCP 与 UDP 20445 (Shadowsocks) 同时在监听"
 grep -E '^(VmRSS|VmHWM|Threads)' "/proc/$PID/status" | tr '\n\t' '  '
 echo
 kill "$PID"

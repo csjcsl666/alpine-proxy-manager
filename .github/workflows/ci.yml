@@ -44,3 +44,5 @@ jobs:
       - name: 下载官方 sing-box 并执行 check 与短时间运行
         run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-smoke.sh
 
+      - name: 同一份四协议配置在 v1.14.2 上的兼容性
+        run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-smoke.sh 1.14.2

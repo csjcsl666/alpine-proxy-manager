@@ -261,13 +261,13 @@ ports_of() { # 输出 "协议 端口" 每行一个
         sing-box)
             # 输出 协议 端口 地址十六进制, 具体 IPv4 地址按 /proc/net 的小端写法, 通配地址为 00000000
             awk '
-                /"type": *"(anytls|hysteria2)"/ { t = ($0 ~ /hysteria2/) ? "udp" : "tcp"; h = "00000000"; next }
+                /"type": *"(anytls|hysteria2|tuic|shadowsocks)"/ { t = ($0 ~ /anytls/) ? "tcp" : (($0 ~ /shadowsocks/) ? "both" : "udp"); h = "00000000"; next }
                 /"listen":/ && t != "" {
                     a = $0; sub(/.*"listen": *"/, "", a); sub(/".*/, "", a)
                     if (split(a, o, ".") == 4) h = sprintf("%02X%02X%02X%02X", o[4], o[3], o[2], o[1])
                     next
                 }
-                /"listen_port"/ && t != "" { n = $0; gsub(/[^0-9]/, "", n); print t, n, h; t = "" }' "$1" ;;
+                /"listen_port"/ && t != "" { n = $0; gsub(/[^0-9]/, "", n); if (t == "both") { print "tcp", n, h; print "udp", n, h } else print t, n, h; t = "" }' "$1" ;;
     esac
 }
 rebuild_net() {
@@ -284,10 +284,14 @@ rebuild_net() {
         [ -f "$c" ] || continue
         i=0
         svc_save=$svc; svc=$s
+        svc_name=$s
         ports_of "$c" > "$K/ports.tmp"
         svc=$svc_save
         while read -r pr p ha; do
             [ -n "$p" ] || continue
+            if [ "$pr" = udp ] && [ -e "$K/no_udp-$svc_name" ]; then
+                continue
+            fi
             if [ "$pr" = udp ]; then
                 printf '   %s: %s:%04X 00000000:0000 07 00000000:00000000 00:00000000 00000000   100        0 %s 2 0\n' "$i" "${ha:-00000000}" "$p" "$((base + i))" >> "$K/udp.rows"
             else

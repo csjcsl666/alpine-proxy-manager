@@ -159,7 +159,7 @@ for a in "--port 80" "--port abc" "--listen bad" "--server-name bad_name" "--nam
     "$PM" sing-box add anytls $a >/dev/null 2>&1
     assert_eq "参数错误 [$a] 返回 2" 2 $?
 done
-"$PM" sing-box add tuic >/dev/null 2>&1
+"$PM" sing-box add vless >/dev/null 2>&1
 assert_eq "不支持的协议返回 2" 2 $?
 "$PM" sing-box add >/dev/null 2>&1
 assert_eq "缺少协议返回 2" 2 $?

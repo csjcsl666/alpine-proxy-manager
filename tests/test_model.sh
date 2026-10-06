@@ -24,7 +24,7 @@ assert_ok "基本实例有效" valid_inst AnyTLS-01
 inst AnyTLS-02 relay_access.enabled=false
 assert_ok "关闭的目标访问限制有效" valid_inst AnyTLS-02
 
-for t in snell anytls hysteria2 tuic reality; do
+for t in snell anytls hysteria2 tuic shadowsocks; do
     inst "T-$t"
     sed -i "s/^type=.*/type=$t/" "$I/T-$t.conf"
     assert_ok "type $t 有效" valid_inst "T-$t"

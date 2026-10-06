@@ -64,7 +64,7 @@ mkdir -p "$G.only"
 cp "$G/AnyTLS-01.conf" "$G.only/"
 assert_eq "新增协议不改变 AnyTLS 的生成块" 0 "$(sb_generate_config "$G.only" | awk '/"type": "anytls"/,/"key_path"/' | while IFS= read -r l; do printf '%s\n' "$OUT" | grep -qF -- "$l" || echo miss; done | grep -c miss)"
 assert_eq "期望监听带协议" "tcp:20001 udp:20001" "$(_sb_expected_ports "$G")"
-assert_eq "类型到传输层" "tcp udp" "$(_sb_type_proto anytls) $(_sb_type_proto hysteria2)"
+assert_eq "类型到传输层" "tcp udp" "$(_sb_type_protos anytls) $(_sb_type_protos hysteria2)"
 assert_eq "类型到前缀" "AnyTLS Hysteria2" "$(_sb_type_prefix anytls) $(_sb_type_prefix hysteria2)"
 assert_eq "下一个 Hysteria2 编号" Hysteria2-03 "$(_sb_next_id "$G" Hysteria2)"
 sbv() { sb_instance_validate "$1" >/dev/null 2>&1; }
