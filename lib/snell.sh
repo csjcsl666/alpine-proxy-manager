@@ -104,7 +104,8 @@ _snell_cleanup() {
 
 # 写操作期间忽略 HUP INT TERM: SSH 断线或 Ctrl+C 打断事务会留下半完成状态 (半装的 Core, 配置与实例不一致)
 # 只有没有副作用的下载阶段允许被打断 (见 _snell_fetch), 子进程不会继承这里的忽略
-_snell_signals_ignore() { trap '' HUP INT TERM; }
+# PIPE 用空操作 trap 而不是忽略: 非 TTY 的 ssh 断开后 stdout 变成断管, 主 shell 不能被 SIGPIPE 杀掉, 子进程仍保持默认处理 (忽略会让 head 之类的管道产生 write error 噪音)
+_snell_signals_ignore() { trap '' HUP INT TERM; trap ':' PIPE; }
 
 _snell_lock() {
     local _l _pid
@@ -124,6 +125,17 @@ _snell_lock() {
     SNELL_LOCKED=1
     printf '%s\n' "$$" > "$_l/pid"
     _snell_signals_ignore
+    _snell_sweep_staging
+}
+
+# 持有独占锁时不可能有别的写操作在使用暂存目录, 剩下的都是被 kill -9 或断电打断的操作留下的
+# 里面有实例文件的副本 (含凭据), 不让它们一直留在 /var/tmp
+_snell_sweep_staging() {
+    local _d
+    for _d in "$(env_path /var/tmp)"/apm-snell.*; do
+        [ -d "$_d" ] && rm -rf -- "$_d"
+    done
+    return 0
 }
 
 # 允许写操作之前的归属检查, 参数 allow_broken 为 yes 时允许 managed 但 broken 的实例

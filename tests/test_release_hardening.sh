@@ -95,6 +95,34 @@ printf '99999999\n' > "$A/var/lib/alpine-proxy-manager/snell.lock/pid"
 "$PM" sing-box set AnyTLS-01 port 20556 >/dev/null 2>&1
 assert_eq "残留的死锁被回收" 20556 "$(kv_get "$(INST AnyTLS-01)" listen_port)"
 
+# ---- stdout 关闭 (非 TTY 的 ssh 断开, 管道到 head) 不能打断写操作 ----
+ready h2e
+"$PM" sing-box add anytls --port 20443 >/dev/null 2>&1
+"$PM" sing-box set AnyTLS-01 port 20601 2>&1 | head -n1 >/dev/null
+sleep 1
+assert_eq "stdout 提前关闭后写操作仍然完成" 20601 "$(kv_get "$(INST AnyTLS-01)" listen_port)"
+assert_eq "完成后没有残留的暂存目录" 0 "$(ls "$A/var/tmp" | grep -c apm-snell)"
+assert_eq "完成后没有残留的锁" no "$([ -d "$A/var/lib/alpine-proxy-manager/snell.lock" ] && echo yes || echo no)"
+r=$( (_me=$(sh -c 'echo $PPID'); _snell_lock; trap '_snell_cleanup' EXIT; sleep 0 | { yes | head -n1 >/dev/null; }; printf survived) 2>&1)
+assert_eq "子进程的管道行为没有变化 没有 write error 噪音" survived "$r"
+
+# ---- 被强制结束的操作留下的暂存目录 (含实例副本) 在下一次写操作持锁后清理 ----
+ready h2d
+"$PM" sing-box add anytls --port 20443 >/dev/null 2>&1
+( _snell_lock; trap '_snell_cleanup' EXIT; : > "$T_TMP/held2"; sleep 3 ) &
+LB=$!
+i=0; while [ ! -e "$T_TMP/held2" ] && [ "$i" -lt 30 ]; do sleep 0.2; i=$((i + 1)); done
+mkdir -p "$A/var/tmp/apm-snell.STALE1/instances" "$A/var/tmp/apm-snell.STALE2" "$A/var/tmp/keep-me"
+cp "$(INST AnyTLS-01)" "$A/var/tmp/apm-snell.STALE1/instances/"
+"$PM" sing-box set AnyTLS-01 port 20556 >/dev/null 2>&1
+assert_eq "锁被别人持有时不清理他人的暂存目录" yes "$([ -d "$A/var/tmp/apm-snell.STALE1" ] && echo yes)"
+wait "$LB"
+"$PM" sing-box set AnyTLS-01 port 20557 >/dev/null 2>&1
+assert_eq "持锁成功后清理残留的暂存目录" no "$([ -d "$A/var/tmp/apm-snell.STALE1" ] && echo yes || echo no)"
+assert_eq "清理第二个残留目录" no "$([ -d "$A/var/tmp/apm-snell.STALE2" ] && echo yes || echo no)"
+assert_eq "不匹配的目录不动" yes "$([ -d "$A/var/tmp/keep-me" ] && echo yes)"
+assert_eq "写操作本身成功" 20557 "$(kv_get "$(INST AnyTLS-01)" listen_port)"
+
 # ---- External Core: 所有写操作拒绝, 且不留下任何改动 ----
 ext_sweep() { # 标签
     local _l _before _snap _rc
