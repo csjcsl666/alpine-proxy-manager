@@ -20,10 +20,10 @@ VLESS Reality 与 Trojan 不在支持计划内
 
 ## 安装
 
-以 root 登录 Alpine VPS 后执行
+以 root 登录 Alpine VPS 后执行 下面固定安装当前稳定版 `v0.5.0`
 
 ```sh
-sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/main/install.sh)"
+APM_REF=v0.5.0 sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.5.0/install.sh)"
 ```
 
 只需要 Alpine 自带的 `wget` 不需要 `curl` `git` 或 `sudo` 安装完成后运行 `proxy-manager` 进入管理界面 运行 `proxy-manager doctor` 检查环境
@@ -31,34 +31,38 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 这条命令会以 root 身份执行下载到的脚本 如果希望先审查
 
 ```sh
-wget -O install.sh https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/main/install.sh
+wget -O install.sh https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.5.0/install.sh
 less install.sh
-sh install.sh
+APM_REF=v0.5.0 sh install.sh
 ```
 
-固定到某个正式版本 并校验归档
+校验归档 每个 GitHub Release 都附带 `SHA256SUMS` 与源码归档 可以用 `APM_ARCHIVE_URL` 指向 Release 里的归档 并用 `APM_SHA256` 指定期望的校验和 不匹配就拒绝安装 校验和只能发现下载损坏 不能证明发布者身份 目前的 tag 没有签名
 
-```sh
-APM_REF=v0.5.0 sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.5.0/install.sh)"
-```
-
-每个 GitHub Release 都附带 `SHA256SUMS` 与源码归档 可以用 `APM_ARCHIVE_URL` 指向 Release 里的归档 并用 `APM_SHA256` 指定期望的校验和 不匹配就拒绝安装
-
-安装脚本做的事
+### 安装脚本做的事
 
 - 检查 Alpine root 必需的 BusyBox 工具与磁盘空间 并提示 cgroup 内存上限
 - 下载源码归档 不 clone 历史 在 staging 目录解压并校验 运行语法检查与 `--version` 自检
 - 安装到 `/usr/local/lib/alpine-proxy-manager/releases/<Build>` 再原子切换 `current` 链接 创建命令链接 `/usr/local/bin/proxy-manager` 再次自检 任何一步失败都回滚到原状态
 - Build 取自归档里记录的 commit SHA 与实际下载的源码严格对应 取不到就拒绝安装
 
+### 开发版 main
+
+`main` 分支是开发版 会先于正式版前进 可能包含尚未发布的改动 只建议用来测试
+
+```sh
+sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/main/install.sh)"
+```
+
+开发版同一 `VERSION` 的新 Build 也会被当作升级 重复执行同一条命令即可更新到 `main` 的最新提交
+
 ### 升级 Manager
 
-再次执行同一条命令 同一 Build 且工作正常时不做任何改动 同一 `VERSION` 的新 Build 也会升级 新版本自检失败会继续使用旧版本 升级 Manager 本身不会重启 Snell 与 sing-box 不会改写任何已有配置与实例
+升级到新的正式版 把命令里的 `v0.5.0` 换成新版本的 tag 即可 README 的默认命令会随每次正式发布更新 同一 Build 且工作正常时不做任何改动 新版本自检失败会继续使用旧版本 升级 Manager 本身不会重启 Snell 与 sing-box 不会改写任何已有配置与实例
 
 ### 卸载 Manager
 
 ```sh
-sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/main/install.sh)" -- --uninstall
+sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.5.0/install.sh)" -- --uninstall
 ```
 
 只删除 Manager 自己 不删除 Snell sing-box `/etc/alpine-proxy-manager` 中的配置与 `/var/lib/alpine-proxy-manager` 中的数据
