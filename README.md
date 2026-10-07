@@ -20,10 +20,10 @@ VLESS Reality 与 Trojan 不在支持计划内
 
 ## 安装
 
-以 root 登录 Alpine VPS 后执行 下面固定安装当前稳定版 `v0.5.0`
+以 root 登录 Alpine VPS 后执行 下面固定安装当前稳定版 `v0.5.1`
 
 ```sh
-APM_REF=v0.5.0 sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.5.0/install.sh)"
+APM_REF=v0.5.1 sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.5.1/install.sh)"
 ```
 
 只需要 Alpine 自带的 `wget` 不需要 `curl` `git` 或 `sudo` 安装完成后运行 `apm` 进入管理界面 运行 `apm doctor` 检查环境 `apm` 是官方短入口 与完整命令 `proxy-manager` 完全等价
@@ -31,9 +31,9 @@ APM_REF=v0.5.0 sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/al
 这条命令会以 root 身份执行下载到的脚本 如果希望先审查
 
 ```sh
-wget -O install.sh https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.5.0/install.sh
+wget -O install.sh https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.5.1/install.sh
 less install.sh
-APM_REF=v0.5.0 sh install.sh
+APM_REF=v0.5.1 sh install.sh
 ```
 
 校验归档 每个 GitHub Release 都附带 `SHA256SUMS` 与源码归档 可以用 `APM_ARCHIVE_URL` 指向 Release 里的归档 并用 `APM_SHA256` 指定期望的校验和 不匹配就拒绝安装 校验和只能发现下载损坏 不能证明发布者身份 目前的 tag 没有签名
@@ -58,12 +58,12 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 
 ### 升级 Manager
 
-升级到新的正式版 把命令里的 `v0.5.0` 换成新版本的 tag 即可 README 的默认命令会随每次正式发布更新 同一 Build 且工作正常时不做任何改动 新版本自检失败会继续使用旧版本 升级 Manager 本身不会重启 Snell 与 sing-box 不会改写任何已有配置与实例
+升级到新的正式版 把命令里的 `v0.5.1` 换成新版本的 tag 即可 README 的默认命令会随每次正式发布更新 同一 Build 且工作正常时不做任何改动 新版本自检失败会继续使用旧版本 升级 Manager 本身不会重启 Snell 与 sing-box 不会改写任何已有配置与实例
 
 ### 卸载 Manager
 
 ```sh
-sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.5.0/install.sh)" -- --uninstall
+sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.5.1/install.sh)" -- --uninstall
 ```
 
 只删除 Manager 自己 包括本项目创建的 `apm` 不是本项目创建的 `apm` 会保留 不删除 Snell sing-box `/etc/alpine-proxy-manager` 中的配置与 `/var/lib/alpine-proxy-manager` 中的数据

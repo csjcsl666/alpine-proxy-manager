@@ -36,6 +36,18 @@ for c in "snell install" "snell status" "snell config" "snell update" "snell uni
 done
 
 # 版本与过时措辞
+# 默认一键安装必须固定到正式版 tag, 不能退回 main, 版本以 VERSION 为单一来源: tag 不能比 VERSION 新 (发布顺序是先改 VERSION 再打 tag 再更新 README, 所以允许落后)
+first=$(awk '/^## 安装/ { on = 1 } on && /^```sh/ { getline; print; exit }' "$R")
+rtag=$(printf '%s' "$first" | sed -n 's/.*APM_REF=\(v[0-9][0-9.]*\) .*/\1/p')
+utag=$(printf '%s' "$first" | sed -n 's|.*alpine-proxy-manager/\(v[0-9][0-9.]*\)/install.sh.*|\1|p')
+assert_eq "README 默认安装的 APM_REF 与下载地址里的 tag 一致" "$rtag" "$utag"
+assert_eq "README 默认安装固定到正式版 tag" 1 "$([ -n "$rtag" ] && echo 1 || echo 0)"
+assert_eq "README 默认安装命令里没有 main" 0 "$(printf '%s' "$first" | grep -c 'main')"
+if [ -n "$rtag" ]; then
+    oldest=$(printf '%s\n%s\n' "${rtag#v}" "$(cat "$T_ROOT/VERSION")" | sort -V | head -n 1)
+    assert_eq "README 默认安装的 tag 不比 VERSION 新" "${rtag#v}" "$oldest"
+fi
+assert_eq "README 单独标出开发版 main" 1 "$(grep -c '^### 开发版 main' "$R")"
 assert_eq "README 不写死版本号 0.1.0-dev" 0 "$(grep -c '0\.1\.0-dev' "$R")"
 assert_eq "README 不含过时的 早期开发版本 措辞" 0 "$(grep -c '早期开发版本\|早期阶段' "$R")"
 assert_eq "README 不再说不支持服务器自身的 SOCKS 出口" 0 "$(grep -c '当前不支持服务器自身的 SOCKS 出口' "$R")"
