@@ -2,7 +2,7 @@
 
 面向 Alpine Linux 低内存 VPS 的轻量 Snell + sing-box 统一管理器
 
-当前为早期开发版本 `0.1.0-dev.5` Snell 与 sing-box 已支持安装与完整生命周期管理 sing-box 目前提供 AnyTLS Hysteria2 TUIC 与 Shadowsocks 四种协议实例 VLESS Reality 与 Trojan 不在支持计划内
+当前为早期开发版本 `0.1.0-dev.6` Snell 与 sing-box 已支持安装与完整生命周期管理 sing-box 目前提供 AnyTLS Hysteria2 TUIC 与 Shadowsocks 四种协议实例 VLESS Reality 与 Trojan 不在支持计划内
 
 ## 快速安装
 
@@ -136,6 +136,15 @@ proxy-manager sing-box access ID [show]
 proxy-manager sing-box access ID unrestricted | allowlist | clear
 proxy-manager sing-box access ID add 地址 端口
 proxy-manager sing-box access ID delete 地址 端口
+
+proxy-manager sing-box socks list | show 名称
+proxy-manager sing-box socks add --server 地址 --port 端口 --no-auth [--name 名称]
+proxy-manager sing-box socks add --server 地址 --port 端口 --username 用户名 --password-stdin [--name 名称]
+proxy-manager sing-box socks set 名称 server 地址 | port 端口 | no-auth
+proxy-manager sing-box socks set 名称 credential 用户名 --password-stdin | password --password-stdin
+proxy-manager sing-box socks enable 名称... | disable 名称... | enable-all | disable-all
+proxy-manager sing-box socks delete 名称
+proxy-manager sing-box egress ID [show] | direct | socks 名称
 ```
 
 - 默认 release 固定为 `v1.13.14` 不会自动取 latest 内置了该 release 的 sha256 其他 release 通过发布页的资产 digest 校验 都取不到就拒绝安装 选择 1.13.14 的依据是同一份 AnyTLS 配置空闲内存实测明显低于更新的 1.14.2
@@ -170,6 +179,27 @@ proxy-manager sing-box access AnyTLS-01 add 192.0.2.10 1080
 proxy-manager sing-box access AnyTLS-01 show
 ```
 
+## SOCKS 出口
+
+SOCKS 出口 Server SOCKS Egress 让一个实例显式选择出口 DIRECT 或某个 SOCKS5 Profile 此时 sing-box 自己是 SOCKS5 客户端 服务器会保存 SOCKS 服务器地址与认证信息
+
+它与目标访问限制不是同一个功能 目标访问限制决定客户端可以访问哪些目标 SOCKS 出口决定允许之后从哪里出去 两者可以同时使用 允许的目标会走该实例的出口 不会绕过 SOCKS
+
+- SOCKS Profile 是独立对象 一个 Profile 可以被多个实例共享 每个 Profile 在运行配置里只生成一个出站 没有被启用实例使用的 Profile 不进入运行配置 创建与修改它们不会重启 sing-box
+- 实例用 `egress` 命令显式绑定 没有绑定就是 DIRECT 升级 Manager 不会改动现有实例
+- 第一版只支持 SOCKS5 的 IPv4 与 IPv6 地址 不支持域名 认证只有无认证与用户名加密码两种 密码必须通过 `--password-stdin` 提供 不接受命令行明文 也不会自动生成 因为 SOCKS 服务器是外部已有的服务
+- Profile 文件在 `/etc/alpine-proxy-manager/socks/` 目录 0700 文件 0600 密码也会写入生成的 `config.json` 与受限的备份 `show` 与 `list` 只显示密码已配置
+- Profile 可以单独启用或禁用 也可以批量 `enable-all` 与 `disable-all` 一次命令最多重启一次 绑定了被禁用 Profile 的实例流量会被拒绝 重新启用后自动恢复 不需要重新绑定
+- 删除仍被实例引用的 Profile 会被拒绝并列出引用者
+- 不自动切换 不负载均衡 不故障转移 SOCKS 服务器不可达 认证失败 Profile 被禁用 绑定的 Profile 不存在或损坏 都不会回落 DIRECT 流量会失败 生成配置时发现绑定异常会整体拒绝
+- 配置有效不代表 SOCKS 服务器可用 `sing-box check` 无法验证远端地址与凭据 Manager 只报告配置已应用 UDP 流量经由 SOCKS5 的 UDP ASSOCIATE 转发 已在官方 sing-box 上用真实 SOCKS5 服务器验证
+
+```sh
+printf '%s\n' "$SOCKS_PASSWORD" | proxy-manager sing-box socks add --server 192.0.2.10 --port 1080 --username user --password-stdin
+proxy-manager sing-box egress AnyTLS-01 socks SOCKS-01
+proxy-manager sing-box egress AnyTLS-01 direct
+```
+
 ## 内存说明
 
 64 MiB 是 Manager 与安装流程必须考虑的最低资源基线 **不代表 sing-box 本身能在 64 MiB 内长期稳定运行** sing-box 的实际内存占用取决于版本 协议和连接数 目前没有足够数据承诺它在 64 MiB 下的稳定性
@@ -186,7 +216,7 @@ proxy-manager sing-box access AnyTLS-01 show
 - `proxy-manager snell status` `snell info` `snell log [N]` 显示 OpenRC 状态 版本 配置元数据 日志位置与监听 PSK 一律脱敏 日志默认只读末尾 20 行
 - Core 发现只执行已确认为 ELF 的二进制 脚本与指向脚本的符号链接不会被执行 运行状态以 OpenRC 为准
 - 已有的 Snell 部署被识别为现有部署 不会被覆盖 接管或修改 `snell` 的写操作会拒绝 接管 adopt 与迁移 migrate 尚未实现
-- Protocol Instance Server SOCKS Profile Relay Access Policy 的数据模型与校验 其中 Relay Access Policy 已在 sing-box 四种协议实例上落地
+- Protocol Instance Server SOCKS Profile Relay Access Policy 的数据模型与校验 其中 Relay Access Policy 与 Server SOCKS Egress 已在 sing-box 四种协议实例上落地
 - 配置事务基础设施 候选文件 校验 hook 备份 原子替换 失败回滚
 - 基础测试与 GitHub Actions CI
 
@@ -197,9 +227,6 @@ proxy-manager sing-box access AnyTLS-01 show
 - 实例的 URL 与二维码导出 ACME 自动证书
 - 接管已有的 Snell 部署
 - Snell 日志轮转
-- 任何 sing-box 协议的配置生成
-- Server SOCKS Egress 服务器自身通过 SOCKS 出口转发
-- 添加 删除 修改 查看实例的命令
 - URL 与二维码导出
 - 正式 Release
 
