@@ -107,7 +107,7 @@ _rpt_core_block() {
     fi
 }
 
-# Manager 部署的二进制应属于 root, 0.5.0 之前安装的 sing-box 保留了上游压缩包里的 uid
+# Manager 部署的二进制应属于 root, 属主修复之前安装的 sing-box 保留了上游压缩包里的 uid
 # 只告警, 不修改: 修复方法是 sing-box update --force
 _rpt_bin_owner() {
     local _u _cmd
