@@ -540,7 +540,7 @@ snell_install() {
     done
     if [ "$_reuse" = no ]; then
         if [ "$_psk_mode" = stdin ]; then
-            IFS= read -r _psk || _psk=
+            IFS= read -r _psk || :
             _snell_valid_psk "$_psk" || { apm_err "从标准输入读取的 psk 无效 (16 到 128 位字母数字或 _ -)"; return 2; }
         else
             _psk=$(_snell_gen_psk) || { apm_err "生成 PSK 失败 (/dev/urandom 不可用?)"; return 1; }
@@ -745,7 +745,7 @@ snell_config_set() {
     GENERATED_PSK=
     if [ "$_key" = psk ]; then
         case ${1:-} in
-            --stdin) IFS= read -r _val || _val= ;;
+            --stdin) IFS= read -r _val || : ;;
             --generate) _val=$(_snell_gen_psk) || { apm_err "生成 PSK 失败"; return 1; }; GENERATED_PSK=$_val ;;
             *) apm_err "psk 不接受命令行明文参数, 请使用 --stdin 或 --generate"; return 2 ;;
         esac

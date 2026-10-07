@@ -1395,7 +1395,7 @@ singbox_add() {
     _kind=$(_sb_secret_kind "$_type" "$_method")
     _pw=
     if [ "$_pwmode" = stdin ]; then
-        IFS= read -r _pw || _pw=
+        IFS= read -r _pw || :
         _sb_valid_secret "$_kind" "$_pw" || { apm_err "从标准输入读取的密码无效 ($(_sb_secret_hint "$_kind"))"; return 2; }
     fi
     _snell_need_root || return 4
@@ -1594,7 +1594,7 @@ singbox_change() {
                 ;;
             password)
                 case ${1:-} in
-                    --stdin) _secmode=stdin; IFS= read -r _val || _val= ;;
+                    --stdin) _secmode=stdin; IFS= read -r _val || : ;;
                     --generate) _secmode=generate ;;
                     *) apm_err "密码不接受命令行明文参数, 请使用 --stdin 或 --generate"; return 2 ;;
                 esac
@@ -1603,7 +1603,7 @@ singbox_change() {
                 _val=${1:-}
                 _sb_ss_method_valid "$_val" || { apm_err "method 不在允许的取值内 ($SB_SS_METHODS)"; return 2; }
                 case ${2:-} in
-                    --stdin) _secmode=stdin; IFS= read -r _newm || _newm=; ;;
+                    --stdin) _secmode=stdin; IFS= read -r _newm || : ;;
                     --generate) _secmode=generate ;;
                     '') ;;
                     *) apm_err "method 之后只接受 --stdin 或 --generate 来同时更换密钥"; return 2 ;;
@@ -2005,7 +2005,7 @@ singbox_socks() {
             else
                 [ -n "$_user" ] || { apm_err "需要明确选择认证方式: --no-auth, 或 --username 加 --password-stdin"; return 2; }
                 [ "$_pwstdin" = yes ] || { apm_err "--username 必须同时提供 --password-stdin (没有密码的用户名是不完整的认证, SOCKS 密码是外部服务器已有的, 不会自动生成)"; return 2; }
-                IFS= read -r _pw || _pw=
+                IFS= read -r _pw || :
                 _sb_socks_secret_ok "$_user" || { apm_err "用户名无效 (可打印 ASCII, 首尾不是空格, 最长 255 字节)"; return 2; }
                 _sb_socks_secret_ok "$_pw" || { apm_err "从标准输入读取的密码无效 (可打印 ASCII, 首尾不是空格, 1 到 255 字节)"; return 2; }
             fi
@@ -2026,13 +2026,13 @@ singbox_socks() {
                 credential)
                     _user=${1:-}
                     { [ -n "$_user" ] && [ "${2:-}" = --password-stdin ]; } || { apm_err "用法: sing-box socks set $_name credential 用户名 --password-stdin"; return 2; }
-                    IFS= read -r _pw || _pw=
+                    IFS= read -r _pw || :
                     _sb_socks_secret_ok "$_user" || { apm_err "用户名无效"; return 2; }
                     _sb_socks_secret_ok "$_pw" || { apm_err "从标准输入读取的密码无效"; return 2; }
                     ;;
                 password)
                     [ "${1:-}" = --password-stdin ] || { apm_err "密码只能通过 --password-stdin 提供"; return 2; }
-                    IFS= read -r _pw || _pw=
+                    IFS= read -r _pw || :
                     _sb_socks_secret_ok "$_pw" || { apm_err "从标准输入读取的密码无效"; return 2; }
                     ;;
                 *) apm_err "不支持的键: $_arg (支持 server port no-auth credential password)"; return 2 ;;
