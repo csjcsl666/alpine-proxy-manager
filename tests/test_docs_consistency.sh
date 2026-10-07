@@ -11,7 +11,7 @@ assert_contains "help 可用" "$HELP" "用法: proxy-manager"
 # README 代码块里 proxy-manager 开头的行: 前两到三个词必须出现在 help 里
 n=0
 bad=
-awk '/^```/ { on = !on; next } on && /^(printf .*\| )?proxy-manager / { sub(/^printf [^|]*\| /, ""); print $2 "~" $3 }' "$R" | sort -u > "$T_TMP/readme.cmds"
+awk '/^```/ { on = !on; next } on && /^(printf .*\| )?(proxy-manager|apm) / { sub(/^printf [^|]*\| /, ""); print $2 "~" $3 }' "$R" | sort -u > "$T_TMP/readme.cmds"
 while read -r w; do
     a=${w%%~*}
     b=${w##*~}

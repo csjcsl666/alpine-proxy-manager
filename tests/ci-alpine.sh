@@ -4,7 +4,8 @@
 set -eu
 cd /src
 
-apk add --no-cache shellcheck git >/dev/null
+# util-linux-misc 提供 script, 只用于测试里分配伪终端 (apm 的 TTY 行为)
+apk add --no-cache shellcheck git util-linux-misc >/dev/null
 printf 'Alpine %s, shellcheck %s\n' "$(cat /etc/alpine-release)" "$(shellcheck --version | sed -n 's/^version: //p')"
 
 echo '== sh -n'
