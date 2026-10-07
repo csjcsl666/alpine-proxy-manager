@@ -223,6 +223,21 @@ proxy-manager sing-box export AnyTLS-01 url
 proxy-manager sing-box export AnyTLS-01 qr
 ```
 
+## 统一 TUI 管理界面
+
+在交互式终端里直接运行 `proxy-manager` 即可进入统一管理界面 也可以显式运行 `proxy-manager tui` 日常管理不需要记忆命令行子命令
+
+- 主菜单 Core 管理 协议实例 目标访问限制 SOCKS 出口 客户端配置导出 状态与诊断 日志 Manager 管理 统一用数字选择 `0` 返回 主菜单的 `0` 退出
+- 界面以中文为主 协议与技术名词保持原名 AnyTLS Hysteria2 TUIC Shadowsocks Snell sing-box SOCKS5 TLS OpenRC URL QR JSON
+- TUI 只是现有命令的交互层 没有另一套业务逻辑 校验 保护与事务都与命令行完全一致 例如仍然拒绝删除被引用的 SOCKS Profile
+- 现有部署 未接管 的 Snell 或 sing-box 只提供只读入口 不显示启动 停止 更新 卸载 不会点进去才报错
+- 输入密码 密钥 PSK 时不回显 无论正常结束 失败还是 Ctrl+C 都会恢复终端 秘密通过标准输入交给业务函数 不出现在进程参数里
+- 删除实例 删除 Profile 卸载 Core 批量禁用 以及任何会显示客户端凭据的操作都需要确认 默认是 N
+- 没有外部依赖 没有常驻进程 退出后不留任何后台进程 进入时只做一次 Core 发现 不联网 不检查更新
+- 不依赖 Unicode 与颜色 `NO_COLOR` 与 `TERM=dumb` 退化为纯文本 终端不是 UTF-8 时状态符号改用 `[RUNNING]` 等文本 80 列终端可正常阅读
+- 不是 root 时可以查看 写操作会提示需要 root 不会自动 sudo
+- 在脚本或管道中运行 `proxy-manager` 不会进入 TUI 仍然输出帮助 所有命令行用法保持不变
+
 ## 内存说明
 
 64 MiB 是 Manager 与安装流程必须考虑的最低资源基线 **不代表 sing-box 本身能在 64 MiB 内长期稳定运行** sing-box 的实际内存占用取决于版本 协议和连接数 目前没有足够数据承诺它在 64 MiB 下的稳定性
@@ -241,6 +256,7 @@ proxy-manager sing-box export AnyTLS-01 qr
 - 已有的 Snell 部署被识别为现有部署 不会被覆盖 接管或修改 `snell` 的写操作会拒绝 接管 adopt 与迁移 migrate 尚未实现
 - Protocol Instance Server SOCKS Profile Relay Access Policy 的数据模型与校验 其中 Relay Access Policy 与 Server SOCKS Egress 已在 sing-box 四种协议实例上落地
 - 客户端导出 Public Endpoint 显式查看凭据 sing-box 客户端配置 分享链接与二维码 已用官方 sing-box 客户端经真实服务端验证 公网可达性没有验证
+- 统一 TUI 管理界面 覆盖 Core 协议实例 目标访问限制 SOCKS 出口 客户端导出 状态 日志 已在真实 Alpine VPS 的伪终端上验证
 - 配置事务基础设施 候选文件 校验 hook 备份 原子替换 失败回滚
 - 基础测试与 GitHub Actions CI
 
