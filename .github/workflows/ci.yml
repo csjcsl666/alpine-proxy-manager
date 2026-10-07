@@ -38,7 +38,7 @@ jobs:
   singbox-official:
     name: 官方 sing-box release smoke test
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: 下载官方 sing-box 并执行 check 与短时间运行
@@ -50,3 +50,7 @@ jobs:
         run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-relay-smoke.sh 1.13.14
       - name: 目标访问限制真实流量测试 v1.14.2
         run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-relay-smoke.sh 1.14.2
+      - name: Server SOCKS Egress 真实流量测试 v1.13.14
+        run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-egress-smoke.sh 1.13.14
+      - name: Server SOCKS Egress 真实流量测试 v1.14.2
+        run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-egress-smoke.sh 1.14.2
