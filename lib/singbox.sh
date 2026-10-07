@@ -1485,7 +1485,7 @@ singbox_add() {
     [ "$_type" != shadowsocks ] || _sb_say "  method：$_method"
     if [ "$_pwmode" = generate ]; then
         _sb_say "  密码：$_pw"
-        _sb_say "  这是自动生成的密码, 只在此处显示一次, 之后 proxy-manager 不会再显示它, 请自行保存"
+        _sb_say "  这是自动生成的密码, 只在此处显示一次, 之后需要时可用 export 的 secret 操作显式查看, 请自行保存"
     else
         _sb_say "  密码：已使用你提供的值"
     fi
@@ -1726,14 +1726,14 @@ singbox_change() {
                     _sb_say "实例 $_id 的密码已更新"
                     if [ -n "$GENERATED_PW" ]; then
                         _sb_say "  新密码：$GENERATED_PW"
-                        _sb_say "  这是自动生成的密码, 只在此处显示一次, 请自行保存"
+                        _sb_say "  这是自动生成的密码, 只在此处显示一次, 之后需要时可用 export 的 secret 操作显式查看, 请自行保存"
                     fi
                     ;;
                 method)
                     _sb_say "实例 $_id 的 method 已更新为 $_val"
                     if [ -n "$GENERATED_PW" ]; then
                         _sb_say "  新密码：$GENERATED_PW"
-                        _sb_say "  这是自动生成的密码, 只在此处显示一次, 请自行保存"
+                        _sb_say "  这是自动生成的密码, 只在此处显示一次, 之后需要时可用 export 的 secret 操作显式查看, 请自行保存"
                     elif [ "$_secmode" = stdin ]; then
                         _sb_say "  密码已更换为你提供的值"
                     else

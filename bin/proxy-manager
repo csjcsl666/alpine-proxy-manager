@@ -9,7 +9,7 @@ APM_HOME=${_self%/*}
 APM_HOME=${APM_HOME%/*}
 export APM_HOME
 
-for _m in common environment state core model policy txn report client snell singbox; do
+for _m in common environment state core model policy txn report client snell singbox tui; do
     # shellcheck source=/dev/null
     . "$APM_HOME/lib/$_m.sh" || { echo "加载 lib/$_m.sh 失败" >&2; exit 1; }
 done
@@ -48,11 +48,19 @@ usage() {
   sing-box export ID show | secret | sing-box [--redacted] [--embed-cert] | url | qr   客户端导出 (secret url qr 包含凭据)
   snell endpoint [show] | set 主机 端口 | clear   Snell 客户端连接地址
   snell export show | secret   Snell 客户端连接信息
+  tui           统一 TUI 管理界面 (交互式终端中直接运行 proxy-manager 也会进入)
   help          显示本帮助
 EOF
 }
 
+# 无参数: 交互式终端进入 TUI, 其他情况保持原来的帮助输出, 脚本与管道不受影响
+if [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+    tui_cli
+    exit $?
+fi
+
 case ${1:-help} in
+    tui) tui_cli; exit $? ;;
     --version|-V|version) apm_print_version ;;
     doctor) report_doctor ;;
     status) report_status ;;

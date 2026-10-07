@@ -639,7 +639,7 @@ snell_install() {
     _snell_say "  配置：$SNELL_CONF"
     if [ "$_reuse" = no ] && [ "$_psk_mode" = generate ]; then
         _snell_say "  PSK：$_psk"
-        _snell_say "  这是自动生成的 PSK, 只在此处显示一次, 之后 proxy-manager 不会再显示它, 请自行保存"
+        _snell_say "  这是自动生成的 PSK, 只在此处显示一次, 之后需要时可用 export 的 secret 操作显式查看, 请自行保存"
     elif [ "$_reuse" = yes ]; then
         _snell_say "  PSK：沿用已保留的配置, 不显示"
     else
@@ -811,7 +811,7 @@ snell_config_set() {
         _snell_say "psk 已更新"
         if [ -n "$GENERATED_PSK" ]; then
             _snell_say "  新 PSK：$GENERATED_PSK"
-            _snell_say "  这是自动生成的 PSK, 只在此处显示一次, 请自行保存"
+            _snell_say "  这是自动生成的 PSK, 只在此处显示一次, 之后需要时可用 export 的 secret 操作显式查看, 请自行保存"
         fi
     else
         _snell_say "$_key 已更新为 $_val"

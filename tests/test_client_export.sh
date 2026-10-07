@@ -2,7 +2,7 @@
 # Client Export: Public Endpoint, show-secret, 人类可读信息, sing-box 客户端 JSON, 分享 URL, 二维码, 与服务端策略独立, 泄漏边界
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report client snell singbox
+t_load common environment state core model policy txn report client snell singbox tui
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then
