@@ -356,6 +356,7 @@ singbox_endpoint() { # ID [show | set HOST PORT | clear]
     _snell_need_root || return 4
     _snell_lock || return 4
     trap '_snell_cleanup' EXIT
+    _sb_require_managed yes || return 4
     _snell_ensure_staging || return 1
     _tmp=$SNELL_STAGING/endpoint
     mkdir -p -- "$_tmp" && chmod 700 -- "$_tmp" || return 1

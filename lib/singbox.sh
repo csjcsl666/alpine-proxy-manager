@@ -141,6 +141,8 @@ _sb_stage_release() {
     [ -f "$SB_NEW_BIN" ] || { apm_err "压缩包内没有 $_member 或解压失败"; return 1; }
     [ "$(core_file_kind "$SB_NEW_BIN")" = elf ] || { apm_err "解压出的 sing-box 不是 ELF, 拒绝运行"; return 1; }
     chmod 755 -- "$SB_NEW_BIN"
+    # 上游压缩包里记录的 uid 会被 root 解压原样保留 (实测 1001), 必须改为 root, 否则同 uid 的普通用户可以替换 root 会执行的二进制
+    _snell_chown root:root "$SB_NEW_BIN" || { apm_err "设置 sing-box 二进制属主失败"; return 1; }
     _out=$(_core_timeout "$SB_NEW_BIN" version 2>&1 | head -n 3)
     SB_NEW_REPORTED=$(printf '%s\n' "$_out" | sed -n 's/^sing-box version \([^ ]*\).*/\1/p' | head -n 1)
     [ -n "$SB_NEW_REPORTED" ] || { apm_err "新的 sing-box 无法执行或没有给出版本"; return 1; }

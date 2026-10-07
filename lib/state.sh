@@ -16,6 +16,8 @@ state_cores_dir() { printf '%s/cores' "$(state_var)"; }
 # 创建目录, 仅供会写入的命令调用, 只读命令不得调用
 state_ensure_dirs() {
     local _d
+    # 父目录也收紧: 子目录与文件本来就是 0700 与 0600, 这里避免目录项本身被枚举
+    mkdir -p -- "$(state_etc)" && chmod 700 -- "$(state_etc)" || return 1
     for _d in "$(state_instances_dir)" "$(state_socks_dir)" "$(state_backup_dir)" "$(state_cores_dir)"; do
         mkdir -p -- "$_d" && chmod 700 -- "$_d" || return 1
     done

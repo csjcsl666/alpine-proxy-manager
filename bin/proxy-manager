@@ -32,11 +32,14 @@ usage() {
   snell uninstall [--purge]            卸载 默认保留配置与日志
   sing-box status | info | log [N] | check            状态 事实 日志 配置检查
   sing-box install [--release 标签]    下载官方 musl release 安装并启动 默认 v1.13.14
-  sing-box start | stop | restart | update [标签] [--force] | uninstall [--purge]
+  sing-box start | stop | restart
+  sing-box update [标签] [--force]     更新二进制 先用新二进制检查当前配置 失败自动回滚
+  sing-box uninstall [--purge]         卸载 默认保留配置 证书 日志与实例
   sing-box add anytls|hysteria2|tuic|shadowsocks [--name ID] [--port N | --listen ADDR] [--password-stdin]
                 [--server-name 名 (TLS 协议)] [--uuid UUID --congestion-control cubic|new_reno|bbr (tuic)]
                 [--method 方法 (shadowsocks, 默认 2022-blake3-aes-128-gcm)]
-  sing-box list | show ID | enable ID | disable ID | delete ID
+  sing-box list | show ID
+  sing-box enable ID | disable ID | delete ID
   sing-box set ID port|listen|server-name|congestion-control 值 | set ID uuid UUID|--generate
   sing-box set ID password --stdin|--generate | set ID method 方法 [--stdin|--generate]
   sing-box access ID [show|unrestricted|allowlist|clear | add 地址 端口 | delete 地址 端口]  目标访问限制 (按实例, 跨协议)

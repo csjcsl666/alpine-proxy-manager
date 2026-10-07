@@ -102,6 +102,10 @@ _snell_cleanup() {
     fi
 }
 
+# 写操作期间忽略 HUP INT TERM: SSH 断线或 Ctrl+C 打断事务会留下半完成状态 (半装的 Core, 配置与实例不一致)
+# 只有没有副作用的下载阶段允许被打断 (见 _snell_fetch), 子进程不会继承这里的忽略
+_snell_signals_ignore() { trap '' HUP INT TERM; }
+
 _snell_lock() {
     local _l _pid
     _l=$(state_var)/snell.lock
@@ -111,7 +115,7 @@ _snell_lock() {
     if ! mkdir -- "$_l" 2>/dev/null; then
         _pid=$(head -n 1 "$_l/pid" 2>/dev/null)
         if [ -n "$_pid" ] && kill -0 "$_pid" 2>/dev/null; then
-            apm_err "另一个 Snell 写操作正在运行 (pid $_pid)"
+            apm_err "另一个 Manager 写操作正在运行 (pid $_pid), 请等待它结束"
             return 4
         fi
         rm -rf -- "$_l"
@@ -119,6 +123,7 @@ _snell_lock() {
     fi
     SNELL_LOCKED=1
     printf '%s\n' "$$" > "$_l/pid"
+    _snell_signals_ignore
 }
 
 # 允许写操作之前的归属检查, 参数 allow_broken 为 yes 时允许 managed 但 broken 的实例
@@ -259,11 +264,16 @@ _snell_asset_arch() {
 }
 
 _snell_fetch() {
-    local _dl
+    local _dl _rc
     _dl=${APM_DOWNLOADER:-wget}
     command -v "$_dl" >/dev/null 2>&1 || { apm_err "缺少下载工具 $_dl"; return 1; }
     rm -f -- "$2"
+    # 下载阶段没有副作用, 允许 Ctrl+C 与断线中止: exit 会触发调用方的 EXIT trap 清理临时目录与锁
+    trap 'exit 130' HUP INT TERM
     "$_dl" -q -T 30 -O "$2" "$1" 2>/dev/null && [ -s "$2" ]
+    _rc=$?
+    if [ "$SNELL_LOCKED" = 1 ]; then _snell_signals_ignore; else trap - HUP INT TERM; fi
+    return "$_rc"
 }
 
 _snell_ensure_staging() {
@@ -308,6 +318,7 @@ _snell_stage_release() {
     SNELL_NEW_BIN=$_dir/snell-server
     [ "$(core_file_kind "$SNELL_NEW_BIN")" = elf ] || { apm_err "下载的 snell-server 不是 ELF, 拒绝运行"; return 1; }
     chmod 755 -- "$SNELL_NEW_BIN"
+    _snell_chown root:root "$SNELL_NEW_BIN" || { apm_err "设置 snell-server 属主失败"; return 1; }
     _out=$(_core_timeout "$SNELL_NEW_BIN" -v 2>&1 | head -n 3)
     SNELL_NEW_REPORTED=$(printf '%s\n' "$_out" | sed -n 's/.*snell-server \(v[0-9][0-9A-Za-z.]*\).*/\1/p' | head -n 1)
     case $SNELL_NEW_REPORTED in

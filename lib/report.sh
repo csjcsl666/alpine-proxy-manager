@@ -82,6 +82,7 @@ report_doctor() {
         esac
         if [ "$CF_INSTALLED" = yes ]; then
             printf '%s version：%s\n' "$CF_NAME" "${CF_VERSION_REPORTED:-unknown}"
+            _rpt_bin_owner
         else
             printf '%s version：-\n' "$CF_NAME"
         fi
@@ -102,7 +103,21 @@ _rpt_core_block() {
         fi
         printf '  来源：%s\n' "$(core_deployment_label "$CF_DEPLOYMENT")"
         printf '  管理状态：%s\n' "$(core_managed_label)"
+        _rpt_bin_owner
     fi
+}
+
+# Manager 部署的二进制应属于 root, 0.5.0 之前安装的 sing-box 保留了上游压缩包里的 uid
+# 只告警, 不修改: 修复方法是 sing-box update --force
+_rpt_bin_owner() {
+    local _u _cmd
+    [ "$CF_DEPLOYMENT" = managed ] || return 0
+    [ -n "$CF_BINARY_REAL" ] || return 0
+    _u=$(stat -c %u "$(env_path "$CF_BINARY_REAL")" 2>/dev/null) || return 0
+    case $_u in ''|*[!0-9]*|0) return 0 ;; esac
+    _cmd=$CF_KEY
+    [ "$_cmd" != singbox ] || _cmd=sing-box
+    printf '  警告：二进制属主是 uid %s 而不是 root, 同 uid 的用户可以替换它, 请执行 proxy-manager %s update --force 修复\n' "$_u" "$_cmd"
 }
 
 report_core_list() {
