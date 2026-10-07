@@ -357,6 +357,10 @@ sb_instance_validate() {
             ;;
     esac
     _sb_policy_check "$_f" || _rc=1
+    if kv_keys "$_f" | grep -qx egress_socks && [ -z "$(kv_get "$_f" egress_socks)" ]; then
+        apm_err "$_f: egress_socks 为空"
+        _rc=1
+    fi
     return "$_rc"
 }
 
@@ -489,8 +493,8 @@ _sb_policy_check() { # FILE
     return "$_rc"
 }
 
-# 一个目标的 route 规则: 命中该实例入站且目标是这个 IP 与端口就走 direct
-_sb_route_allow_rule() { # TAG host:port
+# 一个目标的 route 规则: 命中该实例入站且目标是这个 IP 与端口就走该实例的出口 (direct 或 SOCKS Profile 的出站)
+_sb_route_allow_rule() { # TAG host:port [OUTBOUND]
     local _h _p _cidr
     _h=${2%:*}
     _p=${2##*:}
@@ -498,39 +502,157 @@ _sb_route_allow_rule() { # TAG host:port
         \[*\]) _h=${_h#\[}; _h=${_h%\]}; _cidr=$_h/128 ;;
         *) _cidr=$_h/32 ;;
     esac
-    printf '\n      {\n        "inbound": ["%s"],\n        "ip_cidr": ["%s"],\n        "port": [%s],\n        "action": "route",\n        "outbound": "direct"\n      }' "$1" "$_cidr" "$_p"
+    printf '\n      {\n        "inbound": ["%s"],\n        "ip_cidr": ["%s"],\n        "port": [%s],\n        "action": "route",\n        "outbound": "%s"\n      }' "$1" "$_cidr" "$_p" "${3:-direct}"
 }
 
-# 全部启用且开启目标访问限制的实例的 route.rules 内容, 没有则输出为空
-# 每个实例先列出它的允许规则 (地址与端口排序) 再列一条只对该入站生效的 reject 兜底
-# 规则只按入站 tag 匹配, 不限制的实例与其他实例完全不受影响
+# ---- Server SOCKS Egress ----
+# SOCKS Profile 是独立对象, 存放在 socks 目录, 一个 Profile 可以被多个实例共享
+# 实例用 egress_socks=NAME 显式绑定, 没有这个键就是 DIRECT, 不会自动选择, 不会故障转移, 不会回落 DIRECT
+# 与目标访问限制 (relay_access) 互相独立, 组合规则: 先判断目标是否允许, 允许之后走实例自己的出口
+
+SB_SOCKS_TAG_PREFIX=apm-socks-
+
+# SOCKS 用户名与密码: 可打印 ASCII, 首尾不是空格, 1 到 255 字节, 写入 JSON 时转义反斜杠与双引号
+_sb_socks_secret_ok() { # VALUE
+    [ -n "$1" ] || return 1
+    [ "${#1}" -le 255 ] || return 1
+    if printf '%s' "$1" | LC_ALL=C grep -q '[^ -~]'; then return 1; fi
+    case $1 in ' '*|*' ') return 1 ;; esac
+    return 0
+}
+
+_sb_jesc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+# 实例对应的 SOCKS Profile 目录, 提案目录与正式目录的约定: X/instances 对应 X/socks, X/instances.orig 对应 X/socks.orig
+# 其他目录 (测试) 对应 目录.socks, 都不存在时使用正式目录
+_sb_socks_for() { # INSTANCES_DIR
+    local _s
+    case $1 in
+        */instances.orig) _s=${1%/instances.orig}/socks.orig ;;
+        */instances) _s=${1%/instances}/socks ;;
+        *) _s=$1.socks ;;
+    esac
+    if [ -d "$_s" ]; then printf '%s' "$_s"; else state_socks_dir; fi
+}
+
+# SOCKS Profile 校验: 通用模型校验加 sing-box 层的收紧, 第一版只接受 IPv4 或 [IPv6] 地址, 不接受主机名
+_sb_socks_check() { # FILE
+    local _f _rc _h _p _n _u _w
+    _f=$1
+    _rc=0
+    socks_validate "$_f" || return 1
+    _h=$(kv_get "$_f" host)
+    _p=$(kv_get "$_f" port)
+    _n=$(_sb_dest_normalize "$_h" "$_p") || { apm_err "$_f: host 必须是规范的 IPv4 或 [IPv6] 地址: $_n"; return 1; }
+    [ "${_n%:*}" = "$_h" ] || { apm_err "$_f: host 不是规范形式 (应为 ${_n%:*})"; _rc=1; }
+    _u=$(kv_get "$_f" username)
+    _w=$(kv_get "$_f" password)
+    if [ -n "$_u" ]; then
+        _sb_socks_secret_ok "$_u" || { apm_err "$_f: username 无效 (可打印 ASCII, 首尾不是空格, 最长 255 字节)"; _rc=1; }
+        _sb_socks_secret_ok "$_w" || { apm_err "$_f: password 无效 (可打印 ASCII, 首尾不是空格, 最长 255 字节)"; _rc=1; }
+    fi
+    return "$_rc"
+}
+
+# 实例的有效出口: 输出 direct, socks:NAME 或 reject, 返回 1 表示绑定异常 (调用方必须整体拒绝, 绝不当作 direct)
+#   没有 egress_socks 键 direct
+#   指向存在且有效且启用的 Profile socks:NAME
+#   指向存在且有效但被禁用的 Profile reject, 保留绑定, 重新启用后自动恢复
+#   键存在但为空, Profile 不存在或无效 返回 1
+_sb_egress_effective() { # INSTANCE_FILE SOCKS_DIR
+    local _n _pf
+    kv_keys "$1" | grep -qx egress_socks || { printf 'direct'; return 0; }
+    _n=$(kv_get "$1" egress_socks)
+    is_ident "$_n" || return 1
+    _pf=$2/$_n.conf
+    [ -f "$_pf" ] || return 1
+    _sb_socks_check "$_pf" >/dev/null 2>&1 || return 1
+    if [ "$(kv_get "$_pf" enabled)" = true ]; then printf 'socks:%s' "$_n"; else printf 'reject'; fi
+}
+
+# 全部启用实例的 route.rules 内容, 没有则输出为空
+# 每个实例按 (目标访问限制, 出口) 组合生成, 规则只按入站 tag 匹配, 实例之间互不影响:
+#   不限制加 direct  不生成规则
+#   allowlist 加 direct  允许目标 direct, 再一条该入站的 reject
+#   不限制加 SOCKS  一条该入站走 SOCKS 出站的规则
+#   allowlist 加 SOCKS  允许目标走 SOCKS 出站, 再一条该入站的 reject
+#   绑定的 Profile 被禁用  只有一条该入站的 reject, 绝不 direct
+# 任何实例的限制或绑定异常都返回 1
 _sb_route_rules() { # INSTANCES_DIR
-    local _f _tag _d _first
+    local _f _tag _d _first _sd _eff _out _pol
     _first=1
+    _sd=$(_sb_socks_for "$1")
     for _f in $(state_list_confs "$1"); do
         [ "$(kv_get "$_f" enabled)" = true ] || continue
         _sb_type_valid "$(kv_get "$_f" type)" || continue
-        _sb_policy_present "$_f" || continue
-        _sb_policy_check "$_f" || return 1
-        _sb_policy_on "$_f" || continue
         _tag=$(kv_get "$_f" id)
-        for _d in $(_sb_policy_dests "$_f"); do
+        _eff=$(_sb_egress_effective "$_f" "$_sd") || { apm_err "$_f: egress_socks 指向的 SOCKS Profile 不存在或配置异常, 拒绝生成配置"; return 1; }
+        _pol=0
+        if _sb_policy_present "$_f"; then
+            _sb_policy_check "$_f" || return 1
+            _sb_policy_on "$_f" && _pol=1
+        fi
+        case $_eff in
+            reject)
+                [ "$_first" = 1 ] || printf ','
+                _first=0
+                printf '\n      {\n        "inbound": ["%s"],\n        "action": "reject"\n      }' "$_tag"
+                continue
+                ;;
+            socks:*) _out=$SB_SOCKS_TAG_PREFIX${_eff#socks:} ;;
+            *) _out=direct ;;
+        esac
+        if [ "$_pol" = 1 ]; then
+            for _d in $(_sb_policy_dests "$_f"); do
+                [ "$_first" = 1 ] || printf ','
+                _first=0
+                _sb_route_allow_rule "$_tag" "$_d" "$_out"
+            done
             [ "$_first" = 1 ] || printf ','
             _first=0
-            _sb_route_allow_rule "$_tag" "$_d"
-        done
-        [ "$_first" = 1 ] || printf ','
-        _first=0
-        printf '\n      {\n        "inbound": ["%s"],\n        "action": "reject"\n      }' "$_tag"
+            printf '\n      {\n        "inbound": ["%s"],\n        "action": "reject"\n      }' "$_tag"
+        elif [ "$_out" != direct ]; then
+            [ "$_first" = 1 ] || printf ','
+            _first=0
+            printf '\n      {\n        "inbound": ["%s"],\n        "action": "route",\n        "outbound": "%s"\n      }' "$_tag" "$_out"
+        fi
+    done
+}
+
+# 被启用实例使用且自身启用的 SOCKS Profile 的出站, 每个 Profile 只生成一次, 按名称排序, 没有则输出为空
+# 没有被使用的 Profile 不进入运行配置, 创建与修改它们不影响 sing-box
+_sb_socks_outbounds() { # INSTANCES_DIR
+    local _f _sd _eff _n _pf _h _u _names
+    _sd=$(_sb_socks_for "$1")
+    _names=
+    for _f in $(state_list_confs "$1"); do
+        [ "$(kv_get "$_f" enabled)" = true ] || continue
+        _sb_type_valid "$(kv_get "$_f" type)" || continue
+        _eff=$(_sb_egress_effective "$_f" "$_sd") || return 1
+        case $_eff in socks:*) _names="$_names
+${_eff#socks:}" ;; esac
+    done
+    for _n in $(printf '%s\n' "$_names" | LC_ALL=C sort -u); do
+        _pf=$_sd/$_n.conf
+        _h=$(kv_get "$_pf" host)
+        _h=${_h#\[}
+        _h=${_h%\]}
+        printf ',\n    {\n      "type": "socks",\n      "tag": "%s%s",\n      "server": "%s",\n      "server_port": %s,\n      "version": "5"' "$SB_SOCKS_TAG_PREFIX" "$_n" "$_h" "$(kv_get "$_pf" port)"
+        _u=$(kv_get "$_pf" username)
+        if [ -n "$_u" ]; then
+            printf ',\n      "username": "%s",\n      "password": "%s"' "$(_sb_jesc "$_u")" "$(_sb_jesc "$(kv_get "$_pf" password)")"
+        fi
+        printf '\n    }'
     done
 }
 
 # 由实例目录生成完整的 sing-box 配置到标准输出, 只包含启用的实例, 按实例 ID 排序, 输出稳定
-# 没有任何实例开启目标访问限制时不输出 route, 配置与没有这个功能时逐字节相同
-# 任何实例的限制配置无效都整体失败, 绝不退回不限制
+# 没有任何实例开启目标访问限制且没有任何实例绑定 SOCKS 出口时不输出 route 与额外出站, 配置与没有这些功能时逐字节相同
+# 任何实例的限制或出口绑定无效都整体失败, 绝不退回不限制或 direct
 sb_generate_config() { # INSTANCES_DIR
-    local _f _first _rules
+    local _f _first _rules _obs
     _rules=$(_sb_route_rules "$1") || return 1
+    _obs=$(_sb_socks_outbounds "$1") || return 1
     printf '{\n  "log": {\n    "level": "warn",\n    "timestamp": true\n  },\n  "inbounds": ['
     _first=1
     for _f in $(state_list_confs "$1"); do
@@ -541,7 +663,7 @@ sb_generate_config() { # INSTANCES_DIR
         _sb_inbound "$_f"
     done
     [ "$_first" = 1 ] || printf '\n  '
-    printf '],\n  "outbounds": [\n    {\n      "type": "direct",\n      "tag": "direct"\n    }\n  ]'
+    printf '],\n  "outbounds": [\n    {\n      "type": "direct",\n      "tag": "direct"\n    }%s\n  ]' "$_obs"
     if [ -n "$_rules" ]; then
         printf ',\n  "route": {\n    "rules": [%s\n    ]\n  }' "$_rules"
     fi
@@ -1122,20 +1244,62 @@ _sb_propose_dir() {
     for _f in $(state_list_confs "$(state_instances_dir)"); do
         cp -p -- "$_f" "$SNELL_STAGING/instances.orig/" || return 1
     done
+    # SOCKS Profile 的提案目录与原样保留的副本, 与实例目录成对 (见 _sb_socks_for)
+    rm -rf -- "$SNELL_STAGING/socks" "$SNELL_STAGING/socks.orig"
+    mkdir -p -- "$SNELL_STAGING/socks" "$SNELL_STAGING/socks.orig" || return 1
+    chmod 700 -- "$SNELL_STAGING/socks" "$SNELL_STAGING/socks.orig"
+    for _f in $(state_list_confs "$(state_socks_dir)"); do
+        cp -p -- "$_f" "$SNELL_STAGING/socks/" || return 1
+        cp -p -- "$_f" "$SNELL_STAGING/socks.orig/" || return 1
+    done
     printf '%s' "$_d"
 }
 
 # 成功后把提案目录同步为正式实例目录: 安装新增与修改的, 删除已不存在的
 _sb_sync_instances() { # NEWDIR
-    local _f _id
+    local _f _id _sd
     state_ensure_dirs || return 1
     for _f in $(state_list_confs "$1"); do
-        atomic_install "$_f" "$(state_instances_dir)/${_f##*/}" 600 || return 1
+        cmp -s "$_f" "$(state_instances_dir)/${_f##*/}" 2>/dev/null || atomic_install "$_f" "$(state_instances_dir)/${_f##*/}" 600 || return 1
     done
     for _f in $(state_list_confs "$(state_instances_dir)"); do
         _id=${_f##*/}
         [ -e "$1/$_id" ] || rm -f -- "$_f"
     done
+    # SOCKS Profile 一并同步, 只在提案目录成对存在时
+    _sd=$(_sb_socks_for "$1")
+    if [ "$_sd" != "$(state_socks_dir)" ]; then
+        for _f in $(state_list_confs "$_sd"); do
+            cmp -s "$_f" "$(state_socks_dir)/${_f##*/}" 2>/dev/null || atomic_install "$_f" "$(state_socks_dir)/${_f##*/}" 600 || return 1
+        done
+        for _f in $(state_list_confs "$(state_socks_dir)"); do
+            _id=${_f##*/}
+            [ -e "$_sd/$_id" ] || rm -f -- "$_f"
+        done
+    fi
+}
+
+# 变更后的应用: 生成出的运行配置与当前完全相同就只保存文件, 不重启, 否则走完整事务 (check 备份 原子替换 重启 健康检查 回滚)
+# 结果通过 SB_APPLY_RESTARTED 报告 yes 或 no
+_sb_apply() { # NEWDIR WAS_STATE
+    local _cand
+    SB_APPLY_RESTARTED=no
+    _snell_ensure_staging || return 1
+    _cand=$SNELL_STAGING/cmp.json
+    sb_generate_config "$1" > "$_cand" || { rm -f -- "$_cand"; apm_err "生成配置失败"; return 1; }
+    if [ -f "$(env_path "$SB_CONF")" ] && cmp -s "$_cand" "$(env_path "$SB_CONF")"; then
+        rm -f -- "$_cand"
+        if ! _sb_sync_instances "$1"; then
+            apm_err "保存失败, 正在恢复"
+            _sb_sync_instances "$SNELL_STAGING/instances.orig" >/dev/null 2>&1
+            return 1
+        fi
+        return 0
+    fi
+    rm -f -- "$_cand"
+    _sb_commit_instances "$1" "$2" || return 1
+    _sb_finish "$1" "$2" || return 1
+    SB_APPLY_RESTARTED=yes
 }
 
 # 配置已经提交后保存实例文件, 保存失败则把配置与服务恢复为旧实例, 不留下配置与实例不一致的状态
@@ -1389,6 +1553,7 @@ singbox_show() {
         fi
     done
     _sb_policy_show "$_f"
+    _sb_egress_show "$_f"
     printf '  说明：这是容器或系统内部的监听状态, 公网可达性 (NAT 与防火墙) 没有验证\n'
 }
 
@@ -1717,6 +1882,339 @@ singbox_access() {
     fi
 }
 
+# 实例出口的展示
+_sb_egress_show() { # FILE
+    local _n _pf
+    if ! kv_keys "$1" | grep -qx egress_socks; then
+        printf '  出口：DIRECT\n'
+        return 0
+    fi
+    _n=$(kv_get "$1" egress_socks)
+    _pf=$(state_socks_dir)/$_n.conf
+    if [ -z "$_n" ] || ! is_ident "$_n" || [ ! -f "$_pf" ]; then
+        printf '  出口：SOCKS %s (不存在 / 配置异常, 生成配置会被拒绝, 不会退回 DIRECT)\n' "${_n:-(空)}"
+    elif ! _sb_socks_check "$_pf" >/dev/null 2>&1; then
+        printf '  出口：SOCKS %s (不存在 / 配置异常, 生成配置会被拒绝, 不会退回 DIRECT)\n' "$_n"
+    elif [ "$(kv_get "$_pf" enabled)" = true ]; then
+        printf '  出口：SOCKS %s (已启用)\n' "$_n"
+    else
+        printf '  出口：SOCKS %s (已禁用, 该实例的流量会被拒绝, 不会退回 DIRECT)\n' "$_n"
+    fi
+}
+
+# 引用某个 Profile 的全部实例 ID (包括禁用的实例), 空格分隔
+_sb_socks_users() { # NAME INSTANCES_DIR
+    local _f _r
+    _r=
+    for _f in $(state_list_confs "$2"); do
+        if kv_keys "$_f" | grep -qx egress_socks && [ "$(kv_get "$_f" egress_socks)" = "$1" ]; then
+            _r="$_r $(kv_get "$_f" id)"
+        fi
+    done
+    printf '%s' "${_r# }"
+}
+
+# Profile 的状态, 摘要与详细展示都不显示密码, 也不显示片段与长度
+_sb_socks_status() { # FILE
+    if ! _sb_socks_check "$1" >/dev/null 2>&1; then
+        printf '配置无效'
+    elif [ "$(kv_get "$1" enabled)" = true ]; then
+        printf '启用'
+    else
+        printf '禁用'
+    fi
+}
+
+singbox_socks_list() {
+    local _f _u _n _a
+    printf 'SOCKS Profile\n'
+    _n=0
+    for _f in $(state_list_confs "$(state_socks_dir)"); do
+        _n=1
+        _u=$(_sb_socks_users "$(kv_get "$_f" name)" "$(state_instances_dir)")
+        if [ -n "$(kv_get "$_f" username)" ]; then _a=用户名认证; else _a=无认证; fi
+        printf '  %s  %s  %s 端口 %s  %s  引用 %s\n' "$(kv_get "$_f" name)" "$(_sb_socks_status "$_f")" "$(kv_get "$_f" host)" "$(kv_get "$_f" port)" "$_a" "${_u:-无}"
+    done
+    [ "$_n" = 1 ] || printf '  (没有 Profile)\n'
+    printf '  说明：这里只表示配置有效, 不代表远端 SOCKS 服务器可达或凭据正确\n'
+}
+
+singbox_socks_show() {
+    local _f _u
+    [ -n "${1:-}" ] || { apm_err "用法: sing-box socks show 名称"; return 2; }
+    _f=$(state_socks_dir)/$1.conf
+    [ -f "$_f" ] || { apm_err "SOCKS Profile $1 不存在"; return 1; }
+    printf 'SOCKS Profile %s\n' "$1"
+    printf '  状态：%s\n' "$(_sb_socks_status "$_f")"
+    printf '  服务器：%s\n' "$(kv_get "$_f" host)"
+    printf '  端口：%s\n' "$(kv_get "$_f" port)"
+    printf '  版本：SOCKS5\n'
+    if [ -n "$(kv_get "$_f" username)" ]; then
+        printf '  认证：用户名与密码\n  用户名：%s\n  密码：已配置\n' "$(kv_get "$_f" username)"
+    else
+        printf '  认证：无认证\n'
+    fi
+    _u=$(_sb_socks_users "$1" "$(state_instances_dir)")
+    printf '  引用的实例：%s\n' "${_u:-无}"
+    printf '  说明：这里只表示配置有效, 不代表远端 SOCKS 服务器可达或凭据正确\n'
+}
+
+_sb_socks_apply_msg() { # 已执行的动作文字
+    if [ "$SB_APPLY_RESTARTED" = yes ]; then
+        _sb_say "$1, 运行配置已更新, sing-box 已重启并验证 (只代表配置已应用, 不代表远端 SOCKS 服务器可用)"
+    else
+        _sb_say "$1, 运行配置没有变化, 没有重启 sing-box"
+    fi
+}
+
+# socks add [--name 名称] --server 地址 --port 端口 (--no-auth | --username 用户名 --password-stdin)
+# socks set 名称 server 地址 | port 端口 | no-auth | credential 用户名 --password-stdin | password --password-stdin
+# socks enable 名称... | disable 名称... | enable-all | disable-all | delete 名称
+# 全部沿用实例事务, 一次命令最多一次重启, 运行配置没有变化时不重启
+singbox_socks() {
+    local _sub _name _server _port _auth _user _pw _pwstdin _dir _sd _was _f _n _norm _arg _users _targets _val
+    _sub=${1:-list}
+    [ $# -eq 0 ] || shift
+    case $_sub in
+        list) singbox_socks_list; return $? ;;
+        show) singbox_socks_show "$@"; return $? ;;
+        add|set|enable|disable|enable-all|disable-all|delete) ;;
+        *) apm_err "未知的 socks 子命令: $_sub"; return 2 ;;
+    esac
+    _name=; _server=; _port=; _auth=; _user=; _pw=; _pwstdin=no; _targets=; _val=; _arg=
+    case $_sub in
+        add)
+            while [ $# -gt 0 ]; do
+                case $1 in
+                    --name) [ $# -ge 2 ] || { apm_err "--name 需要参数"; return 2; }; _name=$2; shift ;;
+                    --server) [ $# -ge 2 ] || { apm_err "--server 需要参数"; return 2; }; _server=$2; shift ;;
+                    --port) [ $# -ge 2 ] || { apm_err "--port 需要参数"; return 2; }; _port=$2; shift ;;
+                    --no-auth) _auth=none ;;
+                    --username) [ $# -ge 2 ] || { apm_err "--username 需要参数"; return 2; }; _user=$2; shift ;;
+                    --password-stdin) _pwstdin=yes ;;
+                    *) apm_err "未知参数: $1 (密码只能通过 --password-stdin 提供, 不接受命令行明文)"; return 2 ;;
+                esac
+                shift
+            done
+            { [ -n "$_server" ] && [ -n "$_port" ]; } || { apm_err "需要 --server 与 --port"; return 2; }
+            [ -z "$_name" ] || is_ident "$_name" || { apm_err "名称无效: $_name"; return 2; }
+            _norm=$(_sb_dest_normalize "$_server" "$_port") || { apm_err "$_norm"; return 2; }
+            _server=${_norm%:*}
+            if [ "$_auth" = none ]; then
+                { [ -z "$_user" ] && [ "$_pwstdin" = no ]; } || { apm_err "--no-auth 不能与 --username 或 --password-stdin 同时使用"; return 2; }
+            else
+                [ -n "$_user" ] || { apm_err "需要明确选择认证方式: --no-auth, 或 --username 加 --password-stdin"; return 2; }
+                [ "$_pwstdin" = yes ] || { apm_err "--username 必须同时提供 --password-stdin (没有密码的用户名是不完整的认证, SOCKS 密码是外部服务器已有的, 不会自动生成)"; return 2; }
+                IFS= read -r _pw || _pw=
+                _sb_socks_secret_ok "$_user" || { apm_err "用户名无效 (可打印 ASCII, 首尾不是空格, 最长 255 字节)"; return 2; }
+                _sb_socks_secret_ok "$_pw" || { apm_err "从标准输入读取的密码无效 (可打印 ASCII, 首尾不是空格, 1 到 255 字节)"; return 2; }
+            fi
+            ;;
+        set)
+            _name=${1:-}
+            { [ -n "$_name" ] && [ $# -ge 2 ]; } || { apm_err "用法: sing-box socks set 名称 server|port|no-auth|credential|password ..."; return 2; }
+            _arg=$2
+            shift 2
+            case $_arg in
+                server)
+                    [ -n "${1:-}" ] || { apm_err "server 需要参数"; return 2; }
+                    _val=$1 ;;
+                port)
+                    is_port "${1:-}" || { apm_err "端口无效 (1 到 65535)"; return 2; }
+                    _val=$1 ;;
+                no-auth) ;;
+                credential)
+                    _user=${1:-}
+                    { [ -n "$_user" ] && [ "${2:-}" = --password-stdin ]; } || { apm_err "用法: sing-box socks set $_name credential 用户名 --password-stdin"; return 2; }
+                    IFS= read -r _pw || _pw=
+                    _sb_socks_secret_ok "$_user" || { apm_err "用户名无效"; return 2; }
+                    _sb_socks_secret_ok "$_pw" || { apm_err "从标准输入读取的密码无效"; return 2; }
+                    ;;
+                password)
+                    [ "${1:-}" = --password-stdin ] || { apm_err "密码只能通过 --password-stdin 提供"; return 2; }
+                    IFS= read -r _pw || _pw=
+                    _sb_socks_secret_ok "$_pw" || { apm_err "从标准输入读取的密码无效"; return 2; }
+                    ;;
+                *) apm_err "不支持的键: $_arg (支持 server port no-auth credential password)"; return 2 ;;
+            esac
+            ;;
+        enable|disable|delete)
+            [ $# -ge 1 ] || { apm_err "用法: sing-box socks $_sub 名称..."; return 2; }
+            if [ "$_sub" = delete ]; then
+                [ $# -eq 1 ] || { apm_err "delete 一次只删除一个 Profile"; return 2; }
+            fi
+            _targets=$*
+            for _n in $_targets; do is_ident "$_n" || { apm_err "名称无效: $_n"; return 2; }; done
+            ;;
+        enable-all|disable-all)
+            [ $# -eq 0 ] || { apm_err "$_sub 不需要参数"; return 2; }
+            ;;
+    esac
+    _snell_need_root || return 4
+    _snell_lock || return 4
+    trap '_snell_cleanup' EXIT
+    _sb_require_managed no || return 4
+    _was=$CF_STATE
+    state_ensure_dirs || return 1
+    _snell_ensure_staging || return 1
+    _dir=$(_sb_propose_dir) || return 1
+    _sd=$(_sb_socks_for "$_dir")
+    case $_sub in
+        add)
+            if [ -n "$_name" ]; then
+                [ ! -e "$_sd/$_name.conf" ] || { apm_err "SOCKS Profile $_name 已存在"; return 1; }
+            else
+                _name=$(_sb_next_id "$_sd" SOCKS) || { apm_err "没有可用的 Profile 编号"; return 1; }
+            fi
+            _f=$_sd/$_name.conf
+            (
+                umask 077
+                printf 'name=%s\nhost=%s\nport=%s\nenabled=true\n' "$_name" "$_server" "$_port"
+                if [ "$_auth" != none ]; then printf 'username=%s\npassword=%s\n' "$_user" "$_pw"; fi
+            ) > "$_f" || return 1
+            ;;
+        set)
+            _f=$_sd/$_name.conf
+            [ -f "$_f" ] || { apm_err "SOCKS Profile $_name 不存在"; return 1; }
+            case $_arg in
+                server)
+                    _norm=$(_sb_dest_normalize "$_val" "$(kv_get "$_f" port)") || { apm_err "$_norm"; return 2; }
+                    _sb_inst_set "$_f" host "${_norm%:*}" || return 1 ;;
+                port) _sb_inst_set "$_f" port "$_val" || return 1 ;;
+                no-auth) _sb_inst_unset "$_f" username || return 1; _sb_inst_unset "$_f" password || return 1 ;;
+                credential) _sb_inst_set "$_f" username "$_user" || return 1; _sb_inst_set "$_f" password "$_pw" || return 1 ;;
+                password)
+                    [ -n "$(kv_get "$_f" username)" ] || { apm_err "Profile $_name 没有用户名, 请使用 credential 同时设置用户名与密码"; return 2; }
+                    _sb_inst_set "$_f" password "$_pw" || return 1 ;;
+            esac
+            ;;
+        enable|disable|enable-all|disable-all)
+            case $_sub in
+                enable-all|disable-all) _targets=$(for _f in $(state_list_confs "$_sd"); do kv_get "$_f" name; done) ;;
+            esac
+            # 先验证全部目标再修改, 任何一个不存在整个命令失败
+            for _n in $_targets; do
+                [ -f "$_sd/$_n.conf" ] || { apm_err "SOCKS Profile $_n 不存在, 没有做任何修改"; return 1; }
+            done
+            for _n in $_targets; do
+                case $_sub in
+                    enable|enable-all) _sb_inst_set "$_sd/$_n.conf" enabled true || return 1 ;;
+                    *) _sb_inst_set "$_sd/$_n.conf" enabled false || return 1 ;;
+                esac
+            done
+            ;;
+        delete)
+            _name=$_targets
+            [ -f "$_sd/$_name.conf" ] || { apm_err "SOCKS Profile $_name 不存在"; return 1; }
+            _users=$(_sb_socks_users "$_name" "$_dir")
+            if [ -n "$_users" ]; then
+                apm_err "SOCKS Profile $_name 仍被这些实例使用: $_users, 请先把它们改为 DIRECT 或绑定其他 Profile, 没有做任何修改"
+                return 1
+            fi
+            _f=$_sd/$_name.conf
+            rm -f -- "$_f" || return 1
+            ;;
+    esac
+    # 被修改的 Profile 必须通过校验, 失败整体放弃
+    if [ "$_sub" != delete ]; then
+        for _f in $(state_list_confs "$_sd"); do
+            _n=$(kv_get "$_f" name)
+            case " $_targets $_name " in *" $_n "*) ;; *) continue ;; esac
+            if ! _sb_socks_check "$_f" >/dev/null 2>&1; then
+                _sb_socks_check "$_f" 2>&1 | sed 's/^/  /' >&2
+                apm_err "修改后的 SOCKS Profile 未通过校验, 没有做任何修改"
+                return 1
+            fi
+        done
+    fi
+    _sb_apply "$_dir" "$_was" || return 1
+    case $_sub in
+        add) _sb_socks_apply_msg "已添加 SOCKS Profile $_name (配置已保存, 没有验证远端 SOCKS 服务器可达或凭据正确)" ;;
+        set) _sb_socks_apply_msg "已更新 SOCKS Profile $_name 的 $_arg" ;;
+        enable) _sb_socks_apply_msg "已启用 $_targets" ;;
+        disable) _sb_socks_apply_msg "已禁用 $_targets, 绑定它们的实例的流量会被拒绝, 不会退回 DIRECT" ;;
+        enable-all) _sb_socks_apply_msg "已启用全部 Profile" ;;
+        disable-all) _sb_socks_apply_msg "已禁用全部 Profile, 绑定 SOCKS 的实例的流量会被拒绝, DIRECT 实例不受影响" ;;
+        delete) _sb_socks_apply_msg "已删除 SOCKS Profile $_name" ;;
+    esac
+}
+
+# egress ID [show] | direct | socks 名称
+singbox_egress() {
+    local _id _act _name _f _dir _sd _was
+    _id=${1:-}
+    [ -n "$_id" ] || { apm_err "用法: sing-box egress 实例ID [show|direct|socks 名称]"; return 2; }
+    shift
+    _act=${1:-show}
+    [ $# -eq 0 ] || shift
+    _f=$(state_instances_dir)/$_id.conf
+    [ -f "$_f" ] || { apm_err "实例 $_id 不存在"; return 1; }
+    _name=
+    case $_act in
+        show)
+            [ $# -eq 0 ] || { apm_err "show 不需要参数"; return 2; }
+            printf '实例 %s\n' "$_id"
+            _sb_egress_show "$_f"
+            return 0
+            ;;
+        direct) [ $# -eq 0 ] || { apm_err "direct 不需要参数"; return 2; } ;;
+        socks)
+            _name=${1:-}
+            { [ $# -eq 1 ] && is_ident "$_name"; } || { apm_err "用法: sing-box egress $_id socks 名称"; return 2; }
+            ;;
+        *) apm_err "未知的 egress 操作: $_act"; return 2 ;;
+    esac
+    _snell_need_root || return 4
+    _snell_lock || return 4
+    trap '_snell_cleanup' EXIT
+    _sb_require_managed no || return 4
+    _was=$CF_STATE
+    _snell_ensure_staging || return 1
+    _dir=$(_sb_propose_dir) || return 1
+    _sd=$(_sb_socks_for "$_dir")
+    _f=$_dir/$_id.conf
+    case $_act in
+        direct)
+            if ! kv_keys "$_f" | grep -qx egress_socks; then
+                _sb_say "实例 $_id 已经是 DIRECT, 没有改动"
+                return 0
+            fi
+            _sb_inst_unset "$_f" egress_socks || return 1
+            ;;
+        socks)
+            [ -f "$_sd/$_name.conf" ] || { apm_err "SOCKS Profile $_name 不存在"; return 1; }
+            if ! _sb_socks_check "$_sd/$_name.conf" >/dev/null 2>&1; then
+                _sb_socks_check "$_sd/$_name.conf" 2>&1 | sed 's/^/  /' >&2
+                apm_err "SOCKS Profile $_name 配置无效, 不能绑定"
+                return 1
+            fi
+            if kv_keys "$_f" | grep -qx egress_socks && [ "$(kv_get "$_f" egress_socks)" = "$_name" ]; then
+                _sb_say "实例 $_id 已经绑定 $_name, 没有改动"
+                return 0
+            fi
+            _sb_inst_set "$_f" egress_socks "$_name" || return 1
+            ;;
+    esac
+    if ! sb_instance_validate "$_f" >/dev/null 2>&1; then
+        sb_instance_validate "$_f" 2>&1 | sed 's/^/  /' >&2
+        apm_err "修改后的实例未通过校验"
+        return 1
+    fi
+    _sb_apply "$_dir" "$_was" || return 1
+    case $_act in
+        direct) _sb_say "实例 $_id 的出口已改为 DIRECT" ;;
+        socks)
+            _sb_say "实例 $_id 的出口已绑定 SOCKS Profile $_name"
+            [ "$(kv_get "$_sd/$_name.conf" enabled)" = true ] || _sb_say "  注意: $_name 当前是禁用的, 该实例的流量会被拒绝, 不会退回 DIRECT, 启用 $_name 后自动恢复"
+            ;;
+    esac
+    if [ "$SB_APPLY_RESTARTED" = yes ]; then
+        _sb_say "sing-box 已重启并验证 (只代表配置已应用, 不代表远端 SOCKS 服务器可用)"
+    else
+        _sb_say "运行配置没有变化, 没有重启 sing-box"
+    fi
+}
+
 # ---- update ----
 
 singbox_update() {
@@ -1854,6 +2352,9 @@ singbox_uninstall() {
         for _f in $(state_list_confs "$(state_instances_dir)"); do
             _sb_type_valid "$(kv_get "$_f" type)" && rm -f -- "$_f"
         done
+        for _f in $(state_list_confs "$(state_socks_dir)"); do
+            rm -f -- "$_f"
+        done
         for _f in "$(state_backup_dir)"/config.json.bak.*; do
             [ -e "$_f" ] && rm -f -- "$_f"
         done
@@ -1897,6 +2398,8 @@ singbox_cli() {
         list) singbox_list ;;
         show) singbox_show "$@" ;;
         access) singbox_access "$@" ;;
+        socks) singbox_socks "$@" ;;
+        egress) singbox_egress "$@" ;;
         enable|disable|delete)
             [ -n "${1:-}" ] || { apm_err "用法: sing-box $_sub 实例ID"; return 2; }
             singbox_change "$1" "$_sub"

@@ -40,6 +40,10 @@ usage() {
   sing-box set ID port|listen|server-name|congestion-control 值 | set ID uuid UUID|--generate
   sing-box set ID password --stdin|--generate | set ID method 方法 [--stdin|--generate]
   sing-box access ID [show|unrestricted|allowlist|clear | add 地址 端口 | delete 地址 端口]  目标访问限制 (按实例, 跨协议)
+  sing-box socks list | show 名称 | add --server 地址 --port 端口 (--no-auth | --username 名 --password-stdin) [--name 名称]
+  sing-box socks set 名称 server|port|no-auth|credential 用户名 --password-stdin|password --password-stdin
+  sing-box socks enable|disable 名称... | enable-all | disable-all | delete 名称   SOCKS 出口 Profile
+  sing-box egress ID [show] | direct | socks 名称   实例出口 (DIRECT 或 SOCKS Profile, 不自动切换)
   help          显示本帮助
 EOF
 }
