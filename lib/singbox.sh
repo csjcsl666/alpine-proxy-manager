@@ -357,6 +357,7 @@ sb_instance_validate() {
             ;;
     esac
     _sb_policy_check "$_f" || _rc=1
+    client_endpoint_check "$_f" || _rc=1
     if kv_keys "$_f" | grep -qx egress_socks && [ -z "$(kv_get "$_f" egress_socks)" ]; then
         apm_err "$_f: egress_socks 为空"
         _rc=1
@@ -2400,6 +2401,8 @@ singbox_cli() {
         access) singbox_access "$@" ;;
         socks) singbox_socks "$@" ;;
         egress) singbox_egress "$@" ;;
+        endpoint) singbox_endpoint "$@" ;;
+        export) singbox_export "$@" ;;
         enable|disable|delete)
             [ -n "${1:-}" ] || { apm_err "用法: sing-box $_sub 实例ID"; return 2; }
             singbox_change "$1" "$_sub"

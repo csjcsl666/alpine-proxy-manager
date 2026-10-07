@@ -952,6 +952,7 @@ snell_uninstall() {
 
     if [ "$_purge" = 1 ]; then
         rm -rf -- "$(env_path "$SNELL_CONF_DIR")" "$(env_path "$SNELL_LOG_DIR")"
+        rm -f -- "$(state_etc)/snell-endpoint.conf"
         _bk=$(state_backup_dir)
         for _f in "$_bk"/snell-server.conf.bak.*; do
             [ -e "$_f" ] && rm -f -- "$_f"
@@ -994,6 +995,8 @@ snell_cli() {
         stop) snell_stop ;;
         restart) snell_restart ;;
         update) snell_update "$@" ;;
+        endpoint) snell_endpoint "$@" ;;
+        export) snell_export "$@" ;;
         uninstall) snell_uninstall "$@" ;;
         config)
             case ${1:-show} in

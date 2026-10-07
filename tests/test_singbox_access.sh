@@ -2,7 +2,7 @@
 # 目标访问限制 (Relay Access Policy): 按实例, 跨协议, allowlist 默认拒绝, fail-closed, 事务回滚, 旧实例兼容
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report snell singbox
+t_load common environment state core model policy txn report client snell singbox
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then

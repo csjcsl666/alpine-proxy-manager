@@ -54,3 +54,7 @@ jobs:
         run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-egress-smoke.sh 1.13.14
       - name: Server SOCKS Egress 真实流量测试 v1.14.2
         run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-egress-smoke.sh 1.14.2
+      - name: Client Export 真实客户端流量测试 v1.13.14
+        run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-client-smoke.sh 1.13.14
+      - name: Client Export 真实客户端流量测试 v1.14.2
+        run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-client-smoke.sh 1.14.2

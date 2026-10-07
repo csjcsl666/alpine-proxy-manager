@@ -2,7 +2,7 @@
 # Protocol Instance 框架与 AnyTLS 实例: add list show set enable disable delete, 配置生成, 事务回滚, 密码安全
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report snell singbox
+t_load common environment state core model policy txn report client snell singbox
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then

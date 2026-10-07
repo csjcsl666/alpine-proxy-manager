@@ -2,7 +2,7 @@
 # Shadowsocks Protocol Instance (TCP 与 UDP 双传输, method 加按 method 决定格式的密钥, 无 TLS): 双协议端口模型, 事务回滚, 密钥安全
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report snell singbox
+t_load common environment state core model policy txn report client snell singbox
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then

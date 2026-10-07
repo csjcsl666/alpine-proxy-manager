@@ -2,7 +2,7 @@
 # Server SOCKS Egress: SOCKS Profile 与实例 Egress Binding, 与目标访问限制组合, 禁用与异常时 fail-closed, 事务回滚, 密码安全
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report snell singbox
+t_load common environment state core model policy txn report client snell singbox
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then

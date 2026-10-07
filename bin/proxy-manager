@@ -9,7 +9,7 @@ APM_HOME=${_self%/*}
 APM_HOME=${APM_HOME%/*}
 export APM_HOME
 
-for _m in common environment state core model policy txn report snell singbox; do
+for _m in common environment state core model policy txn report client snell singbox; do
     # shellcheck source=/dev/null
     . "$APM_HOME/lib/$_m.sh" || { echo "加载 lib/$_m.sh 失败" >&2; exit 1; }
 done
@@ -44,6 +44,10 @@ usage() {
   sing-box socks set 名称 server|port|no-auth|credential 用户名 --password-stdin|password --password-stdin
   sing-box socks enable|disable 名称... | enable-all | disable-all | delete 名称   SOCKS 出口 Profile
   sing-box egress ID [show] | direct | socks 名称   实例出口 (DIRECT 或 SOCKS Profile, 不自动切换)
+  sing-box endpoint ID [show] | set 主机 端口 | clear   客户端连接地址 (Public Endpoint, 不配置 NAT, 不重启)
+  sing-box export ID show | secret | sing-box [--redacted] [--embed-cert] | url | qr   客户端导出 (secret url qr 包含凭据)
+  snell endpoint [show] | set 主机 端口 | clear   Snell 客户端连接地址
+  snell export show | secret   Snell 客户端连接信息
   help          显示本帮助
 EOF
 }

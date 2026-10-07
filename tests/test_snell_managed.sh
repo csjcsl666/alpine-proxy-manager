@@ -4,7 +4,7 @@
 # 使用真实的最小 ELF 桩作为 snell-server, PSK 与日志均为虚构
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report snell
+t_load common environment state core model policy txn report client snell
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then

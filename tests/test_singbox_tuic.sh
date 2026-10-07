@@ -2,7 +2,7 @@
 # TUIC Protocol Instance (UDP/QUIC, UUID 加密码, TLS): 凭据模型, 生成, 与 AnyTLS 和 Hysteria2 共存, 事务回滚, 密码安全
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report snell singbox
+t_load common environment state core model policy txn report client snell singbox
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then

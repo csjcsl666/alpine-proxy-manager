@@ -3,7 +3,7 @@
 # 二进制是真实的 ELF, 行为由 sidecar 脚本模拟 version check generate, 服务由模拟的 rc-service 提供
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report snell singbox
+t_load common environment state core model policy txn report client snell singbox
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then
