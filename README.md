@@ -200,6 +200,29 @@ proxy-manager sing-box egress AnyTLS-01 socks SOCKS-01
 proxy-manager sing-box egress AnyTLS-01 direct
 ```
 
+## 客户端导出
+
+创建实例之后 不需要再翻服务端配置拼客户端参数
+
+- Public Endpoint 客户端连接地址 每个实例单独保存一个 host 与 port 内部监听地址与端口不等于客户端实际连接的地址 例如 NAT VPS 的内部端口与服务商映射的公网端口往往不同 Public Endpoint 只告诉客户端应该连哪里 **不会配置 NAT 不会开放防火墙 不会探测公网 IP** 支持 IPv4 IPv6 与主机名 修改它不生成运行配置 不重启服务
+- 没有设置 Public Endpoint 时 导出会拒绝并提示 不会把 0.0.0.0 或 127.0.0.1 导出给客户端
+- `export ID show` 连接参数 默认不含凭据 `export ID secret` 显式查看凭据 其他命令 `show` 与 `list` 仍然只显示已配置
+- `export ID sing-box` 生成可直接运行的 sing-box 客户端配置 含一个本机 `127.0.0.1:2080` 的 mixed 入站 `--redacted` 把凭据替换为 REDACTED 用于展示
+- 当前服务端使用 APM 生成的自签名证书 客户端配置默认写 `insecure` 这是自签名证书带来的限制 不是推荐的安全配置 `--embed-cert` 改为嵌入服务端证书并校验 不再使用 insecure 后续接入 ACME 后可使用正常证书校验
+- `export ID url` 只提供有明确依据的分享链接 AnyTLS 与 Hysteria2 遵循各自官方的 URI Scheme Shadowsocks 遵循 SIP002 与 SIP022 TUIC 没有稳定的通用 URI 不提供 链接 请使用 sing-box 客户端配置
+- `export ID qr` 在终端显示分享链接的二维码 需要可选的 `qrencode` 包 `apk add libqrencode-tools` Manager 不会自动安装 链接通过 stdin 传入 不会出现在进程参数里
+- Snell 使用 `snell endpoint` 与 `snell export show` `snell export secret` Snell 没有通用分享 URI 也没有 sing-box 出站
+- 包含凭据的输出会在 stderr 打印警告 stdout 只有内容 可直接重定向到文件 不写临时文件 不写日志
+- 客户端导出不包含 SOCKS 出口凭据 目标访问限制 TLS 私钥与其他实例的凭据 切换 SOCKS 出口与目标访问限制不改变导出的配置与链接
+
+```sh
+proxy-manager sing-box endpoint AnyTLS-01 set example.com 32001
+proxy-manager sing-box export AnyTLS-01 show
+proxy-manager sing-box export AnyTLS-01 sing-box > client.json
+proxy-manager sing-box export AnyTLS-01 url
+proxy-manager sing-box export AnyTLS-01 qr
+```
+
 ## 内存说明
 
 64 MiB 是 Manager 与安装流程必须考虑的最低资源基线 **不代表 sing-box 本身能在 64 MiB 内长期稳定运行** sing-box 的实际内存占用取决于版本 协议和连接数 目前没有足够数据承诺它在 64 MiB 下的稳定性
@@ -217,6 +240,7 @@ proxy-manager sing-box egress AnyTLS-01 direct
 - Core 发现只执行已确认为 ELF 的二进制 脚本与指向脚本的符号链接不会被执行 运行状态以 OpenRC 为准
 - 已有的 Snell 部署被识别为现有部署 不会被覆盖 接管或修改 `snell` 的写操作会拒绝 接管 adopt 与迁移 migrate 尚未实现
 - Protocol Instance Server SOCKS Profile Relay Access Policy 的数据模型与校验 其中 Relay Access Policy 与 Server SOCKS Egress 已在 sing-box 四种协议实例上落地
+- 客户端导出 Public Endpoint 显式查看凭据 sing-box 客户端配置 分享链接与二维码 已用官方 sing-box 客户端经真实服务端验证 公网可达性没有验证
 - 配置事务基础设施 候选文件 校验 hook 备份 原子替换 失败回滚
 - 基础测试与 GitHub Actions CI
 
@@ -224,10 +248,9 @@ proxy-manager sing-box egress AnyTLS-01 direct
 
 - Hysteria2 的带宽 混淆 masquerade 等可选参数 以及公网 UDP 端到端验收
 - 接管已有的 sing-box 部署
-- 实例的 URL 与二维码导出 ACME 自动证书
+- ACME 自动证书
 - 接管已有的 Snell 部署
 - Snell 日志轮转
-- URL 与二维码导出
 - 正式 Release
 
 ## 安全提醒
