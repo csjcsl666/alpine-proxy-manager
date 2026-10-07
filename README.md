@@ -2,7 +2,7 @@
 
 面向 Alpine Linux 低内存 VPS 的轻量 Snell 与 sing-box 统一管理器
 
-- 一条命令安装 中文为主的统一 TUI 管理界面 完整的命令行
+- 一条命令安装 中文为主的统一 TUI 管理界面 SSH 登录后输入短命令 `apm` 即可进入 完整的命令行
 - 管理 Snell 与 sing-box 两个 Core 的安装 更新 启停 卸载 并在 sing-box 上管理 AnyTLS Hysteria2 TUIC Shadowsocks 四种协议实例
 - 目标访问限制 SOCKS 出口 客户端连接地址 客户端配置导出 都按实例配置 四种协议共用同一套命令
 - 只管理自己安装的东西 其他方式部署的 Snell 与 sing-box 只读识别 绝不修改
@@ -26,7 +26,7 @@ VLESS Reality 与 Trojan 不在支持计划内
 APM_REF=v0.5.0 sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.5.0/install.sh)"
 ```
 
-只需要 Alpine 自带的 `wget` 不需要 `curl` `git` 或 `sudo` 安装完成后运行 `proxy-manager` 进入管理界面 运行 `proxy-manager doctor` 检查环境
+只需要 Alpine 自带的 `wget` 不需要 `curl` `git` 或 `sudo` 安装完成后运行 `apm` 进入管理界面 运行 `apm doctor` 检查环境 `apm` 是官方短入口 与完整命令 `proxy-manager` 完全等价
 
 这条命令会以 root 身份执行下载到的脚本 如果希望先审查
 
@@ -43,6 +43,7 @@ APM_REF=v0.5.0 sh install.sh
 - 检查 Alpine root 必需的 BusyBox 工具与磁盘空间 并提示 cgroup 内存上限
 - 下载源码归档 不 clone 历史 在 staging 目录解压并校验 运行语法检查与 `--version` 自检
 - 安装到 `/usr/local/lib/alpine-proxy-manager/releases/<Build>` 再原子切换 `current` 链接 创建命令链接 `/usr/local/bin/proxy-manager` 再次自检 任何一步失败都回滚到原状态
+- 自检通过后创建短命令 `/usr/local/bin/apm` 它是指向 `proxy-manager` 的符号链接 没有第二份脚本 升级时自动补上 已经存在且不是本项目创建的 `apm` 绝不覆盖 只给出警告 仍可使用 `proxy-manager`
 - Build 取自归档里记录的 commit SHA 与实际下载的源码严格对应 取不到就拒绝安装
 
 ### 开发版 main
@@ -65,13 +66,13 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.5.0/install.sh)" -- --uninstall
 ```
 
-只删除 Manager 自己 不删除 Snell sing-box `/etc/alpine-proxy-manager` 中的配置与 `/var/lib/alpine-proxy-manager` 中的数据
+只删除 Manager 自己 包括本项目创建的 `apm` 不是本项目创建的 `apm` 会保留 不删除 Snell sing-box `/etc/alpine-proxy-manager` 中的配置与 `/var/lib/alpine-proxy-manager` 中的数据
 
 ## 使用
 
 ### 统一 TUI
 
-在交互式终端直接运行 `proxy-manager` 或 `proxy-manager tui`
+在交互式终端直接运行 `apm` 或 `apm tui` 完整命令 `proxy-manager` 与 `proxy-manager tui` 仍然保留 两者等价
 
 - 主菜单 Core 管理 协议实例 目标访问限制 SOCKS 出口 客户端配置导出 状态与诊断 日志 Manager 管理 数字选择 `0` 返回 主菜单的 `0` 退出
 - 界面以中文为主 协议与技术名词保持原名
@@ -84,13 +85,14 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 
 ### 命令行
 
-`proxy-manager help` 列出全部命令 常用的
+`apm help` 列出全部命令 短命令 `apm` 是指向 `proxy-manager` 的符号链接 所有命令行用法都可以用 `apm` 代替 `proxy-manager` 两者共用同一套代码 行为完全一致 下面的示例沿用完整命令 常用的
 
 ```sh
-proxy-manager doctor                     # 只读环境检查
-proxy-manager status                     # Core 状态与功能配置状态
-proxy-manager core list                  # 发现 Core 并显示来源与管理状态
-proxy-manager --version
+apm doctor                               # 只读环境检查
+apm status                               # Core 状态与功能配置状态
+apm core list                            # 发现 Core 并显示来源与管理状态
+apm --version
+proxy-manager sing-box list              # 完整命令同样可用
 ```
 
 ## Managed 与现有部署
