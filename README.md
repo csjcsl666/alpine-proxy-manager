@@ -36,7 +36,7 @@ less install.sh
 APM_REF=v0.5.1 sh install.sh
 ```
 
-校验归档 每个 GitHub Release 都附带 `SHA256SUMS` 与源码归档 可以用 `APM_ARCHIVE_URL` 指向 Release 里的归档 并用 `APM_SHA256` 指定期望的校验和 不匹配就拒绝安装 校验和只能发现下载损坏 不能证明发布者身份 目前的 tag 没有签名
+校验归档 每个 GitHub Release 都附带 `SHA256SUMS` 与源码归档 可以用 `APM_ARCHIVE_URL` 指向 Release 里的归档 并用 `APM_SHA256` 指定期望的校验和 不匹配就拒绝安装 校验和用于发现下载损坏 不提供独立的发布者身份证明 发布方式是 GitHub 的 HTTPS 加 Release 不需要也不要求你验证 Git tag 签名
 
 ### 安装脚本做的事
 
