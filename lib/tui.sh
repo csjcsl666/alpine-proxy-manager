@@ -1192,7 +1192,8 @@ tui_run() {
     TUI_EOF=0
     trap '_tui_on_int' INT TERM
     trap '_tui_restore' EXIT
-    if [ "$TUI_UTF8" = 0 ] && [ "${TERM:-}" != dumb ] && [ "$TUI_ANSI" = 1 ]; then
+    # 只在明确设置了非 UTF-8 的 locale 时提示, Alpine 默认不设置 locale, 终端本身通常能显示中文
+    if [ "$TUI_UTF8" = 0 ] && [ -n "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" ] && [ "${TERM:-}" != dumb ] && [ "$TUI_ANSI" = 1 ]; then
         printf '提示：当前终端可能无法正确显示中文，功能仍可使用\n'
     fi
     tui_main_menu

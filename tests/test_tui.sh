@@ -474,6 +474,9 @@ assert_contains "UTF-8 使用圆点" "$out" "● 运行中"
 out=$(LC_ALL=C TERM=xterm APM_TUI_ANSI=1 T '0\n')
 assert_contains "非 UTF-8 终端提示中文可能无法显示" "$out" "可能无法正确显示中文"
 assert_contains "但功能仍可用" "$out" "已退出"
+out=$( (unset LC_ALL LC_CTYPE LANG; TERM=xterm APM_TUI_ANSI=1 T '0\n') )
+assert_not_contains "没有设置 locale 时不提示" "$out" "可能无法正确显示中文"
+assert_contains "没有设置 locale 时使用 ASCII 状态" "$out" "[RUNNING]"
 
 # ---- 非 root ----
 ready t6
