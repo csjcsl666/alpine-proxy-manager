@@ -1,0 +1,46 @@
+{
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "anytls",
+      "tag": "AnyTLS-01",
+      "listen": "::",
+      "listen_port": 20443,
+      "users": [
+        {
+          "password": "LegacyFixturePwAnyTLS010123456789abcdef"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "certificate_path": "/etc/sing-box/tls/AnyTLS-01.crt",
+        "key_path": "/etc/sing-box/tls/AnyTLS-01.key"
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "Hysteria2-01",
+      "listen": "::",
+      "listen_port": 20500,
+      "users": [
+        {
+          "password": "LegacyFixturePwHysteria2010123456789abcdef"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "certificate_path": "/etc/sing-box/tls/Hysteria2-01.crt",
+        "key_path": "/etc/sing-box/tls/Hysteria2-01.key"
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ]
+}

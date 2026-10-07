@@ -1,0 +1,13 @@
+schema=1
+managed=true
+core=singbox
+exact_release=v1.13.14
+reported_version=1.13.14
+binary_path=/usr/local/bin/sing-box
+config_path=/etc/sing-box/config.json
+config_root=/etc/sing-box
+service_name=sing-box
+log_dir=/var/log/sing-box
+installed_at=2026-10-07T14:13:11Z
+created_user=yes
+created_group=yes

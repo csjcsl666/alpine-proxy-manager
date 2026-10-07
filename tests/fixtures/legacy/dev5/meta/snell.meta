@@ -1,0 +1,12 @@
+schema=1
+managed=true
+core=snell
+exact_release=v6.0.0rc2
+reported_version=v6.0.0
+binary_path=/usr/local/bin/snell-server
+config_path=/etc/snell/snell-server.conf
+service_name=snell
+log_dir=/var/log/snell
+installed_at=2026-10-07T14:13:10Z
+created_user=yes
+created_group=yes
