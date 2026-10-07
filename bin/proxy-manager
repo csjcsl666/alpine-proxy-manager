@@ -17,6 +17,7 @@ done
 usage() {
     cat <<EOF
 用法: proxy-manager <命令>
+短命令 apm 与 proxy-manager 完全等价 在交互式终端直接运行 apm 进入管理界面
 
 命令:
   --version     显示版本与 Build

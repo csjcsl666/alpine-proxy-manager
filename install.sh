@@ -10,8 +10,10 @@
 #   - 不依赖 $0, 当前目录或已 clone 的仓库
 #   - 所有逻辑都在函数中, 最后一行才调用 apm_main, 下载被截断时只会得到未完成的函数定义而不会执行安装
 #
+# 命令: 同时安装 proxy-manager 与短命令 apm (apm 是指向 proxy-manager 的符号链接), 已有的别人的 apm 不会被覆盖
+#
 # 选项:
-#   --uninstall     卸载 Manager 本体
+#   --uninstall     卸载 Manager 本体 (只删除本项目创建的 apm)
 #   --force         即使 Build 相同也重新安装
 #   --from-dir DIR  开发者用: 从本地源码目录安装而不下载 (需要 git 以确定 Build)
 #   -h, --help      显示帮助
@@ -64,6 +66,7 @@ setup_paths() {
     LIB=$LIBPARENT/alpine-proxy-manager
     BINDIR=$ROOT/usr/local/bin
     LINK=$BINDIR/proxy-manager
+    ALIAS=$BINDIR/apm
     # 相对符号链接, 在任何根目录下都有效
     LINK_TARGET=../lib/alpine-proxy-manager/current/bin/proxy-manager
     LOCKDIR=$LIBPARENT/.alpine-proxy-manager.lock
@@ -347,6 +350,49 @@ atomic_symlink() {
     mv -T -- "$_tmp" "$_name" || { rm -f -- "$_tmp"; return 1; }
 }
 
+# 短命令 apm: 与 proxy-manager 同目录的符号链接, 指向 proxy-manager, 不复制任何逻辑
+# 只有明确是本项目创建的 apm 才会更新或删除: 符号链接, 且目标是 proxy-manager (相对或绝对) 或旧的完整布局目标
+# 其他任何形态 (普通文件, 目录, 指向别处的链接, 悬空的别处链接) 一律视为别人的, 不覆盖, 不删除
+alias_is_ours() {
+    local _t
+    [ -L "$ALIAS" ] || return 1
+    _t=$(readlink "$ALIAS")
+    case $_t in
+        proxy-manager|"$LINK"|"$LINK_TARGET") return 0 ;;
+    esac
+    return 1
+}
+
+# 设置 ALIAS_STATE: created | kept | fixed | foreign | failed
+ensure_alias() {
+    ALIAS_STATE=
+    if [ -L "$ALIAS" ] || [ -e "$ALIAS" ]; then
+        if alias_is_ours; then
+            if [ "$(readlink "$ALIAS")" = proxy-manager ]; then
+                ALIAS_STATE=kept
+            elif atomic_symlink proxy-manager "$ALIAS"; then
+                ALIAS_STATE=fixed
+            else
+                ALIAS_STATE=failed
+            fi
+        else
+            ALIAS_STATE=foreign
+        fi
+        return 0
+    fi
+    if atomic_symlink proxy-manager "$ALIAS"; then ALIAS_STATE=created; else ALIAS_STATE=failed; fi
+    return 0
+}
+
+# 短命令的结果提示: 冲突与失败只警告, Manager 本身已经安装成功, 仍可用 proxy-manager
+report_alias() {
+    case $ALIAS_STATE in
+        foreign) err "$ALIAS 已存在且不是本项目创建的, 已保留, 没有覆盖, 短命令 apm 不可用, 请使用 proxy-manager" ;;
+        failed) err "无法创建短命令 $ALIAS, 请使用 proxy-manager" ;;
+    esac
+    return 0
+}
+
 # 失败回滚: PREV_ID 为空表示 current 原本不存在, PREV_LINK 为命令链接原来的目标
 rollback() {
     local _id
@@ -395,6 +441,10 @@ do_install() {
     if [ "$INST_KIND" = release ] && [ "$INST_VERSION" = "$NEW_VERSION" ] && [ "$INST_BUILD" = "$NEW_BUILD" ] \
         && [ "$FORCE" = 0 ] && installed_healthy; then
         say "已是最新: $NEW_VERSION (Build: $NEW_BUILD), 无需更改"
+        # 短命令缺失时补上, 已存在且正确则什么都不做
+        ensure_alias
+        case $ALIAS_STATE in created|fixed) say "已补充短命令 apm" ;; esac
+        report_alias
         return 0
     fi
 
@@ -445,6 +495,9 @@ do_install() {
         die "安装后自检失败, 已回滚到原状态: $_out"
     fi
 
+    # 短命令在 Manager 自检通过之后才处理, 冲突或失败只警告, 不影响 Manager 本身的安装与回滚
+    ensure_alias
+
     # 成功后才清理旧 release 与旧布局文件
     for _d in "$LIB"/releases/*; do
         [ -d "$_d" ] && [ "${_d##*/}" != "$_id" ] && rm -rf -- "$_d"
@@ -461,7 +514,10 @@ do_install() {
     say "Build: $NEW_BUILD"
     say ""
     say "命令: proxy-manager"
+    case $ALIAS_STATE in created|kept|fixed) say "短命令: apm (与 proxy-manager 等价, 直接运行 apm 进入管理界面)" ;; esac
+    report_alias
     say "常用:"
+    say "  apm"
     say "  proxy-manager doctor"
     say "  proxy-manager status"
     say "  proxy-manager core list"
@@ -482,6 +538,14 @@ do_uninstall() {
         else
             _t=$(readlink "$LINK")
             err "$LINK 指向 $_t, 不是本项目安装的, 已保留"
+        fi
+    fi
+    if [ -L "$ALIAS" ] || [ -e "$ALIAS" ]; then
+        if alias_is_ours; then
+            rm -f -- "$ALIAS"
+            _found=1
+        else
+            err "$ALIAS 不是本项目创建的, 已保留"
         fi
     fi
     if [ -d "$LIB" ]; then
