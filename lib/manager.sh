@@ -40,7 +40,7 @@ _mgr_json_bool() { # 键
     sed -n 's/^[[:space:]]*"'"$1"'"[[:space:]]*:[[:space:]]*\(true\|false\)[[:space:]]*$/\1/p' | head -n 1
 }
 
-# 版本比较, 输出 lt eq gt: X.Y.Z 按数字比较, 带预发布后缀的版本 (如 0.5.2-dev.1) 低于同核心的正式版, 构建元数据忽略
+# 版本比较, 输出 lt eq gt: X.Y.Z 按数字比较, 带预发布后缀的版本 (如 X.Y.Z-dev.N) 低于同核心的正式版, 构建元数据忽略
 _mgr_vcmp() { # A B
     local _ca _cb _sa _sb _r
     _ca=${1%%[-+]*}
