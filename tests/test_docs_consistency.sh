@@ -30,7 +30,7 @@ assert_eq "README 代码块里的命令在 help 中都有 (共 $n 种前缀)" ""
 # help 里列出的每个子命令 README 都提到
 for c in "snell install" "snell status" "snell config" "snell update" "snell uninstall" "snell endpoint" "snell export" \
     "sing-box install" "sing-box status" "sing-box update" "sing-box uninstall" "sing-box add" "sing-box list" "sing-box set" \
-    "sing-box access" "sing-box socks" "sing-box egress" "sing-box endpoint" "sing-box export" "tui" "doctor" "core list"; do
+    "manager check-update" "sing-box access" "sing-box socks" "sing-box egress" "sing-box endpoint" "sing-box export" "tui" "doctor" "core list"; do
     case $HELP in *"$c"*) t_pass "help 含 $c" ;; *) t_fail "help 缺少 $c" ;; esac
     if grep -q -- "$c" "$R"; then t_pass "README 提到 $c"; else t_fail "README 没有提到 $c"; fi
 done

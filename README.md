@@ -60,6 +60,15 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 
 升级到新的正式版 把命令里的 `v0.5.1` 换成新版本的 tag 即可 README 的默认命令会随每次正式发布更新 同一 Build 且工作正常时不做任何改动 新版本自检失败会继续使用旧版本 升级 Manager 本身不会重启 Snell 与 sing-box 不会改写任何已有配置与实例
 
+也可以直接在 `apm` 里升级 `Manager 管理` 里选 `检查更新` 只查询 GitHub 上最新的正式 Release 不自动下载 `更新 Manager` 会先确认 默认 N 需要 root 并复用同一个安装脚本 所以原子切换 自检失败回滚 与 sha256 校验都一样 只更新到正式 Release 的 tag 不会更新到 main 草稿或预发布 不会降级 更新成功后请重新运行 `apm`
+
+```sh
+apm manager check-update    # 只检查 有新版本时退出码为 10 非 root 也可以
+apm manager update          # 需要 root 会提示确认
+```
+
+检查更新是手动的 没有定时任务和后台进程 失败时当前 Manager 保持不变
+
 ### 卸载 Manager
 
 ```sh
@@ -75,11 +84,12 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 在交互式终端直接运行 `apm` 或 `apm tui` 完整命令 `proxy-manager` 与 `proxy-manager tui` 仍然保留 两者等价
 
 - 主菜单 Core 管理 协议实例 目标访问限制 SOCKS 出口 客户端配置导出 状态与诊断 日志 Manager 管理 数字选择 `0` 返回 主菜单的 `0` 退出
+- Snell 菜单里的 `客户端信息` 提供 `查看连接信息` 与 `查看 PSK` Manager 菜单提供 查看版本 检查更新 更新 Manager 检查环境 查看帮助
 - 界面以中文为主 协议与技术名词保持原名
 - TUI 只是命令行的交互层 校验 保护与事务与命令行完全一致 现有部署只提供只读入口 不显示启动 停止 更新 卸载
 - 密码 密钥 PSK 输入时不回显 无论正常结束 失败还是 Ctrl+C 都会恢复终端 秘密经标准输入交给业务函数 不出现在进程参数里
 - 删除实例 删除 Profile 卸载 批量禁用 以及任何会显示客户端凭据的操作都需要确认 默认是 N
-- 没有外部依赖 没有常驻进程 进入时不联网 不检查更新 `NO_COLOR` 与 `TERM=dumb` 退化为纯文本 终端不是 UTF-8 时状态符号改用 `[RUNNING]` 等文本
+- 没有外部依赖 没有常驻进程 进入时不联网 不检查更新 只有在你选择 `查看连接信息` 或 `检查更新` 时才会联网 `NO_COLOR` 与 `TERM=dumb` 退化为纯文本 终端不是 UTF-8 时状态符号改用 `[RUNNING]` 等文本
 - 不是 root 时只能查看 写操作会提示需要 root
 - 在脚本或管道中运行 `proxy-manager` 不会进入 TUI 仍然输出帮助 所有命令行用法保持不变
 
@@ -209,8 +219,9 @@ proxy-manager sing-box endpoint ID [show] | set 主机 端口 | clear
 proxy-manager snell endpoint [show] | set 主机 端口 | clear
 ```
 
+- Snell 不需要设置 Public Endpoint 就能使用 TUI 的 `客户端信息` 里 `查看连接信息` 会在查看时通过 HTTPS 查询服务器的公网 IPv4 只用于显示 不保存 查询失败显示 `公网 IP：获取失败` 其余信息照常显示 `snell endpoint` 命令保留 已设置的值不受影响
 - 内部监听地址与端口不等于客户端实际连接的地址 例如 NAT VPS 的内部端口与服务商映射的公网端口往往不同 Public Endpoint 只记录客户端应该连哪里 支持 IPv4 IPv6 与主机名
-- Manager 不配置服务商的 NAT 与端口映射 不修改防火墙 不自动探测公网 IP 也不判断公网是否真的可达 这些需要你自己在服务商面板处理
+- Manager 不配置服务商的 NAT 与端口映射 不修改防火墙 不判断公网是否真的可达 显示的公网 IP 只是查询结果 在 NAT 环境里可能与客户端实际应连接的地址不同 这些需要你自己在服务商面板处理
 - 没有设置时 导出会拒绝 不会把 0.0.0.0 或 127.0.0.1 导出给客户端 修改它不生成运行配置 不重启服务
 
 ### 导出
@@ -221,7 +232,8 @@ proxy-manager sing-box export ID secret               # 显式查看凭据
 proxy-manager sing-box export ID sing-box [--redacted] [--embed-cert] > client.json
 proxy-manager sing-box export ID url
 proxy-manager sing-box export ID qr
-proxy-manager snell export show | secret
+proxy-manager snell export info                      # 连接信息 自动查询公网 IP 不含 PSK
+proxy-manager snell export show | secret             # show 使用已设置的 Public Endpoint secret 显式查看 PSK
 ```
 
 - `sing-box` 生成可直接运行的 sing-box 客户端配置 含一个本机 `127.0.0.1:2080` 的 mixed 入站 `--redacted` 把凭据替换为 REDACTED 用于展示
