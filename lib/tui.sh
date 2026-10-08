@@ -25,6 +25,7 @@ TUI_STTY_SAVED=
 TUI_EOF=0
 TUI_RC=0
 TUI_EXIT=0
+TUI_TICK_ON=0
 
 # ---- 终端能力 ----
 
@@ -145,6 +146,83 @@ _tui_pause() {
     printf '\n'
 }
 
+# ---- 主菜单内存显示与空闲刷新 ----
+# 只在主菜单展示期间刷新, 不创建后台进程: 菜单等待输入时用 read -t 超时, 超时就只重写内存那一行
+# 用保存光标 绝对定位 写入 恢复光标, 所以已经键入的字符与光标位置都不受影响, 菜单不会重绘
+# 输入无效时清屏重绘整个主菜单并带一行提示, 刷新继续; 终端放不下整个主菜单 没有 read -t 或不是交互终端时不刷新, 行为与之前完全相同
+
+# 内存行, 复用 env_probe_memory 的口径: cgroup 优先, 其次 meminfo, 读不到就显示未知
+_tui_mem_text() {
+    env_probe_memory 2>/dev/null
+    if [ "${ENV_MEM_LIMIT:-0}" -gt 0 ] 2>/dev/null && [ "${ENV_MEM_CUR:-0}" -ge 0 ] 2>/dev/null; then
+        printf '内存：%s / %s MiB' "$(apm_mib "$ENV_MEM_CUR")" "$(apm_mib "$ENV_MEM_LIMIT")"
+    else
+        printf '内存：未知'
+    fi
+}
+
+# 是否启用刷新: 间隔 APM_TUI_REFRESH 秒 (默认 5, 最小 2, 0 关闭), 需要交互终端 ANSI 与 read -t, 参数是提示符所在的行号
+_tui_tick_init() {
+    local _n _rows
+    TUI_TICK_ON=0
+    TUI_TICK_SEC=
+    _n=${APM_TUI_REFRESH:-5}
+    case $_n in ''|*[!0-9]*) return 0 ;; esac
+    [ "$_n" -gt 0 ] || return 0
+    [ "$_n" -ge 2 ] || _n=2
+    [ "$TUI_ANSI" = 1 ] || return 0
+    { { [ -t 0 ] && [ -t 1 ]; } || [ "${APM_TUI_TEST_TTY:-}" = 1 ]; } || return 0
+    # 这个 shell 的 read 必须支持 -t, 不支持就不刷新
+    # read -t 不是 POSIX, 这里先探测, 不支持的 shell 直接不刷新
+    # shellcheck disable=SC3045
+    ( IFS= read -r -t 1 _tui_probe ) </dev/null 2>/dev/null
+    [ $? -eq 1 ] || return 0
+    # 刷新用绝对行号重写内存行, 所以整个主菜单 (到提示符所在行 $1) 必须完整在屏幕内, 否则滚动后行号会错
+    # 标准 24 行终端可以: 清屏后提示符在第 20 行, 非 root 多一行警告, 重绘时再多一行提示
+    _rows=$(stty size 2>/dev/null | cut -d' ' -f1)
+    case $_rows in ''|*[!0-9]*) _rows=${LINES:-0} ;; esac
+    case $_rows in ''|*[!0-9]*) return 0 ;; esac
+    [ "$_rows" -ge $((${1:-21} + 1)) ] || return 0
+    TUI_TICK_SEC=$_n
+    TUI_TICK_ON=1
+}
+
+# 重写内存行 (绝对第 7 行, 前提是主菜单刚清屏重绘), 保存与恢复光标
+_tui_tick_mem() {
+    printf '\033%s\033[7;1H\033[2K%s\033%s' 7 "$(_tui_mem_text)" 8
+}
+
+# 当前时间, 单位 0.01 秒, 结果在 TUI_NOW: 读 /proc/uptime 不需要启动进程, 读不到就退回整秒的 date
+_tui_now() {
+    local _u _f
+    if IFS=' ' read -r _u _f < /proc/uptime 2>/dev/null && [ -n "$_u" ]; then
+        _f=${_u#*.}
+        TUI_NOW=$(( ${_u%.*} * 100 + ${_f#0} ))
+    else
+        TUI_NOW=$(( $(date +%s) * 100 ))
+    fi
+}
+
+# 读取一行选择: 刷新开启时每个间隔超时一次并更新内存行, 其余与 read -r 完全一致
+# BusyBox 的超时与 EOF 返回码相同, 所以用耗时区分: 等满间隔才算超时, EOF (含 Ctrl-D 与连接断开) 会提前返回
+_tui_read_choice() {
+    local _t0
+    if [ "${TUI_TICK_ON:-0}" != 1 ]; then
+        IFS= read -r _c
+        return $?
+    fi
+    while :; do
+        _tui_now
+        _t0=$TUI_NOW
+        # shellcheck disable=SC3045
+        if IFS= read -r -t "$TUI_TICK_SEC" _c; then return 0; fi
+        _tui_now
+        # 没等满间隔就失败: EOF 或错误, 不重试 (留 50 毫秒余量给调度抖动)
+        [ $((TUI_NOW - _t0)) -ge $((TUI_TICK_SEC * 100 - 5)) ] || return 1
+        _tui_tick_mem
+    done
+}
+
 # tui_choose ITEMS BACKLABEL: 无效输入只提示并继续, 0 q EOF 返回 back
 tui_choose() {
     local _n _c
@@ -156,7 +234,7 @@ tui_choose() {
         printf '0. %s\n' "$2"
         printf '\n请选择：'
         _c=
-        if ! IFS= read -r _c; then
+        if ! _tui_read_choice; then
             TUI_EOF=1
             TUI_KEY=back
             printf '\n'
@@ -165,12 +243,17 @@ tui_choose() {
         _c=$(printf '%s' "$_c" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
         case $_c in
             0|q|Q) TUI_KEY=back; return 0 ;;
-            ''|*[!0-9]*) printf '输入无效，请重新选择。\n\n' ;;
+            ''|*[!0-9]*)
+                # 主菜单刷新模式: 不在下面追加重打 (会滚屏), 交给主菜单清屏重绘并带一行提示
+                if [ "${TUI_TICK_ON:-0}" = 1 ]; then TUI_KEY=invalid; return 0; fi
+                printf '输入无效，请重新选择。\n\n'
+                ;;
             *)
                 if [ "$_c" -ge 1 ] && [ "$_c" -le "$_n" ]; then
                     TUI_KEY=$(printf '%s\n' "$1" | grep . | sed -n "${_c}p" | cut -d'|' -f1)
                     return 0
                 fi
+                if [ "${TUI_TICK_ON:-0}" = 1 ]; then TUI_KEY=invalid; return 0; fi
                 printf '输入无效，请重新选择。\n\n'
                 ;;
         esac
@@ -275,7 +358,18 @@ singbox|sing-box 日志" "返回"
 _tui_resources() {
     local _k _p
     env_probe_memory
-    printf '系统内存：%s MiB，限制 %s MiB，当前使用 %s MiB\n' "$(apm_mib "$ENV_MEM_TOTAL")" "$(apm_mib "$ENV_MEM_LIMIT")" "$(apm_mib "$ENV_MEM_CUR")"
+    # 标签按真实来源区分: 有 cgroup 上限时这是容器内存, 否则才是系统内存, 读不到就显示未知, 不编数字
+    if [ "${ENV_MEM_LIMIT:-0}" -le 0 ] 2>/dev/null || [ "${ENV_MEM_CUR:-0}" -lt 0 ] 2>/dev/null; then
+        printf '内存：未知\n'
+    else
+        case $ENV_MEM_LIMIT_SRC in
+            cgroup-*)
+                printf '容器内存：当前使用 %s MiB，限制 %s MiB（来源 %s）\n' "$(apm_mib "$ENV_MEM_CUR")" "$(apm_mib "$ENV_MEM_LIMIT")" "$ENV_MEM_LIMIT_SRC"
+                [ "$ENV_MEM_CUR_SRC" = cgroup ] || printf '说明：当前使用量来自 /proc/meminfo，不是 cgroup 统计\n'
+                ;;
+            *) printf '系统内存：当前使用 %s MiB，总计 %s MiB（没有容器内存限制）\n' "$(apm_mib "$ENV_MEM_CUR")" "$(apm_mib "$ENV_MEM_LIMIT")" ;;
+        esac
+    fi
     for _k in $CORE_KEYS; do
         core_discover "$_k"
         _p=$CF_PID
@@ -886,7 +980,7 @@ toggle|启用"
 policy|目标访问限制
 egress|SOCKS 出口
 endpoint|客户端连接地址（Public Endpoint）
-export|客户端配置导出
+export|客户端配置
 secret|查看凭据
 delete|删除实例"
         tui_choose "$_items" "返回"
@@ -1185,7 +1279,7 @@ tui_export_menu() { # ID, 只用于 sing-box 实例, Snell 的客户端信息见
     _t=$(kv_get "$_f" type)
     while :; do
         _tui_clear
-        _tui_header "客户端配置导出 $1"
+        _tui_header "客户端配置 $1"
         _tui_do singbox_cli endpoint "$1" show
         if _sb_type_tls "$_t"; then
             printf '证书校验：跳过（自签名，免维护）\n'
@@ -1237,28 +1331,39 @@ endpoint|设置客户端连接地址"
 # ---- 主菜单 ----
 
 tui_main_menu() {
+    local _extra _note
+    _note=
     while :; do
         _tui_clear
         _tui_header "Alpine Proxy Manager"
         printf '版本：%s\nBuild：%s\n\n' "$(apm_version)" "$(apm_build)"
+        printf '%s\n\n' "$(_tui_mem_text)"
         printf 'Core 状态：\n'
         _tui_core_line snell
         _tui_core_line singbox
-        env_is_root || _tui_warn "当前不是 root，只能查看，写操作不可用"
+        _extra=0
+        if ! env_is_root; then _tui_warn "当前不是 root，只能查看，写操作不可用"; _extra=$((_extra + 1)); fi
         _tui_rule
+        if [ -n "$_note" ]; then printf '%s\n' "$_note"; _note=; _extra=$((_extra + 1)); fi
+        # 清屏后提示符固定在第 20 行, 警告与提示各多一行
+        _tui_tick_init $((20 + _extra))
         tui_choose "snell|Snell
 singbox|sing-box
 status|状态与诊断
 log|日志
 manager|Manager 管理" "退出"
+        # 离开主菜单后立即停止刷新, 子菜单不受影响
+        TUI_TICK_ON=0
         case $TUI_KEY in
             back) return 0 ;;
+            invalid) _note='输入无效，请重新选择。'; continue ;;
             snell) tui_snell_menu ;;
             singbox) tui_singbox_menu ;;
             status) tui_status_menu ;;
             log) tui_log_menu ;;
             manager) tui_manager_menu ;;
         esac
+        TUI_TICK_ON=0
         [ "$TUI_EXIT" != 1 ] || return 0
     done
 }

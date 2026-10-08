@@ -5,7 +5,8 @@ set -eu
 cd /src
 
 # util-linux-misc 提供 script, 只用于测试里分配伪终端 (apm 的 TTY 行为)
-apk add --no-cache shellcheck git util-linux-misc >/dev/null
+# tmux 是真实终端模拟器, 只用于测试主菜单内存刷新的光标行为, Manager 本身不依赖它
+apk add --no-cache shellcheck git util-linux-misc tmux >/dev/null
 printf 'Alpine %s, shellcheck %s\n' "$(cat /etc/alpine-release)" "$(shellcheck --version | sed -n 's/^version: //p')"
 
 echo '== sh -n'

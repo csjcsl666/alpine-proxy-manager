@@ -92,7 +92,7 @@ done
 snellmenu=$(printf '%s\n' "$out" | sed -n '/^ Snell$/,/^请选择/p')
 assert_not_contains "Snell 菜单不再有 Public Endpoint 入口" "$snellmenu" "Public Endpoint"
 assert_not_contains "Snell 菜单不再有客户端连接地址入口" "$snellmenu" "客户端连接地址"
-assert_not_contains "Snell 菜单不再有客户端配置导出入口" "$snellmenu" "客户端配置导出"
+assert_not_contains "Snell 菜单不再有客户端配置导出入口" "$snellmenu" "客户端配置"
 out=$(T '2\n0\n0\n0\n')
 for item in "查看详细信息" "停止" "重启" "检查配置" "查看日志" "更新" "卸载"; do
     assert_contains "sing-box 菜单含 $item" "$out" ". $item"
@@ -224,7 +224,7 @@ assert_contains "AnyTLS 详情" "$out" "类型：anytls"
 assert_contains "AnyTLS 显示 TLS" "$out" "TLS："
 assert_contains "AnyTLS 密码只显示已配置" "$out" "密码：已配置"
 assert_contains "AnyTLS 客户端连接地址未配置" "$out" "客户端连接地址：未配置"
-for item in "修改实例" "禁用" "目标访问限制" "SOCKS 出口" "客户端连接地址（Public Endpoint）" "客户端配置导出" "查看凭据" "删除实例"; do
+for item in "修改实例" "禁用" "目标访问限制" "SOCKS 出口" "客户端连接地址（Public Endpoint）" "客户端配置" "查看凭据" "删除实例"; do
     assert_contains "实例详情含 $item" "$out" ". $item"
 done
 out=$(detail 4)
@@ -370,13 +370,21 @@ assert_eq "TUI 清除 endpoint" "" "$(kv_get "$(INST AnyTLS-01)" public.host)"
 out=$(T '2\n2\n1\n1\n5\n1\n0.0.0.0\n443\n\n0\n0\n0\n0\n')
 assert_contains "无效 endpoint 由业务层拒绝" "$out" "错误:"
 
-# ---- 客户端配置导出 ----
+# ---- 客户端配置 ----
 for id in AnyTLS-01 Hysteria2-01 TUIC-01 Shadowsocks-01; do
     "$PM" sing-box endpoint $id set example.com "3200$(printf '%s' "$id" | wc -c | tr -d ' ')" >/dev/null 2>&1
 done
 expo() { T "2\n2\n1\n$1\n6\n$2\n0\n0\n0\n0\n"; }
 out=$(expo 1 0)
 assert_contains "导出页含证书校验说明" "$out" "证书校验：跳过（自签名，免维护）"
+assert_contains "客户端配置页标题使用新名称" "$out" "客户端配置 AnyTLS-01"
+assert_not_contains "TUI 不再使用过时的客户端配置导出名称" "$out" "客户端配置导出"
+rn=$(detail 1)
+assert_contains "实例菜单入口名称是客户端配置" "$rn" "6. 客户端配置"
+assert_not_contains "实例菜单不再有客户端配置导出" "$rn" "客户端配置导出"
+rn=$(T '1\n6\n0\n0\n0\n')
+assert_contains "Snell 保持客户端信息命名" "$rn" "Snell · 客户端信息"
+assert_not_contains "Snell 客户端信息页没有被改名" "$rn" "Snell · 客户端配置"
 for item in "查看连接信息" "查看凭据" "导出 sing-box JSON" "导出 sing-box JSON（隐藏凭据）" "可选：嵌入证书固定校验" "导出分享 URL" "显示 QR（需要 qrencode）" "设置客户端连接地址"; do
     assert_contains "AnyTLS 导出页含 $item" "$out" "$item"
 done
@@ -573,7 +581,7 @@ assert_contains "系统状态来自 report_status" "$out" "Server SOCKS Egress"
 out=$(T '3\n3\n\n0\n0\n')
 assert_contains "doctor 来自 report_doctor" "$out" "Alpine Linux："
 out=$(T '3\n4\n\n0\n0\n')
-assert_contains "资源页" "$out" "系统内存："
+assert_contains "资源页" "$out" "内存："
 assert_contains "资源页说明不持续刷新" "$out" "不做持续刷新"
 out=$(T '5\n0\n0\n')
 assert_contains "Manager 页版本" "$out" "当前版本：$(cat "$T_ROOT/VERSION")"

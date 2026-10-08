@@ -4,7 +4,7 @@
 
 - 一条命令安装 中文为主的统一 TUI 管理界面 SSH 登录后输入短命令 `apm` 即可进入 完整的命令行
 - 管理 Snell 与 sing-box 两个 Core 的安装 更新 启停 卸载 并在 sing-box 上管理 AnyTLS Hysteria2 TUIC Shadowsocks 四种协议实例
-- 目标访问限制 SOCKS 出口 客户端连接地址 客户端配置导出 都按实例配置 四种协议共用同一套命令
+- 目标访问限制 SOCKS 出口 客户端连接地址 客户端配置 都按实例配置 四种协议共用同一套命令
 - 只管理自己安装的东西 其他方式部署的 Snell 与 sing-box 只读识别 绝不修改
 - 纯 POSIX sh 与 BusyBox 工具 没有常驻的管理进程 没有额外 runtime
 
@@ -84,7 +84,7 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 在交互式终端直接运行 `apm` 或 `apm tui` 完整命令 `proxy-manager` 与 `proxy-manager tui` 仍然保留 两者等价
 
 - 主菜单 Snell sing-box 状态与诊断 日志 Manager 管理 数字选择 `0` 返回 主菜单的 `0` 退出 Snell 与 sing-box 是两个独立的 Core 各自直接进入
-- sing-box 菜单里有 协议实例 与 SOCKS 出口 因为它们是 sing-box 提供的能力 没有 sing-box 就不能运行 目标访问限制 客户端配置导出 在具体的协议实例里 启用或禁用协议实例在 sing-box 运行且还有其他启用的实例时会先提示需要重启 sing-box
+- sing-box 菜单里有 协议实例 与 SOCKS 出口 因为它们是 sing-box 提供的能力 没有 sing-box 就不能运行 目标访问限制 客户端配置 在具体的协议实例里 启用或禁用协议实例在 sing-box 运行且还有其他启用的实例时会先提示需要重启 sing-box
 - Snell 菜单里的 `客户端信息` 提供 `查看连接信息` 与 `查看 PSK` Manager 菜单提供 查看版本 检查更新 更新 Manager 检查环境 查看帮助
 - 界面以中文为主 协议与技术名词保持原名
 - TUI 只是命令行的交互层 校验 保护与事务与命令行完全一致 现有部署只提供只读入口 不显示启动 停止 更新 卸载
