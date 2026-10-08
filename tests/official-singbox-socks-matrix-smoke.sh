@@ -21,7 +21,7 @@ ASSET="sing-box-$VER-linux-$ARCH-musl.tar.gz"
 URL="https://github.com/SagerNet/sing-box/releases/download/v$VER/$ASSET"
 W=$(mktemp -d)
 # shellcheck disable=SC2046
-cleanup() { kill $(jobs -p) 2>/dev/null; pkill -f "$W/" 2>/dev/null; rm -rf "$W"; }
+cleanup() { kill $(jobs -p) 2>/dev/null || true; pkill -f "$W/" 2>/dev/null || true; rm -rf "$W"; }
 trap cleanup EXIT
 
 if [ -n "${SB_BIN:-}" ]; then
