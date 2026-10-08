@@ -206,7 +206,9 @@ proxy-manager sing-box egress ID [show] | direct | socks 名称
 
 - 它与目标访问限制不是同一个功能 目标访问限制决定可以访问哪些目标 SOCKS 出口决定允许之后从哪里出去 两者可以同时使用 允许的目标会走该实例的出口 不会绕过 SOCKS
 - 一个 Profile 可以被多个实例共享 没有绑定就是 DIRECT 升级 Manager 不会改动现有实例
-- 只支持 SOCKS5 的 IPv4 与 IPv6 地址 不支持域名 认证只有无认证与用户名加密码 密码通过 `--password-stdin` 提供 不接受命令行明文
+- 只支持 SOCKS5 SOCKS5 服务器可以在本机 内网或公网 地址可以是 IPv4 `[IPv6]` 或主机名 主机名以小写存储 由 sing-box 在连接 SOCKS 服务器时解析 解析失败连接就失败 不回落 DIRECT 访问目标的域名不在本机解析 原样交给 SOCKS 服务器由上游解析 认证只有无认证与用户名加密码 密码通过 `--password-stdin` 提供 不接受命令行明文
+- UDP 通过 SOCKS5 UDP ASSOCIATE 转发 如果上游不支持 UDP 则 UDP 失败 不会直连 已用真实 SOCKS5 服务器验证
+- 仅 sing-box 的协议实例支持 SOCKS 出口 官方 Snell 没有 SOCKS5 出口能力 Manager 不提供 Snell 的 SOCKS 出口
 - Profile 被禁用 不存在 损坏 或 SOCKS 服务器不可达 认证失败 都不会回落 DIRECT 流量会失败 不自动切换 不负载均衡 不故障转移
 - 删除仍被实例引用的 Profile 会被拒绝并列出引用者 批量启用与禁用一次命令最多重启一次
 - 配置有效不代表 SOCKS 服务器可用 Manager 只报告配置已应用
@@ -266,7 +268,7 @@ AnyTLS Hysteria2 TUIC 使用 Manager 生成的自签名证书 客户端默认跳
 - 写操作 安装 更新 配置变更 开始后会忽略 Ctrl+C 断开 SSH 与 TERM 信号 避免留下半装的 Core 或与实例不一致的配置 所以中途关闭 SSH 窗口是安全的 命令会照常完成 只有下载阶段可以中断 如果某个写命令真的卡住 例如服务一直不响应 请在另一个终端用 `kill -9 进程号` 结束它 残留的锁会在下一次命令时自动清理
 - 公网可达性 NAT 与防火墙 Manager 不管理也没有验证
 - Hysteria2 的带宽 混淆 masquerade 等可选参数 TUIC 的可选调优参数 Shadowsocks 多用户 没有实现
-- 不包含 ACME 域名证书 Web 界面 自动 failover 负载均衡 域名形式的目标访问限制与 SOCKS 服务器
+- 不包含 ACME 域名证书 Web 界面 自动 failover 负载均衡 域名形式的目标访问限制 Snell 的 SOCKS 出口
 
 ## 安全提醒
 
