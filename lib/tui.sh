@@ -609,7 +609,7 @@ tui_singbox_menu() {
                 printf '管理：已接管\n'
                 printf 'Release：%s\n' "$CF_VERSION_EXACT"
                 printf '版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
-                printf '实例：%s，启用 %s\n' "$TUI_N_TOTAL" "$TUI_N_ON"
+                printf '协议实例：%s，启用 %s\n' "$TUI_N_TOTAL" "$TUI_N_ON"
                 ;;
         esac
         case $CF_STATE in crashed|broken) _tui_warn "sing-box 状态异常，详情见详细信息与日志" ;; esac
@@ -621,7 +621,9 @@ tui_singbox_menu() {
             external) _items="info|查看详细信息
 log|查看日志" ;;
             managed)
-                _items="info|查看详细信息"
+                _items="info|查看详细信息
+instances|协议实例
+socks|SOCKS 出口"
                 if [ "$CF_STATE" = running ]; then
                     _items="$_items
 stop|停止
@@ -642,6 +644,8 @@ uninstall|卸载"
             back) return 0 ;;
             install) _tui_singbox_install ;;
             info) _tui_do singbox_cli info; _tui_done ;;
+            instances) tui_instances_menu ;;
+            socks) tui_socks_menu ;;
             start|stop|restart) _tui_core_lifecycle singbox "$TUI_KEY" ;;
             check) _tui_do singbox_cli check; _tui_done ;;
             log) _tui_log singbox ;;
@@ -656,23 +660,6 @@ uninstall|卸载"
     done
 }
 
-tui_core_menu() {
-    while :; do
-        _tui_clear
-        _tui_header "Core 管理"
-        _tui_core_line snell
-        _tui_core_line singbox
-        printf '\n'
-        tui_choose "snell|管理 Snell
-singbox|管理 sing-box" "返回"
-        case $TUI_KEY in
-            back) return 0 ;;
-            snell) tui_snell_menu ;;
-            singbox) tui_singbox_menu ;;
-        esac
-    done
-}
-
 # ---- 实例选择与展示 ----
 
 # sing-box 实例相关的写操作要求 Core 已被接管
@@ -680,7 +667,7 @@ _tui_sb_managed() {
     _tui_core_kind singbox
     if [ "$TUI_CK" = managed ]; then return 0; fi
     case $TUI_CK in
-        none) printf 'sing-box 尚未安装，请先到 Core 管理中安装\n' ;;
+        none) printf 'sing-box 尚未安装，请先在 sing-box 菜单中安装\n' ;;
         external) printf 'sing-box 是现有部署，未接管，本项目不会修改它\n' ;;
         *) printf 'sing-box 状态未确认，拒绝写操作\n' ;;
     esac
@@ -701,7 +688,7 @@ _tui_inst_summary() { # FILE
 }
 
 # 选择实例, 结果在 TUI_PICK, 选择返回时失败
-_tui_pick_instance() { # include_snell
+_tui_pick_instance() {
     local _f _items _id
     _items=
     for _f in $(state_list_confs "$(state_instances_dir)"); do
@@ -709,8 +696,6 @@ _tui_pick_instance() { # include_snell
         _items="${_items}${_id}|${_id} ($(kv_get "$_f" type))
 "
     done
-    [ "$1" != snell ] || _items="${_items}snell|Snell
-"
     if [ -z "$(printf '%s' "$_items" | tr -d '\n')" ]; then
         printf '(没有实例)\n'
         _tui_pause
@@ -783,7 +768,7 @@ tuic|添加 TUIC
 shadowsocks|添加 Shadowsocks" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            manage) _tui_pick_instance no && tui_instance_menu "$TUI_PICK" ;;
+            manage) _tui_pick_instance && tui_instance_menu "$TUI_PICK" ;;
             *) _tui_add_instance "$TUI_KEY" ;;
         esac
     done
@@ -859,6 +844,22 @@ password|修改密码"
     done
 }
 
+# 启用或禁用实例会重新生成 sing-box 配置, Core 运行时需要重启整个 sing-box
+# 只有 Core 正在运行且还有其他启用的实例时才提示, 默认取消
+_tui_toggle_confirm() { # ID
+    local _f _n
+    _tui_core_kind singbox
+    [ "$CF_STATE" = running ] || return 0
+    _n=0
+    for _f in $(state_list_confs "$(state_instances_dir)"); do
+        [ "$(kv_get "$_f" id)" != "$1" ] || continue
+        [ "$(kv_get "$_f" enabled)" = true ] && _n=$((_n + 1))
+    done
+    [ "$_n" -gt 0 ] || return 0
+    tui_confirm "此操作需要重启 sing-box，
+可能短暂影响该 Core 下的其他协议实例。" || { _tui_pause; return 1; }
+}
+
 tui_instance_menu() { # ID
     local _f _t _items _ep
     _f=$(state_instances_dir)/$1.conf
@@ -894,6 +895,7 @@ delete|删除实例"
             edit) tui_instance_edit_menu "$1" ;;
             toggle)
                 _tui_need_root || continue
+                _tui_toggle_confirm "$1" || continue
                 if [ "$(kv_get "$_f" enabled)" = true ]; then _tui_do singbox_cli disable "$1"; else _tui_do singbox_cli enable "$1"; fi
                 _tui_done
                 ;;
@@ -1244,25 +1246,15 @@ tui_main_menu() {
         _tui_core_line singbox
         env_is_root || _tui_warn "当前不是 root，只能查看，写操作不可用"
         _tui_rule
-        tui_choose "core|Core 管理
-instances|协议实例
-policy|目标访问限制
-socks|SOCKS 出口
-export|客户端配置导出
+        tui_choose "snell|Snell
+singbox|sing-box
 status|状态与诊断
 log|日志
 manager|Manager 管理" "退出"
         case $TUI_KEY in
             back) return 0 ;;
-            core) tui_core_menu ;;
-            instances) tui_instances_menu ;;
-            policy) _tui_pick_instance no && tui_policy_menu "$TUI_PICK" ;;
-            socks) tui_socks_menu ;;
-            export)
-                if _tui_pick_instance snell; then
-                    if [ "$TUI_PICK" = snell ]; then tui_snell_client_menu; else tui_export_menu "$TUI_PICK"; fi
-                fi
-                ;;
+            snell) tui_snell_menu ;;
+            singbox) tui_singbox_menu ;;
             status) tui_status_menu ;;
             log) tui_log_menu ;;
             manager) tui_manager_menu ;;
