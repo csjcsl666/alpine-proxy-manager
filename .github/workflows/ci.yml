@@ -54,6 +54,10 @@ jobs:
         run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-egress-smoke.sh 1.13.14
       - name: Server SOCKS Egress 真实流量测试 v1.14.2
         run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-egress-smoke.sh 1.14.2
+      - name: SOCKS 出口真实流量矩阵 v1.13.14 (本机 内网 IPv6 主机名 TCP UDP DNS 故障)
+        run: docker run --rm --cap-add NET_ADMIN -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-socks-matrix-smoke.sh 1.13.14
+      - name: SOCKS 出口真实流量矩阵 v1.14.2
+        run: docker run --rm --cap-add NET_ADMIN -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-socks-matrix-smoke.sh 1.14.2
       - name: Client Export 真实客户端流量测试 v1.13.14
         run: docker run --rm -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/official-singbox-client-smoke.sh 1.13.14
       - name: Client Export 真实客户端流量测试 v1.14.2
