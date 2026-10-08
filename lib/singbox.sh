@@ -460,6 +460,32 @@ _sb_dest_stored_ok() { # host:port
     [ "$_n" = "$1" ]
 }
 
+# SOCKS 服务器地址: IPv4, [IPv6] 或主机名 (域名), 成功时在标准输出给出规范的 host:port, 失败时给出原因
+# 这只用于 SOCKS Profile, 目标访问限制仍然只接受 IP 地址
+# 主机名由 sing-box 在建立到 SOCKS 服务器的连接时解析, 解析失败连接就失败, 不会回落 DIRECT
+# 业务目标的域名不在这里解析, 原样交给 SOCKS 服务器, 由上游解析
+_sb_socks_host_normalize() { # HOST PORT
+    local _h _l
+    _h=$1
+    case $_h in
+        \[*\]|*:*) _sb_dest_normalize "$1" "$2"; return $? ;;
+    esac
+    # 只由数字和点组成的一律按 IPv4 校验, 不允许 999.1.1.1 这类数字串被当成主机名
+    if printf '%s' "$_h" | grep -Eq '^[0-9.]+$'; then _sb_dest_normalize "$1" "$2"; return $?; fi
+    is_port "$2" || { printf '端口无效: %s (需要 1 到 65535)' "$2"; return 1; }
+    _l=$(printf '%s' "$_h" | tr 'A-Z' 'a-z')
+    # 总长不超过 253, 每段 1 到 63 个字符, 只含字母数字和连字符, 不以连字符开头或结尾, 不接受结尾的点, 末段不能全是数字
+    if [ "${#_l}" -gt 253 ] || ! printf '%s' "$_l" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'; then
+        printf '主机名无效: %s' "$1"
+        return 1
+    fi
+    if printf '%s' "${_l##*.}" | grep -Eq '^[0-9]+$'; then
+        printf '主机名无效 (末段不能是纯数字): %s' "$1"
+        return 1
+    fi
+    printf '%s:%s' "$_l" "$2"
+}
+
 # 实例的目标列表, 每行 host:port, 按地址再按端口排序且去重前保持原样 以便校验发现重复
 _sb_policy_dests() { # FILE
     policy_destinations "$1" | LC_ALL=C sort -k1,1 -k2,2n | while read -r _h _p; do printf '%s:%s\n' "$_h" "$_p"; done
@@ -538,7 +564,7 @@ _sb_socks_for() { # INSTANCES_DIR
     if [ -d "$_s" ]; then printf '%s' "$_s"; else state_socks_dir; fi
 }
 
-# SOCKS Profile 校验: 通用模型校验加 sing-box 层的收紧, 第一版只接受 IPv4 或 [IPv6] 地址, 不接受主机名
+# SOCKS Profile 校验: 通用模型校验加 sing-box 层的收紧, 接受 IPv4, [IPv6] 地址或主机名 (规范小写)
 _sb_socks_check() { # FILE
     local _f _rc _h _p _n _u _w
     _f=$1
@@ -546,7 +572,7 @@ _sb_socks_check() { # FILE
     socks_validate "$_f" || return 1
     _h=$(kv_get "$_f" host)
     _p=$(kv_get "$_f" port)
-    _n=$(_sb_dest_normalize "$_h" "$_p") || { apm_err "$_f: host 必须是规范的 IPv4 或 [IPv6] 地址: $_n"; return 1; }
+    _n=$(_sb_socks_host_normalize "$_h" "$_p") || { apm_err "$_f: host 必须是规范的 IPv4, [IPv6] 地址或主机名: $_n"; return 1; }
     [ "${_n%:*}" = "$_h" ] || { apm_err "$_f: host 不是规范形式 (应为 ${_n%:*})"; _rc=1; }
     _u=$(kv_get "$_f" username)
     _w=$(kv_get "$_f" password)
@@ -2001,7 +2027,7 @@ singbox_socks() {
             done
             { [ -n "$_server" ] && [ -n "$_port" ]; } || { apm_err "需要 --server 与 --port"; return 2; }
             [ -z "$_name" ] || is_ident "$_name" || { apm_err "名称无效: $_name"; return 2; }
-            _norm=$(_sb_dest_normalize "$_server" "$_port") || { apm_err "$_norm"; return 2; }
+            _norm=$(_sb_socks_host_normalize "$_server" "$_port") || { apm_err "$_norm"; return 2; }
             _server=${_norm%:*}
             if [ "$_auth" = none ]; then
                 { [ -z "$_user" ] && [ "$_pwstdin" = no ]; } || { apm_err "--no-auth 不能与 --username 或 --password-stdin 同时使用"; return 2; }
@@ -2081,7 +2107,7 @@ singbox_socks() {
             [ -f "$_f" ] || { apm_err "SOCKS Profile $_name 不存在"; return 1; }
             case $_arg in
                 server)
-                    _norm=$(_sb_dest_normalize "$_val" "$(kv_get "$_f" port)") || { apm_err "$_norm"; return 2; }
+                    _norm=$(_sb_socks_host_normalize "$_val" "$(kv_get "$_f" port)") || { apm_err "$_norm"; return 2; }
                     _sb_inst_set "$_f" host "${_norm%:*}" || return 1 ;;
                 port) _sb_inst_set "$_f" port "$_val" || return 1 ;;
                 no-auth) _sb_inst_unset "$_f" username || return 1; _sb_inst_unset "$_f" password || return 1 ;;
