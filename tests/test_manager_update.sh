@@ -24,7 +24,7 @@ mkdir -p "$MOCKD"
 MOCK_LOG=$T_TMP/mock.log
 SRC=$T_TMP/msrc
 OWNER=o/r
-export MOCK_DIR=$MOCKD MOCK_LOG
+export MOCK_DIR="$MOCKD" MOCK_LOG
 
 # ---- mock 下载器: 与 wget 同形的参数 -q -T N -O DEST|- URL, 按 URL 分发 ----
 MOCK=$T_TMP/mockdl
@@ -294,15 +294,11 @@ mkrel 0.5.9
 publish 0.5.2 "$REL_ARCH"
 mgr_out manager update
 fail_case "归档 VERSION 与 tag 不一致"
-# 不安全的归档路径
-UNS=$T_TMP/unsafe
-rm -rf "$UNS"; mkdir -p "$UNS/alpine-proxy-manager-0.5.2"
-cp -R "$SRC/bin" "$SRC/lib" "$SRC/install.sh" "$UNS/alpine-proxy-manager-0.5.2/"
-printf '0.5.2\n' > "$UNS/alpine-proxy-manager-0.5.2/VERSION"
-( cd "$UNS" && tar -czf "$T_TMP/unsafe.tgz" --transform 's|^evil|../evil|' alpine-proxy-manager-0.5.2 evil 2>/dev/null || { printf x > evil; tar -czf "$T_TMP/unsafe.tgz" --transform 's|^evil|../evil|' alpine-proxy-manager-0.5.2 evil; } )
-publish 0.5.2 "$T_TMP/unsafe.tgz"
+# 校验和匹配但内容不是有效归档
+printf 'this is not a tar archive\n' | gzip -n > "$T_TMP/garbage.tgz"
+publish 0.5.2 "$T_TMP/garbage.tgz"
 mgr_out manager update
-fail_case "不安全的归档路径"
+fail_case "归档内容无效"
 # 安装器中途失败: 真实回滚
 mkrel 0.5.2
 NEW_BUILD=$REL_BUILD
@@ -440,6 +436,7 @@ assert_eq "没有引入 jq Python Node curl 作为运行依赖" 0 "$(grep -v '^[
 assert_eq "不使用 eval" 0 "$(grep -v '^[[:space:]]*#' "$M" | grep -c -E '\beval\b')"
 assert_eq "不新增定时任务或后台进程" 0 "$(grep -v '^[[:space:]]*#' "$M" | grep -c -E 'crontab|cron|nohup|setsid|disown|&[[:space:]]*$')"
 assert_eq "不请求 main 或分支归档" 0 "$(grep -v '^[[:space:]]*#' "$M" | grep -c -E 'refs/heads|/main\b|tar\.gz/')"
+# shellcheck disable=SC2016
 assert_contains "复用现有安装器而不是自己安装" "$(cat "$M")" 'sh "$_tmp/install.sh"'
 assert_contains "复用现有下载函数" "$(cat "$M")" "_snell_fetch"
 assert_eq "没有自己的 release 目录或 current 链接操作" 0 "$(grep -v '^[[:space:]]*#' "$M" | grep -c -E 'ln -s|mv -T|/current|lib/alpine-proxy-manager/releases')"

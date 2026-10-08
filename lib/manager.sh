@@ -32,7 +32,7 @@ _mgr_get() {
 }
 
 # 把 JSON 规整成每行一个字段, 再取第一个匹配的字符串值或布尔值, 值之后由调用方用严格正则校验
-_mgr_json_lines() { tr '{},' '\n\n\n'; }
+_mgr_json_lines() { sed 's/[{},]/\n/g'; }
 _mgr_json_str() { # 键
     sed -n 's/^[[:space:]]*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"\\]*\)"[[:space:]]*$/\1/p' | head -n 1
 }
