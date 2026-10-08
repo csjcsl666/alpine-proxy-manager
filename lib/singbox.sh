@@ -473,7 +473,7 @@ _sb_socks_host_normalize() { # HOST PORT
     # 只由数字和点组成的一律按 IPv4 校验, 不允许 999.1.1.1 这类数字串被当成主机名
     if printf '%s' "$_h" | grep -Eq '^[0-9.]+$'; then _sb_dest_normalize "$1" "$2"; return $?; fi
     is_port "$2" || { printf '端口无效: %s (需要 1 到 65535)' "$2"; return 1; }
-    _l=$(printf '%s' "$_h" | tr 'A-Z' 'a-z')
+    _l=$(printf '%s' "$_h" | tr '[:upper:]' '[:lower:]')
     # 总长不超过 253, 每段 1 到 63 个字符, 只含字母数字和连字符, 不以连字符开头或结尾, 不接受结尾的点, 末段不能全是数字
     if [ "${#_l}" -gt 253 ] || ! printf '%s' "$_l" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'; then
         printf '主机名无效: %s' "$1"

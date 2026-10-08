@@ -20,6 +20,7 @@ esac
 ASSET="sing-box-$VER-linux-$ARCH-musl.tar.gz"
 URL="https://github.com/SagerNet/sing-box/releases/download/v$VER/$ASSET"
 W=$(mktemp -d)
+# shellcheck disable=SC2046
 cleanup() { kill $(jobs -p) 2>/dev/null; pkill -f "$W/" 2>/dev/null; rm -rf "$W"; }
 trap cleanup EXIT
 
@@ -230,8 +231,8 @@ expect "只支持 TCP 的上游 (dante): TCP 经过上游" 127.0.0.77 "$(peer An
 expect "Shadowsocks 经过上游: TCP" 127.0.0.77 "$(peer Shadowsocks-01-tcp)"
 
 echo "-- DNS: 域名目标原样交给上游, 由上游解析"
-grep -q 'inbound connection to target.test:24001' up-U1.log && ok "上游 SOCKS 收到的是域名 target.test, 不是服务器解析后的 IP" || bad "上游没有收到域名"
-grep -q 'inbound connection to 127.0.0.1:24001' up-U1.log && ok "IP 目标原样到达上游" || bad "上游没有收到 IP 目标"
+if grep -q 'inbound connection to target.test:24001' up-U1.log; then ok "上游 SOCKS 收到的是域名 target.test, 不是服务器解析后的 IP"; else bad "上游没有收到域名"; fi
+if grep -q 'inbound connection to 127.0.0.1:24001' up-U1.log; then ok "IP 目标原样到达上游"; else bad "上游没有收到 IP 目标"; fi
 
 echo "-- UDP"
 case $(getr Shadowsocks-01 udp) in "UDP_OK "*) ok "UDP 经 SOCKS5 UDP ASSOCIATE 到达目标并返回" ;; *) bad "UDP 没有返回: $(getr Shadowsocks-01 udp)" ;; esac
@@ -246,6 +247,7 @@ pkill -f "up-U1.json"
 sleep 1
 n0=$(wc -l < target.log)
 for k in "AnyTLS-01 tcp" "AnyTLS-01 dom" "AnyTLS-06 tcp" "Shadowsocks-01 tcp"; do
+    # shellcheck disable=SC2086
     set -- $k
     cp=$(awk -v i="$1" -v kk="$2" '$1 == i && $2 == kk { print $3 }' map)
     r=$(probe "$2" "$cp" "$1")
