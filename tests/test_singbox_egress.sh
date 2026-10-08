@@ -199,8 +199,16 @@ fc "egress_socks 为空" "$G.j"
 rm -f "$G.j/TUIC-01.conf"
 mkinst "$G.j" TUIC-01 tuic 20003 true
 add_lines "$G.j" TUIC-01 egress_socks=SOCKS-01
-mkprof "$G.j.socks" SOCKS-01 example.com 1080 true
-fc "Profile 的地址是主机名 (第一版只支持 IP)" "$G.j"
+mkprof "$G.j.socks" SOCKS-01 bad_host 1080 true
+fc "Profile 的地址是非法主机名 (下划线)" "$G.j"
+mkprof "$G.j.socks" SOCKS-01 -bad.example.com 1080 true
+fc "Profile 的地址是非法主机名 (连字符开头)" "$G.j"
+mkprof "$G.j.socks" SOCKS-01 Proxy.Example.com 1080 true
+fc "Profile 的主机名必须是规范小写" "$G.j"
+mkprof "$G.j.socks" SOCKS-01 proxy.example.com 1080 true
+gen "$G.j" >/dev/null 2>&1
+assert_eq "Profile 的地址是规范的主机名可以生成" 0 $?
+assert_contains "主机名原样写入 sing-box 出站" "$(gen "$G.j" 2>/dev/null)" '"server": "proxy.example.com"'
 mkprof "$G.j.socks" SOCKS-01 192.0.2.10 1080 true onlyuser
 fc "Profile 只有用户名" "$G.j"
 mkprof "$G.j.socks" SOCKS-01 192.0.2.10 1080 true
@@ -233,7 +241,7 @@ fc "Profile name 与文件名不一致" "$G.j"
 # 异常的未使用 Profile 不阻止生成
 rm -f "$G.j/TUIC-01.conf"
 mkinst "$G.j" TUIC-01 tuic 20003 true
-mkprof "$G.j.socks" SOCKS-55 example.com 1080 true
+mkprof "$G.j.socks" SOCKS-55 bad_host 1080 true
 gen "$G.j" >/dev/null 2>&1
 assert_eq "没有被使用的异常 Profile 不阻止生成" 0 $?
 # 路径穿越的绑定名被拒绝
@@ -305,7 +313,12 @@ badadd "--no-auth 加 --password-stdin" x --server 192.0.2.10 --port 1080 --no-a
 badadd "命令行明文密码" x --server 192.0.2.10 --port 1080 --username u --password plain
 badadd "缺少 server" x --port 1080 --no-auth
 badadd "缺少 port" x --server 192.0.2.10 --no-auth
-badadd "主机名" x --server proxy.example.com --port 1080 --no-auth
+badadd "主机名含下划线" x --server bad_host --port 1080 --no-auth
+badadd "主机名连字符开头" x --server -proxy.example.com --port 1080 --no-auth
+badadd "主机名结尾的点" x --server proxy.example.com. --port 1080 --no-auth
+badadd "主机名末段是纯数字" x --server proxy.1 --port 1080 --no-auth
+badadd "主机名过长" x --server "$(printf 'a%.0s' $(seq 1 64)).example.com" --port 1080 --no-auth
+badadd "数字串不是主机名" x --server 999.1.1.1 --port 1080 --no-auth
 badadd "非法 IPv4" x --server 256.1.1.1 --port 1080 --no-auth
 badadd "非法端口 0" x --server 192.0.2.10 --port 0 --no-auth
 badadd "非法端口 70000" x --server 192.0.2.10 --port 70000 --no-auth
@@ -496,8 +509,13 @@ assert_eq "未使用时不重启 sing-box" "$R8" "$(count_calls restart)"
 assert_eq "端口已写入" 1090 "$(kv_get "$(PROF SOCKS-03)" port)"
 "$PM" sing-box socks set SOCKS-03 server 192.0.2.77 >/dev/null 2>&1
 assert_eq "server 已写入" 192.0.2.77 "$(kv_get "$(PROF SOCKS-03)" host)"
-"$PM" sing-box socks set SOCKS-03 server proxy.example.com >/dev/null 2>&1
-assert_eq "set server 主机名被拒绝" 2 $?
+"$PM" sing-box socks set SOCKS-03 server bad_host >/dev/null 2>&1
+assert_eq "set server 非法主机名被拒绝" 2 $?
+"$PM" sing-box socks set SOCKS-03 server Proxy.Example.COM >/dev/null 2>&1
+assert_eq "set server 主机名被接受" 0 $?
+assert_eq "主机名以规范小写存储" proxy.example.com "$(kv_get "$(PROF SOCKS-03)" host)"
+"$PM" sing-box socks set SOCKS-03 server 192.0.2.77 >/dev/null 2>&1
+assert_eq "改回 IP 地址" 192.0.2.77 "$(kv_get "$(PROF SOCKS-03)" host)"
 "$PM" sing-box socks set SOCKS-03 port 0 >/dev/null 2>&1
 assert_eq "set port 非法返回 2" 2 $?
 "$PM" sing-box socks set SOCKS-03 port 1090 extra >/dev/null 2>&1
