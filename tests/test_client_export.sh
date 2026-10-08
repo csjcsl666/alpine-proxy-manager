@@ -355,6 +355,42 @@ SPID0=$(core_discover snell; printf '%s' "$CF_PID")
 SRS0=$(grep -c '^snell restart$' "$K/calls" 2>/dev/null || true)
 assert_fail "Snell 没有 endpoint 时 export show 失败" "$PM" snell export show
 assert_contains "Snell 没有 endpoint 的提示" "$("$PM" snell export show 2>&1)" "尚未配置客户端连接地址"
+# snell export info: 不依赖 endpoint, 公网 IP 按需查询 (mock 下载器), 失败时降级, 只读
+IPMOCK=$T_TMP/ipmock_ce
+cat > "$IPMOCK" <<'EOS'
+#!/bin/sh
+printf '%s\n' "$*" >> "$IP_LOG"
+case ${IP_MODE:-ok} in
+    ok) printf '93.184.216.34\n' ;;
+    bad) printf '<html>nope</html>\n' ;;
+    fail) exit 1 ;;
+esac
+EOS
+chmod +x "$IPMOCK"
+IP_LOG=$T_TMP/ip_ce.log
+: > "$IP_LOG"
+export IP_LOG
+out=$(APM_DOWNLOADER=$IPMOCK "$PM" snell export info 2>&1)
+assert_contains "info 不需要 endpoint 就能用" "$out" "Snell 连接信息"
+assert_contains "info 公网 IP 来自查询" "$out" "公网 IP：93.184.216.34"
+assert_contains "info 监听端口来自 Snell 配置" "$out" "监听端口：20000"
+assert_contains "info Snell 版本" "$out" "Snell 版本：v6.0.0"
+assert_contains "info PSK 只显示已配置" "$out" "PSK：已配置"
+assert_not_contains "info 不含 PSK" "$out" "SnellClientPsk0123456789abcdef"
+assert_not_contains "info 不要求 endpoint" "$out" "尚未配置客户端连接地址"
+assert_contains "info 查询走 HTTPS" "$(cat "$IP_LOG")" "https://"
+out=$(IP_MODE=bad APM_DOWNLOADER=$IPMOCK "$PM" snell export info 2>&1)
+assert_contains "info 无效响应降级" "$out" "公网 IP：获取失败"
+assert_contains "info 降级时端口仍显示" "$out" "监听端口：20000"
+out=$(IP_MODE=fail APM_DOWNLOADER=$IPMOCK "$PM" snell export info 2>&1)
+assert_contains "info 网络失败降级" "$out" "公网 IP：获取失败"
+APM_DOWNLOADER=$IPMOCK IP_MODE=fail "$PM" snell export info >/dev/null 2>&1
+assert_eq "info 查询失败时命令本身仍成功" 0 $?
+assert_fail "info 没有创建 endpoint" test -e "$A/etc/alpine-proxy-manager/snell-endpoint.conf"
+assert_eq "info 没有改 Snell 配置" "$SC0" "$(cksum < "$A/etc/snell/snell-server.conf")"
+assert_eq "info 后 show 仍要求 endpoint (旧行为兼容)" 1 "$("$PM" snell export show >/dev/null 2>&1; echo $?)"
+"$PM" snell export info extra >/dev/null 2>&1
+assert_eq "info 不接受多余参数" 2 $?
 assert_contains "Snell secret 不需要 endpoint" "$("$PM" snell export secret 2>/dev/null)" "psk：SnellClientPsk0123456789abcdef"
 assert_contains "Snell secret 警告" "$("$PM" snell export secret 2>&1 >/dev/null)" "警告：以下内容包含客户端凭据"
 "$PM" snell endpoint set Snell.Example.com 32100 >/dev/null 2>&1
