@@ -24,6 +24,7 @@ TUI_PICK=
 TUI_STTY_SAVED=
 TUI_EOF=0
 TUI_RC=0
+TUI_EXIT=0
 
 # ---- 终端能力 ----
 
@@ -307,23 +308,90 @@ res|资源使用" "返回"
     done
 }
 
+# Manager 自更新的确认与执行: 只更新 Manager 本身, 实际升级由 manager_cli update 复用现有安装器完成
+# 成功后当前 TUI 进程仍是旧代码, 所以提示重新运行 apm 并退出, 避免误以为已经进入新版
+_tui_manager_confirm_update() { # 目标版本
+    _tui_need_root || return 0
+    tui_confirm "Manager · 更新
+
+当前版本：$(apm_version)
+目标版本：$1
+
+此次操作只更新 Alpine Proxy Manager。
+
+以下内容不会被主动修改：
+- Snell 服务及配置
+- sing-box 服务及配置
+- 协议实例
+- SOCKS Profile
+- 目标访问限制
+- PSK / 密钥
+- 客户端连接地址
+" || { _tui_pause; return 0; }
+    _tui_do manager_cli update
+    if [ "$TUI_RC" -eq 0 ]; then TUI_EXIT=1; fi
+    _tui_done
+}
+
+# 查询并展示, 结果的返回码 10 表示发现新版本, 最新版本号放在 TUI_MGR_VER
+_tui_manager_probe() {
+    local _out
+    printf '正在查询 GitHub 最新正式 Release ...\n\n'
+    _out=$( ( manager_cli check-update ) </dev/null 2>&1 )
+    TUI_RC=$?
+    printf '%s\n' "$_out"
+    TUI_MGR_VER=$(printf '%s\n' "$_out" | sed -n 's/^最新正式版：//p' | head -n 1)
+    printf '%s' "$TUI_MGR_VER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || TUI_MGR_VER=
+}
+
+tui_manager_check() {
+    _tui_clear
+    _tui_header "Manager · 检查更新"
+    _tui_manager_probe
+    if [ "$TUI_RC" -eq 10 ] && [ -n "$TUI_MGR_VER" ]; then
+        printf '\n'
+        tui_choose "up|更新到 $TUI_MGR_VER" "返回"
+        [ "$TUI_KEY" != up ] || _tui_manager_confirm_update "$TUI_MGR_VER"
+    else
+        _tui_pause
+    fi
+}
+
+tui_manager_update() {
+    _tui_clear
+    _tui_header "Manager · 更新"
+    _tui_need_root || return 0
+    _tui_manager_probe
+    if [ "$TUI_RC" -eq 10 ] && [ -n "$TUI_MGR_VER" ]; then
+        printf '\n'
+        _tui_manager_confirm_update "$TUI_MGR_VER"
+    else
+        _tui_pause
+    fi
+}
+
 tui_manager_menu() {
     while :; do
         _tui_clear
         _tui_header "Manager 管理"
         printf '当前版本：%s\nBuild：%s\n\n' "$(apm_version)" "$(apm_build)"
         tui_choose "ver|查看版本
+check|检查更新
+update|更新 Manager
 doctor|检查环境
 help|查看帮助" "返回"
         case $TUI_KEY in
             back) return 0 ;;
             ver) _tui_do apm_print_version; _tui_done ;;
+            check) tui_manager_check ;;
+            update) tui_manager_update ;;
             doctor) _tui_do report_doctor; _tui_done ;;
             help)
                 if command -v usage >/dev/null 2>&1; then _tui_do usage; else printf '帮助：proxy-manager help\n'; TUI_RC=0; fi
                 _tui_done
                 ;;
         esac
+        [ "$TUI_EXIT" != 1 ] || return 0
     done
 }
 
@@ -414,6 +482,28 @@ _tui_snell_install() {
     _tui_done
 }
 
+# Snell 的客户端信息: 只有两个操作, 不需要先设置客户端连接地址
+#   查看连接信息 经 snell export info 按需查询服务器公网 IP, 端口与版本来自 Snell 现有配置, 只读, 查询失败时其余信息照常显示
+#   查看 PSK 先确认, 默认 N, 经 snell export secret 显示, 不生成不修改
+tui_snell_client_menu() {
+    while :; do
+        _tui_clear
+        _tui_header "Snell · 客户端信息"
+        tui_choose "info|查看连接信息
+psk|查看 PSK" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            info) _tui_do snell_cli export info; _tui_done ;;
+            psk)
+                tui_confirm "即将显示 Snell PSK。
+请注意终端记录和截图可能泄漏凭据。" || { _tui_pause; continue; }
+                _tui_do snell_cli export secret
+                _tui_done
+                ;;
+        esac
+    done
+}
+
 tui_snell_menu() {
     local _items
     while :; do
@@ -455,8 +545,7 @@ start|启动"
                 _items="$_items
 config|修改配置
 log|查看日志
-endpoint|客户端连接地址（Public Endpoint）
-export|客户端配置导出
+client|客户端信息
 update|更新
 uninstall|卸载"
                 ;;
@@ -469,8 +558,7 @@ uninstall|卸载"
             start|stop|restart) _tui_core_lifecycle snell "$TUI_KEY" ;;
             config) tui_snell_config_menu ;;
             log) _tui_log snell ;;
-            endpoint) tui_endpoint_menu snell ;;
-            export) tui_export_menu snell ;;
+            client) tui_snell_client_menu ;;
             update)
                 _tui_need_root || continue
                 tui_confirm "将联网下载 Snell 官方 release，失败会自动回滚" || { _tui_pause; continue; }
@@ -824,9 +912,9 @@ delete|删除实例"
     done
 }
 
-_tui_show_secret() { # ID | snell
+_tui_show_secret() { # ID
     tui_confirm "即将显示客户端凭据。终端记录或截图可能包含 Secret。" || { _tui_pause; return 0; }
-    if [ "$1" = snell ]; then _tui_do snell_cli export secret; else _tui_do singbox_cli export "$1" secret; fi
+    _tui_do singbox_cli export "$1" secret
     _tui_done
 }
 
@@ -1059,12 +1147,12 @@ disable-all|批量禁用" "返回"
 
 # ---- 客户端连接地址与导出 ----
 
-tui_endpoint_menu() { # ID | snell
+tui_endpoint_menu() { # ID
     local _h
     while :; do
         _tui_clear
         _tui_header "客户端连接地址（Public Endpoint） $1"
-        if [ "$1" = snell ]; then _tui_do snell_cli endpoint show; else _tui_do singbox_cli endpoint "$1" show; fi
+        _tui_do singbox_cli endpoint "$1" show
         printf '\n说明：只记录客户端应该连接的地址，不配置 NAT 与防火墙，修改不会重启服务\n\n'
         tui_choose "set|设置
 clear|清除" "返回"
@@ -1077,56 +1165,48 @@ clear|清除" "返回"
                 _h=$TUI_IN
                 tui_ask "端口："
                 [ -n "$TUI_IN" ] || continue
-                if [ "$1" = snell ]; then _tui_do snell_cli endpoint set "$_h" "$TUI_IN"; else _tui_do singbox_cli endpoint "$1" set "$_h" "$TUI_IN"; fi
+                _tui_do singbox_cli endpoint "$1" set "$_h" "$TUI_IN"
                 _tui_done
                 ;;
             clear)
                 _tui_need_root || continue
-                if [ "$1" = snell ]; then _tui_do snell_cli endpoint clear; else _tui_do singbox_cli endpoint "$1" clear; fi
+                _tui_do singbox_cli endpoint "$1" clear
                 _tui_done
                 ;;
         esac
     done
 }
 
-tui_export_menu() { # ID | snell
-    local _f _t _items _ep
-    _t=snell
-    if [ "$1" != snell ]; then
-        _f=$(state_instances_dir)/$1.conf
-        _t=$(kv_get "$_f" type)
-    fi
+tui_export_menu() { # ID, 只用于 sing-box 实例, Snell 的客户端信息见 tui_snell_client_menu
+    local _f _t _items
+    _f=$(state_instances_dir)/$1.conf
+    _t=$(kv_get "$_f" type)
     while :; do
         _tui_clear
         _tui_header "客户端配置导出 $1"
-        if [ "$1" = snell ]; then _tui_do snell_cli endpoint show; else _tui_do singbox_cli endpoint "$1" show; fi
-        if [ "$1" != snell ] && _sb_type_tls "$_t"; then
+        _tui_do singbox_cli endpoint "$1" show
+        if _sb_type_tls "$_t"; then
             printf '证书校验：跳过（自签名，免维护）\n'
         fi
         printf '\n'
         _items="show|查看连接信息
-secret|查看凭据"
-        if [ "$1" != snell ]; then
-            _items="$_items
+secret|查看凭据
 json|导出 sing-box JSON
 json-redacted|导出 sing-box JSON（隐藏凭据）"
-            if _sb_type_tls "$_t"; then _items="$_items
+        if _sb_type_tls "$_t"; then _items="$_items
 json-pin|导出 sing-box JSON（可选：嵌入证书固定校验）"; fi
-            case $_t in
-                tuic) printf '说明：TUIC 没有稳定的通用分享 URL，请使用 sing-box JSON\n\n' ;;
-                *) _items="$_items
+        case $_t in
+            tuic) printf '说明：TUIC 没有稳定的通用分享 URL，请使用 sing-box JSON\n\n' ;;
+            *) _items="$_items
 url|导出分享 URL
 qr|显示 QR（需要 qrencode）" ;;
-            esac
-        else
-            printf '说明：Snell 没有通用分享 URL，只提供连接信息与凭据\n\n'
-        fi
+        esac
         _items="$_items
 endpoint|设置客户端连接地址"
         tui_choose "$_items" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            show) if [ "$1" = snell ]; then _tui_do snell_cli export show; else _tui_do singbox_cli export "$1" show; fi; _tui_done ;;
+            show) _tui_do singbox_cli export "$1" show; _tui_done ;;
             secret) _tui_show_secret "$1" ;;
             json-redacted) _tui_do singbox_cli export "$1" sing-box --redacted; _tui_done ;;
             json|json-pin|url|qr)
@@ -1178,11 +1258,16 @@ manager|Manager 管理" "退出"
             instances) tui_instances_menu ;;
             policy) _tui_pick_instance no && tui_policy_menu "$TUI_PICK" ;;
             socks) tui_socks_menu ;;
-            export) _tui_pick_instance snell && tui_export_menu "$TUI_PICK" ;;
+            export)
+                if _tui_pick_instance snell; then
+                    if [ "$TUI_PICK" = snell ]; then tui_snell_client_menu; else tui_export_menu "$TUI_PICK"; fi
+                fi
+                ;;
             status) tui_status_menu ;;
             log) tui_log_menu ;;
             manager) tui_manager_menu ;;
         esac
+        [ "$TUI_EXIT" != 1 ] || return 0
     done
 }
 
@@ -1190,6 +1275,7 @@ manager|Manager 管理" "退出"
 tui_run() {
     _tui_init
     TUI_EOF=0
+    TUI_EXIT=0
     trap '_tui_on_int' INT TERM
     trap '_tui_restore' EXIT
     # 只在明确设置了非 UTF-8 的 locale 时提示, Alpine 默认不设置 locale, 终端本身通常能显示中文

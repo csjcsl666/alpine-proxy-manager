@@ -453,6 +453,51 @@ singbox_export() { # ID show | secret | sing-box [--redacted] [--embed-cert] | u
     esac
 }
 
+# ---- 服务器公网 IP 展示 ----
+# 只用于展示 Snell 的连接信息, 与 Public Endpoint 配置模型无关: 不写入任何配置, 不判断 NAT 映射, 不验证公网可达性
+# 数据来源是第三方 HTTPS 服务返回的出口 IPv4, 仅在用户选择查看连接信息时按需查询, 失败时降级为 获取失败
+CLIENT_IP_URLS="https://api.ipify.org https://ipv4.icanhazip.com"
+
+# 严格的公网 IPv4: 四段十进制, 无前导零, 并排除 0/8 10/8 100.64/10 127/8 169.254/16 172.16/12 192.168/16 以及 224 以上的组播与保留段
+client_valid_public_ipv4() {
+    local _a _b
+    printf '%s' "$1" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || return 1
+    _sb_valid_ipv4_dest "$1" || return 1
+    _a=${1%%.*}
+    _b=${1#*.}
+    _b=${_b%%.*}
+    case $_a in 0|10|127) return 1 ;; esac
+    [ "$_a" -lt 224 ] || return 1
+    case $_a.$_b in 169.254|192.168) return 1 ;; esac
+    if [ "$_a" = 172 ] && [ "$_b" -ge 16 ] && [ "$_b" -le 31 ]; then return 1; fi
+    if [ "$_a" = 100 ] && [ "$_b" -ge 64 ] && [ "$_b" -le 127 ]; then return 1; fi
+    return 0
+}
+
+_client_timeout() { # 秒数 命令...
+    local _s
+    _s=$1
+    shift
+    if command -v timeout >/dev/null 2>&1; then timeout "$_s" "$@"; else "$@"; fi
+}
+
+# 输出公网 IPv4 并返回 0, 失败返回 1: 依次尝试每个服务, 每个有短超时, 响应只取前 64 字节的第一行, 经严格校验才接受
+# 下载器沿用 APM_DOWNLOADER (默认 BusyBox wget), 测试用它替换成 mock, 不依赖第三方服务
+client_public_ip() {
+    local _dl _u _t _r
+    _dl=${APM_DOWNLOADER:-wget}
+    command -v "$_dl" >/dev/null 2>&1 || return 1
+    _t=${APM_IP_TIMEOUT:-4}
+    for _u in $CLIENT_IP_URLS; do
+        _r=$(_client_timeout "$_t" "$_dl" -q -T "$_t" -O - "$_u" 2>/dev/null | head -c 64 | head -n 1 | tr -d '\r \t')
+        if client_valid_public_ipv4 "$_r"; then
+            printf '%s' "$_r"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # ---- Snell: Core 级 Public Endpoint 与导出 ----
 
 _cx_snell_ep_file() { printf '%s/snell-endpoint.conf' "$(state_etc)"; }
@@ -549,8 +594,8 @@ snell_endpoint() { # [show | set HOST PORT | clear]
     printf '没有修改 Snell 配置, Snell 没有重启 (客户端连接地址只用于导出)\n'
 }
 
-snell_export() { # show | secret
-    local _act
+snell_export() { # show | secret | info
+    local _act _ip
     _act=${1:-show}
     [ $# -eq 0 ] || shift
     [ $# -eq 0 ] || { apm_err "$_act 不需要参数"; return 2; }
@@ -566,8 +611,18 @@ snell_export() { # show | secret
             _cx_r_show
             printf '  Snell 客户端协议版本：由客户端按服务端版本选择 (没有确认的对应关系, 不在这里猜测)\n'
             ;;
+        info)
+            # 不依赖 Public Endpoint: 公网 IP 按需查询, 端口与版本来自 Snell 现有配置与发现事实, 只读, 不写任何文件, 不重启
+            _cx_load_snell_creds || return 1
+            _ip=$(client_public_ip) || _ip=
+            printf 'Snell 连接信息\n'
+            printf '公网 IP：%s\n' "${_ip:-获取失败}"
+            printf '监听端口：%s\n' "$(_snell_ports_of "$CX_LISTEN" | sed 's/ /, /g')"
+            printf 'Snell 版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
+            printf 'PSK：已配置\n'
+            ;;
         sing-box|url|qr)
-            apm_err "Snell 没有 sing-box 出站, 也没有稳定的通用分享 URI, 只提供 export show 与 export secret"
+            apm_err "Snell 没有 sing-box 出站, 也没有稳定的通用分享 URI, 只提供 export info show secret"
             return 3
             ;;
         *) apm_err "未知的 export 操作: $_act"; return 2 ;;
