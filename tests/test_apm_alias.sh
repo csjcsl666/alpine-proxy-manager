@@ -92,11 +92,11 @@ if command -v script >/dev/null 2>&1; then
     b=$(tty_run "$LINKP")
     c=$(tty_run "$APMP tui")
     d=$(tty_run "$LINKP tui")
-    assert_contains "TTY 下 apm 进入 TUI 主菜单" "$a" "1. Core 管理"
+    assert_contains "TTY 下 apm 进入 TUI 主菜单" "$a" "1. Snell"
     assert_contains "TTY 下 apm 菜单有退出项" "$a" "0. 退出"
     assert_contains "TTY 下 apm 正常退出" "$a" "已退出"
     assert_eq "TTY 下 apm 与 proxy-manager 进入完全相同的 TUI" "$b" "$a"
-    assert_contains "TTY 下 apm tui 进入 TUI" "$c" "1. Core 管理"
+    assert_contains "TTY 下 apm tui 进入 TUI" "$c" "1. Snell"
     assert_eq "TTY 下 apm tui 与 proxy-manager tui 完全一致" "$d" "$c"
     assert_eq "TTY 下无参数与 tui 子命令进入同一个 TUI" "$a" "$c"
 else
