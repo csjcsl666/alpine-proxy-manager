@@ -1,0 +1,161 @@
+diff --git a/graftcp.c b/graftcp.c
+index 262ee41..ce8cb74 100644
+--- a/graftcp.c
++++ b/graftcp.c
+@@ -57,6 +57,23 @@ uint16_t UDP_PROXY_PORT;
+ cidr_trie_t *BLACKLIST_IP     = NULL;
+ cidr_trie_t *WHITELIST_IP = NULL;
+ 
++/* Modified 2026-10-09 for Alpine Proxy Manager (https://github.com/csjcsl666/alpine-proxy-manager,
++ * third_party/graftcp): exact endpoint exemptions.
++ * GRAFTCP_DIRECT_ENDPOINTS="tcp:127.0.0.53:53,udp:127.0.0.53:53" lists IPv4
++ * endpoints that are never redirected (protocol, address and port must all
++ * match). GRAFTCP_LOOPBACK_UDP_COMM=<name> lets processes with that comm send
++ * UDP to 127.0.0.0/8 directly (replies of a local resolver). Both are read
++ * once and removed from the environment so tracees do not inherit them. A
++ * malformed value is fatal, never silently ignored. */
++#define APM_MAX_DIRECT_EP 8
++static struct {
++	bool stream;
++	uint32_t ip; /* network byte order */
++	uint16_t port;
++} APM_DIRECT_EP[APM_MAX_DIRECT_EP];
++static int APM_DIRECT_EP_N;
++static char APM_LOOPBACK_UDP_COMM[16];
++
+ 
+ static uid_t run_uid;
+ static gid_t run_gid;
+@@ -280,6 +297,104 @@ static bool read_dest_endpoint(pid_t pid, long addr, long addrlen,
+ 	}
+ }
+ 
++static void apm_parse_direct_endpoints(void)
++{
++	char *env = getenv("GRAFTCP_DIRECT_ENDPOINTS");
++	char *copy, *tok, *save = NULL;
++
++	if (env == NULL)
++		return;
++	copy = xstrdup(env);
++	unsetenv("GRAFTCP_DIRECT_ENDPOINTS");
++	for (tok = strtok_r(copy, ",", &save); tok;
++	     tok = strtok_r(NULL, ",", &save)) {
++		char *colon = strchr(tok, ':');
++		char *pcolon = colon ? strrchr(colon + 1, ':') : NULL;
++		struct in_addr a;
++		char *end = NULL;
++		long port;
++		bool stream;
++
++		if (colon == NULL || pcolon == NULL ||
++		    APM_DIRECT_EP_N >= APM_MAX_DIRECT_EP)
++			goto bad;
++		*colon = '\0';
++		*pcolon = '\0';
++		if (strcmp(tok, "tcp") == 0)
++			stream = true;
++		else if (strcmp(tok, "udp") == 0)
++			stream = false;
++		else
++			goto bad;
++		if (inet_pton(AF_INET, colon + 1, &a) != 1)
++			goto bad;
++		port = strtol(pcolon + 1, &end, 10);
++		if (end == pcolon + 1 || *end != '\0' || port < 1 || port > 65535)
++			goto bad;
++		APM_DIRECT_EP[APM_DIRECT_EP_N].stream = stream;
++		APM_DIRECT_EP[APM_DIRECT_EP_N].ip = a.s_addr;
++		APM_DIRECT_EP[APM_DIRECT_EP_N].port = (uint16_t)port;
++		APM_DIRECT_EP_N++;
++	}
++	free(copy);
++	return;
++bad:
++	fprintf(stderr, "invalid GRAFTCP_DIRECT_ENDPOINTS\n");
++	exit(1);
++}
++
++static void apm_parse_loopback_udp_comm(void)
++{
++	char *env = getenv("GRAFTCP_LOOPBACK_UDP_COMM");
++
++	if (env == NULL)
++		return;
++	if (env[0] == '\0' || strlen(env) >= sizeof(APM_LOOPBACK_UDP_COMM)) {
++		fprintf(stderr, "invalid GRAFTCP_LOOPBACK_UDP_COMM\n");
++		exit(1);
++	}
++	strcpy(APM_LOOPBACK_UDP_COMM, env);
++	unsetenv("GRAFTCP_LOOPBACK_UDP_COMM");
++}
++
++static bool apm_dest_is_direct_endpoint(const struct dest_endpoint *dest,
++					bool stream)
++{
++	int i;
++
++	if (dest->family != AF_INET)
++		return false;
++	for (i = 0; i < APM_DIRECT_EP_N; i++) {
++		if (APM_DIRECT_EP[i].stream == stream &&
++		    APM_DIRECT_EP[i].ip == dest->sa.v4.sin_addr.s_addr &&
++		    APM_DIRECT_EP[i].port == dest->port)
++			return true;
++	}
++	return false;
++}
++
++static bool apm_udp_loopback_reply(pid_t pid, const struct dest_endpoint *dest)
++{
++	char path[64], comm[32];
++	FILE *f;
++	size_t n;
++
++	if (APM_LOOPBACK_UDP_COMM[0] == '\0' || dest->family != AF_INET ||
++	    (ntohl(dest->sa.v4.sin_addr.s_addr) >> 24) != 127)
++		return false;
++	snprintf(path, sizeof(path), "/proc/%d/comm", (int)pid);
++	f = fopen(path, "r");
++	if (f == NULL)
++		return false;
++	n = fread(comm, 1, sizeof(comm) - 1, f);
++	fclose(f);
++	comm[n] = '\0';
++	if (n > 0 && comm[n - 1] == '\n')
++		comm[n - 1] = '\0';
++	return strcmp(comm, APM_LOOPBACK_UDP_COMM) == 0;
++}
++
++
+ /* dest_is_internal_proxy reports whether dest names one of the embedded
+  * loopback proxy listeners we just installed, so we don't recurse into
+  * ourselves.
+@@ -691,6 +806,9 @@ static bool rewrite_udp_sockaddr(struct proc_info *pinfp, long addr,
+ 		return false;
+ 	if (dest_is_internal_proxy(&dest, false))
+ 		return false;
++	if (apm_dest_is_direct_endpoint(&dest, false) ||
++	    apm_udp_loopback_reply(pinfp->pid, &dest))
++		return false;
+ 
+ 	if (DNS_PROXY_PORT != 0 && dest.port == 53) {
+ 		bool ok;
+@@ -743,6 +861,8 @@ static void tcp_connect_pre_handle(struct proc_info *pinfp)
+ 		return;
+ 	if (dest_is_internal_proxy(&dest, true))
+ 		return;
++	if (apm_dest_is_direct_endpoint(&dest, true))
++		return;
+ 	if (dest_is_in_ignore_list(&dest))
+ 		return;
+ 
+@@ -1325,6 +1445,8 @@ int client_prepare(int argc, char **argv)
+ 		exit(1);
+ 	}
+ 
++	apm_parse_direct_endpoints();
++	apm_parse_loopback_udp_comm();
+ 	if (blackip_file_path)
+ 		load_ip_file(blackip_file_path, &BLACKLIST_IP);
+ 	if (whiteip_file_path)
