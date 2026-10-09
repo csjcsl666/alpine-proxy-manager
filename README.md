@@ -233,7 +233,7 @@ proxy-manager sing-box egress ID [show] | direct | socks 名称
 - 一个 Profile 可以被多个实例共享 没有绑定就是 DIRECT 升级 Manager 不会改动现有实例
 - 只支持 SOCKS5 SOCKS5 服务器可以在本机 内网或公网 地址可以是 IPv4 `[IPv6]` 或主机名 主机名以小写存储 由 sing-box 在连接 SOCKS 服务器时解析 解析失败连接就失败 不回落 DIRECT 访问目标的域名不在本机解析 原样交给 SOCKS 服务器由上游解析 认证只有无认证与用户名加密码 密码通过 `--password-stdin` 提供 不接受命令行明文
 - UDP 通过 SOCKS5 UDP ASSOCIATE 转发 如果上游不支持 UDP 则 UDP 失败 不会直连 已用真实 SOCKS5 服务器验证
-- 仅 sing-box 的协议实例支持 SOCKS 出口 官方 Snell 没有 SOCKS5 出口能力 Manager 不提供 Snell 的 SOCKS 出口
+- sing-box 的协议实例通过 sing-box 自己的出站使用 SOCKS 出口 Snell 的 SOCKS5 出口是另一套机制 见上文 Snell 网络功能
 - Profile 被禁用 不存在 损坏 或 SOCKS 服务器不可达 认证失败 都不会回落 DIRECT 流量会失败 不自动切换 不负载均衡 不故障转移
 - 删除仍被实例引用的 Profile 会被拒绝并列出引用者 批量启用与禁用一次命令最多重启一次
 - 配置有效不代表 SOCKS 服务器可用 Manager 只报告配置已应用
@@ -303,6 +303,12 @@ AnyTLS Hysteria2 TUIC 使用 Manager 生成的自签名证书 客户端默认跳
 - 所有凭据只通过标准输入传入 不经过命令行参数 不写入 shell 历史
 - 服务以专用的非 root 用户运行 Manager 部署的二进制属主是 root
 - Manager 不修改防火墙 路由 sysctl 与服务商网络
+
+## 第三方组件与许可证
+
+- Alpine Proxy Manager 自己的脚本是独立程序 不包含下面的组件
+- graftcp 补丁版 `v0.8.3-apm1` 仅在启用 Snell 网络功能时下载 基于 hmgle/graftcp v0.8.3 GPL-3.0-or-later 只加了精确 协议 地址 端口 豁免 补丁 许可证 构建脚本 第三方许可证 见 `third_party/graftcp` 二进制与对应的完整源码包发布在 https://github.com/csjcsl666/alpine-proxy-manager/releases/tag/graftcp-v0.8.3-apm1 可以用 `sh third_party/graftcp/build.sh 输出目录` 复现构建
+- unbound 与 tinyproxy 来自 Alpine 官方仓库 按其各自的许可证分发
 
 ## 开发
 

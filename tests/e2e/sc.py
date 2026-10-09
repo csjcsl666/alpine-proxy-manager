@@ -3,7 +3,8 @@
 # 输出一行 OK:<回应> 或 FAIL:<原因>
 import socket, struct, sys
 
-PROXY = ("127.0.0.1", 2080)
+import os
+PROXY = ("127.0.0.1", int(os.environ.get("E2E_CLIENT_PORT", "2080")))
 proto, addr, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
 
 
