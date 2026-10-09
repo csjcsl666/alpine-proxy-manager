@@ -75,7 +75,7 @@ teardown() {
     rm -f "$RUN"/*.pid
 }
 
-# shellcheck disable=SC2329 # 由 trap 调用
+# shellcheck disable=SC2329,SC2317 # 由 trap 调用
 on_signal() { teardown; exit 0; }
 trap on_signal TERM INT HUP
 

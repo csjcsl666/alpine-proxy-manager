@@ -25,7 +25,7 @@ settle() { sleep "${1:-3}"; [ -z "${CL_PID:-}" ] || restart_client; }
 section "准备: 受控目标 (含通配地址服务, 即原先 127.0.0.53 绕过漏洞的复现条件)"
 # 通配地址 0.0.0.0 的服务同时在所有 127.x 地址上可达, 包括 127.0.0.53 与 127.0.0.1
 start_targets 0.0.0.0,24001 0.0.0.0,53 127.0.0.3,24010 127.0.0.3,24011 127.0.0.4,24010 127.0.0.4,24011 127.0.0.5,24010 ::1,24012 || exit 1
-sed -i '/apm-lab\.example/d' /etc/hosts
+hosts_drop 'apm-lab\.example'
 printf '127.0.0.3 t1.apm-lab.example\n' >> /etc/hosts
 
 section "启用目标访问限制 (空名单)"
@@ -92,8 +92,15 @@ grep -q 'to=127.0.0.4:24010' "$TLOG" && ok "刷新后命中新地址" || bad "�
 expect_denied "未列入的域名" tcp t2.apm-lab.example 24010
 # 宿主原子替换 /etc/hosts (sed -i, DHCP 客户端等): Linux 会卸掉其他命名空间里叠在旧文件上的挂载,
 # Snell 回到看真实的 hosts, 此时解析结果与固定的放行地址不一致, 必须是拒绝而不是放行
-sed -i 's/^127.0.0.4 t1.apm-lab.example/127.0.0.5 t1.apm-lab.example/' /etc/hosts
-expect_denied "宿主原子替换 hosts 后解析与固定地址不一致: 拒绝 (fail-closed)" tcp t1.apm-lab.example 24010
+# 容器里 /etc/hosts 是 bind mount 不能被原子替换, 这一项只在能替换时进行
+sed 's/^127.0.0.4 t1.apm-lab.example/127.0.0.5 t1.apm-lab.example/' /etc/hosts > "$E2E_DIR/hosts.atomic"
+if mv "$E2E_DIR/hosts.atomic" /etc/hosts 2>/dev/null; then
+    expect_denied "宿主原子替换 hosts 后解析与固定地址不一致: 拒绝 (fail-closed)" tcp t1.apm-lab.example 24010
+else
+    say "  跳过: 本环境的 /etc/hosts 不能被原子替换"
+    printf '127.0.0.5 t1.apm-lab.example\n' >> /etc/hosts
+    hosts_drop '^127.0.0.4 t1.apm-lab.example'
+fi
 pm access refresh || bad "refresh 失败"
 settle 3
 expect_peer "刷新后恢复 (t1 解析到 127.0.0.5)" tcp t1.apm-lab.example 24010 127.0.0.1

@@ -45,6 +45,12 @@ wait_file() { # 文件 最多等待 (0.1 秒的倍数)
     [ -e "$1" ]
 }
 
+# 原地改写 /etc/hosts: 容器里它是 bind mount, sed -i 的原子替换会失败
+hosts_drop() { # 正则
+    grep -v -- "$1" /etc/hosts > "$E2E_DIR/hosts.tmp"
+    cat "$E2E_DIR/hosts.tmp" > /etc/hosts
+}
+
 tclear() { : > "$TLOG"; : > "$DLOG"; }
 thits() { grep -c . "$TLOG" 2>/dev/null || true; }
 

@@ -24,7 +24,7 @@ VIA='127\.0\.0\.77'
 DECOY=$E2E_DIR/decoy.log
 
 # Snell 先读 /etc/hosts 再查 DNS, 残留的测试映射会掩盖 DNS 路径
-sed -i '/apm-lab\.example/d' /etc/hosts
+hosts_drop 'apm-lab\.example'
 
 section "准备: 受控目标, 受控 DNS, 诱饵 DNS (系统解析器不应收到任何查询)"
 # 通配地址服务: 127.0.0.1 与 127.0.0.53 的任何端口都可达, 是回环绕过的复现条件
