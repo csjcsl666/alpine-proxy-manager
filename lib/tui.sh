@@ -491,6 +491,46 @@ help|查看帮助" "返回"
 
 # ---- Core: 公共的安装 卸载 ----
 
+# sing-box 卸载: 先列出会删除的内容与数量, 再让用户在 完整卸载 与 仅卸载程序 之间明确选择, 然后再确认, 默认取消
+# 实际删除复用 singbox_cli uninstall --purge 与 uninstall, 这里不另写清理逻辑
+# 完整卸载只删除 sing-box 专属的数据, Snell 与其他 Core 不受影响 (清理范围由 singbox_uninstall 决定并有测试)
+_tui_singbox_uninstall() {
+    local _ni _ns _f
+    _tui_need_root || return 0
+    _tui_count_instances
+    _ni=$TUI_N_TOTAL
+    _ns=0
+    for _f in $(state_list_confs "$(state_socks_dir)"); do _ns=$((_ns + 1)); done
+    _tui_clear
+    _tui_header "卸载 sing-box"
+    printf '完整卸载会删除 sing-box 及其专属的托管数据：\n'
+    printf '  - sing-box 程序与服务\n'
+    printf '  - 协议实例 %s 个（含各自的目标访问限制与客户端连接地址）\n' "$_ni"
+    printf '  - SOCKS Profile %s 个\n' "$_ns"
+    printf '  - 证书、运行配置、配置备份与日志\n'
+    printf '  - 由 Manager 创建的 sing-box 用户\n'
+    printf '不会修改 Snell 或其他 Core 的任何数据。\n'
+    printf '完整卸载不可恢复，客户端将无法再连接这些协议实例。\n'
+    if [ ! -f "$(env_path "$SB_MARK_FILE")" ]; then
+        _tui_warn "$SB_ETC 没有 Manager 标记，完整卸载时它会被保留"
+    fi
+    printf '\n'
+    tui_choose "full|完整卸载：删除 sing-box 及上述全部数据
+keep|仅卸载程序：保留配置、证书、实例与 SOCKS Profile，便于重新安装" "返回"
+    case $TUI_KEY in
+        back) return 0 ;;
+        full)
+            tui_confirm "即将完整卸载 sing-box 并删除上述全部数据，此操作不可恢复" || { _tui_pause; return 0; }
+            _tui_do singbox_cli uninstall --purge
+            ;;
+        keep)
+            tui_confirm "即将卸载 sing-box 程序，配置、证书、实例与 SOCKS Profile 会保留" || { _tui_pause; return 0; }
+            _tui_do singbox_cli uninstall
+            ;;
+    esac
+    _tui_done
+}
+
 _tui_core_uninstall() { # key
     local _cli
     if [ "$1" = snell ]; then _cli=snell_cli; else _cli=singbox_cli; fi
@@ -749,7 +789,7 @@ uninstall|卸载"
                 _tui_do singbox_cli update
                 _tui_done
                 ;;
-            uninstall) _tui_core_uninstall singbox ;;
+            uninstall) _tui_singbox_uninstall ;;
         esac
     done
 }

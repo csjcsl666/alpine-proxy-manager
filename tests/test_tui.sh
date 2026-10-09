@@ -700,4 +700,73 @@ assert_eq "取消后配置不变" true "$(kv_get "$(INST Hysteria2-01)" enabled)
 out=$(T '2\n2\n1\n2\n2\n\n0\n0\n0\n')
 assert_not_contains "Core 未运行时不提示重启" "$out" "此操作需要重启 sing-box"
 assert_eq "Core 未运行时仍可禁用" false "$(kv_get "$(INST Hysteria2-01)" enabled)"
+# ---- sing-box 卸载: 先列出会删除什么, 明确选择, 再确认, 默认取消; 删除复用 uninstall --purge ----
+mkfull() { # 名称: Snell 与 sing-box 都安装, 造齐各类数据
+    ready "$1"
+    "$PM" snell endpoint set 203.0.113.9 20000 >/dev/null 2>&1
+    printf 'TuiUninstallSocksPw0123456789\n' | "$PM" sing-box socks add --server 192.0.2.10 --port 1080 --username u1 --password-stdin --name SOCKS-01 >/dev/null 2>&1
+    "$PM" sing-box add anytls --port 20443 >/dev/null 2>&1
+    "$PM" sing-box add hysteria2 --port 20444 >/dev/null 2>&1
+    "$PM" sing-box endpoint AnyTLS-01 set example.com 20443 >/dev/null 2>&1
+    "$PM" sing-box access AnyTLS-01 allowlist >/dev/null 2>&1
+    "$PM" sing-box access AnyTLS-01 add 192.0.2.50 443 >/dev/null 2>&1
+    "$PM" sing-box egress AnyTLS-01 socks SOCKS-01 >/dev/null 2>&1
+}
+snellsum() { (cd "$A" && for f in etc/snell/* etc/alpine-proxy-manager/snell-endpoint.conf var/lib/alpine-proxy-manager/cores/snell.meta usr/local/bin/snell-server etc/init.d/snell; do [ -e "$f" ] && printf '%s %s\n' "$(cksum < "$f")" "$f"; done); }
+sbleft() { (cd "$A" && find . -type f \( -path './etc/sing-box*' -o -path './etc/alpine-proxy-manager/instances/*' -o -path './etc/alpine-proxy-manager/socks/*' -o -path './var/lib/sing-box*' -o -path './var/log/sing-box*' -o -path './etc/init.d/sing-box' -o -path './usr/local/bin/sing-box*' -o -path './var/lib/alpine-proxy-manager/cores/singbox*' -o -name 'config.json.bak*' -o -name 'singbox.meta.bak*' \) | sort); }
+mkfull u1
+SN0=$(snellsum)
+out=$(T '2\n9\n0\n0\n0\n')
+assert_contains "卸载页说明会删除 sing-box 程序与服务" "$out" "sing-box 程序与服务"
+assert_contains "卸载页列出协议实例数量" "$out" "协议实例 2 个"
+assert_contains "卸载页说明含访问限制与客户端连接地址" "$out" "目标访问限制与客户端连接地址"
+assert_contains "卸载页列出 SOCKS Profile 数量" "$out" "SOCKS Profile 1 个"
+assert_contains "卸载页列出证书 配置备份 日志" "$out" "证书、运行配置、配置备份与日志"
+assert_contains "卸载页说明不会修改 Snell" "$out" "不会修改 Snell 或其他 Core"
+assert_contains "卸载页说明不可恢复" "$out" "不可恢复"
+assert_contains "卸载页有完整卸载选项" "$out" "1. 完整卸载"
+assert_contains "卸载页有仅卸载程序选项" "$out" "2. 仅卸载程序"
+assert_contains "卸载页有返回" "$out" "0. 返回"
+assert_not_contains "不再是旧的 默认保留配置 提示" "$out" "默认保留配置与日志"
+# 取消: 返回 / 选择后确认回车 (默认 N) / 选择后输入 n, 文件系统完全不变
+SB0=$(snap)
+T '2\n9\n0\n0\n0\n' >/dev/null
+assert_eq "选择页返回: 文件系统不变" "$SB0" "$(snap)"
+out=$(T '2\n9\n1\n\n\n0\n0\n0\n')
+assert_contains "完整卸载的确认默认取消" "$out" "已取消"
+assert_eq "完整卸载确认回车: 文件系统不变" "$SB0" "$(snap)"
+T '2\n9\n1\nn\n\n0\n0\n0\n' >/dev/null
+assert_eq "完整卸载确认 n: 文件系统不变" "$SB0" "$(snap)"
+T '2\n9\n2\n\n\n0\n0\n0\n' >/dev/null
+assert_eq "仅卸载程序确认回车: 文件系统不变" "$SB0" "$(snap)"
+assert_eq "取消时 sing-box 仍在运行" running "$(core_discover singbox; echo "$CF_STATE")"
+# 仅卸载程序: 保留实例 Profile 与配置
+out=$(T '2\n9\n2\ny\n\n0\n0\n0\n')
+assert_contains "仅卸载程序: 已卸载" "$out" "sing-box 已卸载"
+assert_contains "仅卸载程序: 说明已保留" "$out" "已保留"
+assert_fail "仅卸载程序: 二进制已删除" test -e "$A/usr/local/bin/sing-box"
+assert_eq "仅卸载程序: 实例保留" 2 "$(ls "$A/etc/alpine-proxy-manager/instances" | wc -l | tr -d ' ')"
+assert_eq "仅卸载程序: SOCKS Profile 保留" 1 "$(ls "$A/etc/alpine-proxy-manager/socks" | wc -l | tr -d ' ')"
+assert_ok "仅卸载程序: 配置根保留" test -e "$A/etc/sing-box/config.json"
+assert_eq "仅卸载程序: Snell 数据完全不变" "$SN0" "$(snellsum)"
+# 完整卸载: sing-box 专属数据一个不剩, 全盘找不到凭据, Snell 不受影响
+mkfull u2
+SN2=$(snellsum)
+out=$(T '2\n9\n1\ny\n\n0\n0\n0\n')
+assert_contains "完整卸载: 已卸载" "$out" "sing-box 已卸载"
+assert_contains "完整卸载: 说明已删除实例" "$out" "已删除"
+assert_eq "完整卸载: sing-box 专属文件一个不剩" "" "$(sbleft)"
+assert_eq "完整卸载: 全盘找不到 SOCKS 密码" "" "$(grep -rlF 'TuiUninstallSocksPw0123456789' "$A" 2>/dev/null)"
+assert_eq "完整卸载: Snell 数据完全不变" "$SN2" "$(snellsum)"
+assert_eq "完整卸载: Snell 仍在运行" running "$(core_discover snell; echo "$CF_STATE")"
+assert_eq "完整卸载后 sing-box 显示未安装" none "$(core_discover singbox; _tui_core_kind singbox; echo "$TUI_CK")"
+# 非 root 被拒绝且不改变任何东西
+mkfull u3
+SB3=$(snap)
+out=$( ( APM_EUID=1000; export APM_EUID; T '2\n9\n0\n0\n0\n' ) )
+assert_contains "非 root 卸载被拒绝" "$out" "需要 root"
+assert_eq "非 root: 文件系统不变" "$SB3" "$(snap)"
+# Snell 的卸载流程保持原样
+out=$(T '1\n8\n\n0\n0\n')
+assert_contains "Snell 卸载流程保持原样" "$out" "即将卸载 Snell，默认保留配置与日志"
 t_done
