@@ -168,6 +168,12 @@ _core_parse_init() {
     CF_LOG_ERR=$(_core_init_var "$_f" error_log "$_svc")
     # OpenRC 的默认 pidfile
     [ -n "$CF_PIDFILE" ] || CF_PIDFILE=/run/$_svc.pid
+    # Snell 启用网络功能时, 服务运行的是包装脚本, 真正的二进制记录在 apm_binary
+    if grep -q '^# apm-net:' "$_f" 2>/dev/null; then
+        CF_INIT_COMMAND=$(_core_init_var "$_f" apm_binary "$_svc")
+        CF_INIT_ARGS=
+        CF_SERVICE_USER=snell
+    fi
 }
 
 # ---- 二进制发现 ----
@@ -334,6 +340,23 @@ _core_children_of() {
 
 # 设置 CF_SUP_PID CF_PID, 不使用 comm
 # 有监督进程时 pidfile 里是监督进程, 服务进程取其子进程
+# Snell 启用网络功能时, supervise-daemon 的子进程是包装脚本, 真正的 Snell 由包装脚本记录
+# 只有记录的 PID 仍然是命令行含 "-c 运行时配置" 的 Snell 二进制时才采用, 否则视为没有服务进程
+_core_net_pid() {
+    local _f _p
+    [ "${CF_KEY:-}" = snell ] || return 0
+    grep -q '^# apm-net:' "$(env_path "${CF_SERVICE_FILE:-/nonexistent}")" 2>/dev/null || return 0
+    [ -n "$CF_PID" ] || return 0
+    _f=$(env_path /run/apm-snell/snell.pid)
+    _p=$(head -n 1 "$_f" 2>/dev/null | tr -d ' \r\n')
+    case $_p in ''|*[!0-9]*) CF_PID=; return 0 ;; esac
+    if _core_pid_alive "$_p" && _core_argv_has "$_p" /run/apm-snell/snell.conf; then
+        CF_PID=$_p
+    else
+        CF_PID=
+    fi
+}
+
 _core_find_pids() {
     local _pf _pid _c
     CF_SUP_PID=
@@ -353,6 +376,7 @@ _core_find_pids() {
             fi
         fi
     fi
+    _core_net_pid
     # 没有 pidfile 信息时, 退化为按命令行匹配二进制路径, 排除 supervise-daemon 自身
     if [ -z "$CF_PID" ] && [ -z "$CF_SUP_PID" ] && [ -n "$CF_BINARY" ]; then
         for _pf in "$(env_path /proc)"/[0-9]*; do

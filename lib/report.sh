@@ -185,8 +185,27 @@ report_snell_status() {
         *) printf '  OpenRC：服务 %s 状态 %s (来源 %s)\n' "$CF_SERVICE" "$CF_SERVICE_STATE" "$CF_SERVICE_SOURCE" ;;
     esac
     [ -z "$CF_PID" ] || printf '  进程：%s\n' "$CF_PID"
+    _rpt_snell_net
     _rpt_listeners
     _rpt_notes
+}
+
+# 启用 SOCKS5 出口 或 目标访问限制 时显示, 并检查辅助进程是否都在; 未启用时不输出任何内容
+_rpt_snell_net() {
+    local _m
+    command -v snn_mode >/dev/null 2>&1 || return 0
+    _m=$(snn_mode)
+    case $_m in
+        egress|access)
+            printf '  网络功能：%s' "$(snn_mode_label "$_m")"
+            if [ "$CF_STATE" = running ]; then
+                if snn_runtime_ok "$_m"; then printf ' (辅助进程正常)\n'; else printf ' (辅助进程异常, 业务连接会失败而不是直连)\n'; fi
+            else
+                printf '\n'
+            fi
+            ;;
+        conflict) printf '  网络功能：配置冲突, 两个功能都被标记为启用, 请先禁用其中一个\n' ;;
+    esac
 }
 
 report_snell_info() {
@@ -236,6 +255,7 @@ report_snell_info() {
     fi
     _rpt_log_meta "access/output" "$CF_LOG_OUT" "$CF_LOG_OUT_EXISTS" "$CF_LOG_OUT_SIZE"
     _rpt_log_meta "error" "$CF_LOG_ERR" "$CF_LOG_ERR_EXISTS" "$CF_LOG_ERR_SIZE"
+    [ "$CF_KEY" != snell ] || _rpt_snell_net
     _rpt_listeners
     _rpt_notes
 }

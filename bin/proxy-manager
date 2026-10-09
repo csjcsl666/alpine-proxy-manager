@@ -9,7 +9,7 @@ APM_HOME=${_self%/*}
 APM_HOME=${APM_HOME%/*}
 export APM_HOME
 
-for _m in common environment state core model policy txn report client snell singbox manager tui; do
+for _m in common environment state core model policy txn report client snell snellnet singbox manager tui; do
     # shellcheck source=/dev/null
     . "$APM_HOME/lib/$_m.sh" || { echo "加载 lib/$_m.sh 失败" >&2; exit 1; }
 done
@@ -31,6 +31,10 @@ usage() {
   snell config set psk --stdin | --generate
   snell update [标签] [--force]        更新二进制 失败自动回滚
   snell uninstall [--purge]            卸载 默认保留配置与日志
+  snell egress [show | set --server 地址 --port 端口 (--no-auth | --username 名 --password-stdin) [--dns-server IP]
+                | enable [--yes] | disable]     SOCKS5 出口 Snell 的 TCP UDP DNS 全部经指定上游 上游故障时失败 不直连
+  snell access [show | add 主机 端口 | delete 主机 端口 | clear | refresh | enable [--yes] | disable]
+                                       目标访问限制 只允许名单里的 地址:端口 其余全部拒绝 只转发 TCP
   sing-box status | info | log [N] | check            状态 事实 日志 配置检查
   sing-box install [--release 标签]    下载官方 musl release 安装并启动 默认 v1.13.14
   sing-box start | stop | restart

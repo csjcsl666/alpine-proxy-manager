@@ -28,6 +28,7 @@ SNELL_INIT_MARK="# apm-managed: snell"
 
 # 固定布局 (逻辑路径, 访问时经 env_path)
 SNELL_BIN=/usr/local/bin/snell-server
+SNELL_PRELOAD=/lib/libgcompat.so.0
 SNELL_CONF_DIR=/etc/snell
 SNELL_CONF=/etc/snell/snell-server.conf
 SNELL_INIT=/etc/init.d/snell
@@ -374,6 +375,13 @@ _snell_write_init() {
     local _t
     _t=$(env_path "$SNELL_INIT")
     mkdir -p -- "$(dirname "$_t")" || return 1
+    case $(command -v snn_mode >/dev/null 2>&1 && snn_mode) in
+        egress|access)
+            snn_init_text "$(snn_mode)" > "$_t" || return 1
+            chmod 755 -- "$_t"
+            return 0
+            ;;
+    esac
     cat > "$_t" <<'EOF'
 #!/sbin/openrc-run
 # apm-managed: snell
@@ -972,6 +980,7 @@ snell_uninstall() {
         fi
     fi
     rm -f -- "$(env_path "$SNELL_BIN")" "$(env_path "$SNELL_BIN").old" "$(env_path "$SNELL_BIN").new"
+    command -v snn_on_uninstall >/dev/null 2>&1 && snn_on_uninstall "$_purge"
 
     if [ "$_purge" = 1 ]; then
         rm -rf -- "$(env_path "$SNELL_CONF_DIR")" "$(env_path "$SNELL_LOG_DIR")"
@@ -1021,6 +1030,9 @@ snell_cli() {
         endpoint) snell_endpoint "$@" ;;
         export) snell_export "$@" ;;
         uninstall) snell_uninstall "$@" ;;
+        egress) snell_egress_cli "$@" ;;
+        access) snell_access_cli "$@" ;;
+        net-prepare) snn_prepare ;;
         config)
             case ${1:-show} in
                 show) snell_config_show ;;

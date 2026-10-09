@@ -82,11 +82,11 @@ assert_contains "Snell 状态" "$out" "状态：● 运行中"
 assert_contains "Snell 管理状态" "$out" "管理：已接管"
 assert_contains "Snell 显示 Release" "$out" "Release：v6.0.0rc2"
 assert_contains "Snell 显示监听" "$out" "监听："
-for item in "查看详细信息" "停止" "重启" "修改配置" "查看日志" "客户端信息" "更新" "卸载"; do
+for item in "查看详细信息" "停止" "重启" "修改配置" "网络功能" "查看日志" "客户端信息" "更新" "卸载"; do
     assert_contains "Snell 运行中菜单含 $item" "$out" ". $item"
 done
 assert_not_contains "Snell 运行中不显示启动" "$out" ". 启动"
-for item in "1. 查看详细信息" "2. 停止" "3. 重启" "4. 修改配置" "5. 查看日志" "6. 客户端信息" "7. 更新" "8. 卸载" "0. 返回"; do
+for item in "1. 查看详细信息" "2. 停止" "3. 重启" "4. 修改配置" "5. 网络功能" "6. 查看日志" "7. 客户端信息" "8. 更新" "9. 卸载" "0. 返回"; do
     assert_contains "Snell 菜单序号 $item" "$out" "$item"
 done
 snellmenu=$(printf '%s\n' "$out" | sed -n '/^ Snell$/,/^请选择/p')
@@ -382,7 +382,7 @@ assert_not_contains "TUI 不再使用过时的客户端配置导出名称" "$out
 rn=$(detail 1)
 assert_contains "实例菜单入口名称是客户端配置" "$rn" "6. 客户端配置"
 assert_not_contains "实例菜单不再有客户端配置导出" "$rn" "客户端配置导出"
-rn=$(T '1\n6\n0\n0\n0\n')
+rn=$(T '1\n7\n0\n0\n0\n')
 assert_contains "Snell 保持客户端信息命名" "$rn" "Snell · 客户端信息"
 assert_not_contains "Snell 客户端信息页没有被改名" "$rn" "Snell · 客户端配置"
 for item in "查看连接信息" "查看凭据" "导出 sing-box JSON" "导出 sing-box JSON（隐藏凭据）" "可选：嵌入证书固定校验" "导出分享 URL" "显示 QR（需要 qrencode）" "设置客户端连接地址"; do
@@ -467,7 +467,7 @@ SC0=$(cksum < "$A/etc/snell/snell-server.conf")
 SN1=$(snap)
 : > "$MOCK_LOG"
 # 进入客户端信息页本身不联网
-out=$(tsnell '1\n6\n0\n0\n0\n0\n')
+out=$(tsnell '1\n7\n0\n0\n0\n0\n')
 assert_contains "客户端信息页标题" "$out" "Snell · 客户端信息"
 assert_contains "客户端信息 1" "$out" "1. 查看连接信息"
 assert_contains "客户端信息 2" "$out" "2. 查看 PSK"
@@ -482,7 +482,7 @@ assert_eq "TUI 首屏不联网" 0 "$(wc -l < "$MOCK_LOG" | tr -d ' ')"
 tsnell '1\n0\n0\n0\n' >/dev/null
 assert_eq "Core 菜单与 Snell 菜单不联网" 0 "$(wc -l < "$MOCK_LOG" | tr -d ' ')"
 # 没有 endpoint 也能查看连接信息
-out=$(tsnell '1\n6\n1\n\n0\n0\n0\n0\n')
+out=$(tsnell '1\n7\n1\n\n0\n0\n0\n0\n')
 assert_contains "连接信息标题" "$out" "Snell 连接信息"
 assert_contains "自动查询的公网 IP" "$out" "公网 IP：93.184.216.34"
 assert_contains "监听端口来自 Snell 配置" "$out" "监听端口：20000"
@@ -499,13 +499,13 @@ assert_fail "查询结果没有保存成 endpoint" test -e "$A/etc/alpine-proxy-
 assert_eq "查询没有改变文件系统" "$SN1" "$(snap)"
 assert_eq "查询没有重启 Snell" 0 "$(grep -c '^snell restart$' "$K/calls" 2>/dev/null || true)"
 assert_eq "公网 IP 没有写进 Snell 配置" 0 "$(grep -c '93.184.216.34' "$A/etc/snell/snell-server.conf")"
-out=$(tsnell '1\n6\n1\n\n0\n0\n0\n0\n' crlf)
+out=$(tsnell '1\n7\n1\n\n0\n0\n0\n0\n' crlf)
 assert_contains "CRLF 响应被接受" "$out" "公网 IP：93.184.216.34"
-out=$(tsnell '1\n6\n1\n\n0\n0\n0\n0\n' second)
+out=$(tsnell '1\n7\n1\n\n0\n0\n0\n0\n' second)
 assert_contains "第一个服务失败时尝试下一个" "$out" "公网 IP：93.184.216.35"
 # 查询失败: 其余信息照常显示
 for mode in fail empty garbage; do
-    out=$(tsnell '1\n6\n1\n\n0\n0\n0\n0\n' $mode)
+    out=$(tsnell '1\n7\n1\n\n0\n0\n0\n0\n' $mode)
     assert_contains "查询失败($mode): 公网 IP 获取失败" "$out" "公网 IP：获取失败"
     assert_contains "查询失败($mode): 监听端口仍显示" "$out" "监听端口：20000"
     assert_contains "查询失败($mode): 版本仍显示" "$out" "Snell 版本：v6.0.0"
@@ -514,53 +514,53 @@ for mode in fail empty garbage; do
 done
 # 无效响应不能冒充公网 IP
 for bad in "999.1.1.1" "1.2.3" "1.2.3.4.5" "01.2.3.4" "93.184.216.034" "10.1.2.3" "127.0.0.1" "0.0.0.0" "169.254.1.1" "172.16.0.9" "172.31.255.1" "192.168.1.1" "100.64.0.1" "100.127.0.1" "224.0.0.1" "255.255.255.255" "::1" "2001:db8::1" "93.184.216.34;rm" "93.184.216.34 extra" "<93.184.216.34>" "abc" "-1.2.3.4" "1.2.3.4/32" "https://x.example"; do
-    out=$(tsnell '1\n6\n1\n\n0\n0\n0\n0\n' text "$bad")
+    out=$(tsnell '1\n7\n1\n\n0\n0\n0\n0\n' text "$bad")
     assert_contains "无效响应 [$bad] 不被接受" "$out" "公网 IP：获取失败"
 done
 for good in "8.8.8.8" "172.15.0.1" "172.32.0.1" "100.63.255.1" "100.128.0.1" "223.255.255.254" "203.0.113.10" "1.1.1.1"; do
-    out=$(tsnell '1\n6\n1\n\n0\n0\n0\n0\n' text "$good")
+    out=$(tsnell '1\n7\n1\n\n0\n0\n0\n0\n' text "$good")
     assert_contains "公网地址 [$good] 被接受" "$out" "公网 IP：$good"
 done
 # 只取第一行: 第二行的合法 IP 不能替换第一行的无效内容
-out=$(tsnell '1\n6\n1\n\n0\n0\n0\n0\n' text "junk
+out=$(tsnell '1\n7\n1\n\n0\n0\n0\n0\n' text "junk
 93.184.216.34")
 assert_contains "只看第一行" "$out" "公网 IP：获取失败"
 # 超时: mock 睡 30 秒, 1 秒超时, 两个服务合计应在几秒内返回
 T0=$(date +%s)
-out=$( ( APM_DOWNLOADER=$MOCK; MOCK_MODE=slow; APM_IP_TIMEOUT=1; export APM_DOWNLOADER MOCK_MODE APM_IP_TIMEOUT; T '1\n6\n1\n\n0\n0\n0\n0\n' ) )
+out=$( ( APM_DOWNLOADER=$MOCK; MOCK_MODE=slow; APM_IP_TIMEOUT=1; export APM_DOWNLOADER MOCK_MODE APM_IP_TIMEOUT; T '1\n7\n1\n\n0\n0\n0\n0\n' ) )
 T1=$(date +%s)
 assert_contains "超时后降级为获取失败" "$out" "公网 IP：获取失败"
 assert_contains "超时后监听端口仍显示" "$out" "监听端口：20000"
 assert_eq "超时在几秒内返回" yes "$([ $((T1 - T0)) -le 10 ] && echo yes)"
 # 没有下载器时降级
-out=$( ( APM_DOWNLOADER=/nonexistent/downloader; export APM_DOWNLOADER; T '1\n6\n1\n\n0\n0\n0\n0\n' ) )
+out=$( ( APM_DOWNLOADER=/nonexistent/downloader; export APM_DOWNLOADER; T '1\n7\n1\n\n0\n0\n0\n0\n' ) )
 assert_contains "没有下载器时降级" "$out" "公网 IP：获取失败"
 # 旧用户保存过 endpoint: 不删除不修改, 也不成为前置条件, 展示仍以自动查询为准
 "$PM" snell endpoint set 203.0.113.9 32100 >/dev/null 2>&1
 EP0=$(cat "$A/etc/alpine-proxy-manager/snell-endpoint.conf")
-out=$(tsnell '1\n6\n1\n\n0\n0\n0\n0\n')
+out=$(tsnell '1\n7\n1\n\n0\n0\n0\n0\n')
 assert_contains "有旧 endpoint 时仍显示自动查询的公网 IP" "$out" "公网 IP：93.184.216.34"
 assert_not_contains "不展示旧 endpoint 的主机" "$out" "203.0.113.9"
 assert_not_contains "不展示旧 endpoint 的端口" "$out" "32100"
 assert_eq "旧 endpoint 数据不被删除或修改" "$EP0" "$(cat "$A/etc/alpine-proxy-manager/snell-endpoint.conf")"
 # 查看 PSK: 先确认, 默认 N
-out=$(tsnell '1\n6\n2\nn\n\n0\n0\n0\n0\n')
+out=$(tsnell '1\n7\n2\nn\n\n0\n0\n0\n0\n')
 assert_contains "PSK 确认提示" "$out" "即将显示 Snell PSK。"
 assert_contains "PSK 确认提示提到泄漏风险" "$out" "请注意终端记录和截图可能泄漏凭据。"
 assert_contains "PSK 确认带默认 N" "$out" "继续？[y/N]"
 assert_not_contains "拒绝确认不显示 PSK" "$out" "TuiSnellPskNotSecret0123456789ab"
-out=$(tsnell '1\n6\n2\n\n\n0\n0\n0\n0\n')
+out=$(tsnell '1\n7\n2\n\n\n0\n0\n0\n0\n')
 assert_not_contains "直接回车(默认 N)不显示 PSK" "$out" "TuiSnellPskNotSecret0123456789ab"
-out=$(tsnell '1\n6\n2\ny\n\n0\n0\n0\n0\n')
+out=$(tsnell '1\n7\n2\ny\n\n0\n0\n0\n0\n')
 assert_contains "确认后显示 PSK" "$out" "psk：TuiSnellPskNotSecret0123456789ab"
 assert_contains "显示 PSK 带警告" "$out" "警告：以下内容包含客户端凭据"
 assert_eq "查看 PSK 不修改 Snell 配置" "$SC0" "$(cksum < "$A/etc/snell/snell-server.conf")"
 assert_eq "查看 PSK 后仍是原来的 PSK" TuiSnellPskNotSecret0123456789ab "$(sed -n 's/^psk = //p' "$A/etc/snell/snell-server.conf")"
 assert_eq "查看 PSK 没有重启 Snell" 0 "$(grep -c '^snell restart$' "$K/calls" 2>/dev/null || true)"
-assert_eq "查看 PSK 不联网" 0 "$(: > "$MOCK_LOG"; tsnell '1\n6\n2\ny\n\n0\n0\n0\n0\n' >/dev/null; wc -l < "$MOCK_LOG" | tr -d ' ')"
-# Snell 菜单第 6 项进入客户端信息, 主菜单没有混合的客户端配置导出入口
-out=$(tsnell '1\n6\n0\n0\n0\n')
-assert_contains "Snell 菜单 6 进入客户端信息" "$out" "Snell · 客户端信息"
+assert_eq "查看 PSK 不联网" 0 "$(: > "$MOCK_LOG"; tsnell '1\n7\n2\ny\n\n0\n0\n0\n0\n' >/dev/null; wc -l < "$MOCK_LOG" | tr -d ' ')"
+# Snell 菜单第 7 项进入客户端信息, 主菜单没有混合的客户端配置导出入口
+out=$(tsnell '1\n7\n0\n0\n0\n')
+assert_contains "Snell 菜单 7 进入客户端信息" "$out" "Snell · 客户端信息"
 assert_not_contains "不再有旧的导出页" "$out" "客户端配置导出 snell"
 "$PM" snell endpoint clear >/dev/null 2>&1
 
@@ -767,6 +767,6 @@ out=$( ( APM_EUID=1000; export APM_EUID; T '2\n9\n0\n0\n0\n' ) )
 assert_contains "非 root 卸载被拒绝" "$out" "需要 root"
 assert_eq "非 root: 文件系统不变" "$SB3" "$(snap)"
 # Snell 的卸载流程保持原样
-out=$(T '1\n8\n\n0\n0\n')
+out=$(T '1\n9\n\n0\n0\n')
 assert_contains "Snell 卸载流程保持原样" "$out" "即将卸载 Snell，默认保留配置与日志"
 t_done

@@ -638,6 +638,171 @@ psk|查看 PSK" "返回"
     done
 }
 
+# Snell 网络功能: SOCKS5 出口 与 目标访问限制, 两者互斥, 各自可以单独启用与禁用
+_tui_snn_status() {
+    local _f _e
+    _f=$(_snn_egress_file)
+    if [ ! -f "$_f" ]; then
+        printf 'SOCKS5 出口：未配置\n'
+    else
+        _e=未启用
+        [ "$(kv_get "$_f" enabled)" = true ] && _e=已启用
+        printf 'SOCKS5 出口：%s，上游 %s:%s\n' "$_e" "$(kv_get "$_f" host)" "$(kv_get "$_f" port)"
+    fi
+    _f=$(_snn_access_file)
+    if [ ! -f "$_f" ]; then
+        printf '目标访问限制：未配置\n'
+    else
+        _e=未启用
+        [ "$(kv_get "$_f" enabled)" = true ] && _e=已启用
+        printf '目标访问限制：%s，名单 %s 条\n' "$_e" "$(_snn_dests "$_f" | grep -c . || true)"
+    fi
+}
+
+# 启用前的确认: 说明将要安装的组件, 互斥时直接解释并返回失败
+_tui_snn_enable() { # egress|access
+    local _cur _miss _item _txt
+    _cur=$(snn_mode)
+    if [ "$_cur" = "$1" ]; then
+        printf '%s已经启用\n' "$(snn_mode_label "$1")"
+        _tui_pause
+        return 0
+    fi
+    if [ "$_cur" != none ]; then
+        printf '已启用 %s，它与 %s 互斥，两者不能同时启用\n请先在对应菜单里禁用 %s\n' "$(snn_mode_label "$_cur")" "$(snn_mode_label "$1")" "$(snn_mode_label "$_cur")"
+        _tui_pause
+        return 0
+    fi
+    _tui_need_root || return 0
+    _miss=$(snn_deps_missing "$1")
+    _txt="将启用 $(snn_mode_label "$1")，Snell 会重启一次"
+    if [ -n "$_miss" ]; then
+        _txt="$_txt
+需要安装以下组件："
+        for _item in $_miss; do
+            case $_item in
+                graftcp) _txt="$_txt
+  graftcp $SNN_GRAFTCP_VER（固定 SHA256 校验，来自本项目 Release）" ;;
+                apk:*) _txt="$_txt
+  ${_item#apk:}（Alpine 官方软件包）" ;;
+            esac
+        done
+    fi
+    tui_confirm "$_txt" || { _tui_pause; return 0; }
+    _tui_do snell_cli "$1" enable --yes
+    _tui_done
+}
+
+tui_snell_egress_menu() {
+    local _srv _port _user _pw _dns
+    while :; do
+        _tui_clear
+        _tui_header "Snell · SOCKS5 出口"
+        _tui_do snell_cli egress show
+        printf '\n'
+        tui_choose "set|设置上游
+enable|启用
+disable|禁用" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            set)
+                _tui_need_root || continue
+                tui_ask "上游地址（IPv4、IPv6 或域名，留空取消）："
+                _srv=$TUI_IN
+                [ -n "$_srv" ] || continue
+                tui_ask "上游端口："
+                _port=$TUI_IN
+                tui_ask "用户名（留空表示无认证）："
+                _user=$TUI_IN
+                tui_ask "解析用的 DNS 服务器 IP（留空使用 $SNN_DNS_SERVER_DEFAULT，查询经由上游）："
+                _dns=$TUI_IN
+                set -- --server "$_srv" --port "$_port"
+                [ -z "$_dns" ] || set -- "$@" --dns-server "$_dns"
+                if [ -z "$_user" ]; then
+                    _tui_do snell_cli egress set "$@" --no-auth
+                else
+                    tui_read_secret "密码（输入不回显）：" || { _tui_pause; continue; }
+                    _pw=$TUI_SECRET
+                    TUI_SECRET=
+                    _tui_do_secret "$_pw" snell_cli egress set "$@" --username "$_user" --password-stdin
+                    _pw=
+                fi
+                _tui_done
+                ;;
+            enable) _tui_snn_enable egress ;;
+            disable)
+                _tui_need_root || continue
+                tui_confirm "将禁用 SOCKS5 出口，Snell 重启后恢复普通运行方式" || { _tui_pause; continue; }
+                _tui_do snell_cli egress disable
+                _tui_done
+                ;;
+        esac
+    done
+}
+
+tui_snell_access_menu() {
+    local _host _port
+    while :; do
+        _tui_clear
+        _tui_header "Snell · 目标访问限制"
+        _tui_do snell_cli access show
+        printf '\n'
+        tui_choose "add|添加目标
+delete|删除目标
+clear|清空名单
+refresh|刷新域名解析
+enable|启用
+disable|禁用" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            add|delete)
+                _tui_need_root || continue
+                tui_ask "目标主机（IPv4、IPv6 或域名，留空取消）："
+                _host=$TUI_IN
+                [ -n "$_host" ] || continue
+                tui_ask "目标端口："
+                _port=$TUI_IN
+                _tui_do snell_cli access "$TUI_KEY" "$_host" "$_port"
+                _tui_done
+                ;;
+            clear)
+                _tui_need_root || continue
+                tui_confirm "将清空名单，启用时会拒绝所有目标" || { _tui_pause; continue; }
+                _tui_do snell_cli access clear
+                _tui_done
+                ;;
+            refresh)
+                _tui_need_root || continue
+                _tui_do snell_cli access refresh
+                _tui_done
+                ;;
+            enable) _tui_snn_enable access ;;
+            disable)
+                _tui_need_root || continue
+                tui_confirm "将禁用目标访问限制，Snell 重启后恢复普通运行方式（不再限制目标）" || { _tui_pause; continue; }
+                _tui_do snell_cli access disable
+                _tui_done
+                ;;
+        esac
+    done
+}
+
+tui_snell_net_menu() {
+    while :; do
+        _tui_clear
+        _tui_header "Snell · 网络功能"
+        _tui_snn_status
+        printf '两个功能互斥，各自可以单独启用与禁用；都关闭时 Snell 使用原来的启动方式，没有任何辅助进程\n\n'
+        tui_choose "egress|SOCKS5 出口
+access|目标访问限制" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            egress) tui_snell_egress_menu ;;
+            access) tui_snell_access_menu ;;
+        esac
+    done
+}
+
 tui_snell_menu() {
     local _items
     while :; do
@@ -678,6 +843,7 @@ start|启动"
                 fi
                 _items="$_items
 config|修改配置
+net|网络功能
 log|查看日志
 client|客户端信息
 update|更新
@@ -691,6 +857,7 @@ uninstall|卸载"
             info) _tui_do snell_cli info; _tui_done ;;
             start|stop|restart) _tui_core_lifecycle snell "$TUI_KEY" ;;
             config) tui_snell_config_menu ;;
+            net) tui_snell_net_menu ;;
             log) _tui_log snell ;;
             client) tui_snell_client_menu ;;
             update)

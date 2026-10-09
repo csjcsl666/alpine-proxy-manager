@@ -10,12 +10,12 @@ apk add --no-cache shellcheck git util-linux-misc tmux >/dev/null
 printf 'Alpine %s, shellcheck %s\n' "$(cat /etc/alpine-release)" "$(shellcheck --version | sed -n 's/^version: //p')"
 
 echo '== sh -n'
-for f in bin/proxy-manager install.sh lib/*.sh tests/*.sh; do
+for f in bin/proxy-manager install.sh lib/*.sh tests/*.sh tests/e2e/*.sh third_party/graftcp/*.sh; do
     sh -n "$f"
 done
 
 echo '== shellcheck'
-shellcheck -x -P lib bin/proxy-manager install.sh lib/*.sh tests/*.sh
+shellcheck -x -P lib bin/proxy-manager install.sh lib/*.sh tests/*.sh tests/e2e/*.sh third_party/graftcp/*.sh
 
 echo '== tests'
 sh tests/run.sh

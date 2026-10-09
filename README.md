@@ -135,6 +135,31 @@ proxy-manager snell uninstall --purge    # 同时删除配置 日志与由 Manag
 - 安装 配置修改与更新都是事务式的 失败回滚到之前的状态并恢复服务
 - PSK 通过 `--psk-stdin` 或 `--stdin` 提供 不接受命令行明文 自动生成的 PSK 在生成时显示一次 之后需要时用 `snell export secret` 显式查看
 
+### Snell 网络功能
+
+两个独立的可选功能 互斥 各自可以单独启用与禁用 都关闭时 Snell 使用原来的启动方式 没有任何辅助进程也没有额外内存
+
+```sh
+proxy-manager snell egress show
+proxy-manager snell egress set --server 127.0.0.1 --port 1080 --no-auth
+printf '%s\n' "$PASS" | proxy-manager snell egress set --server 地址 --port 端口 --username 用户名 --password-stdin
+proxy-manager snell egress enable [--yes]   # 缺少组件时先列出并确认
+proxy-manager snell egress disable
+proxy-manager snell access add 192.0.2.10 443
+proxy-manager snell access add example.org 443
+proxy-manager snell access delete 192.0.2.10 443
+proxy-manager snell access show | clear | refresh
+proxy-manager snell access enable [--yes] | disable
+```
+
+- SOCKS5 出口 Snell 访问目标的 TCP UDP 和 DNS 全部经过指定的 SOCKS5 上游 上游可以是本机 局域网或公网 地址可以是 IPv4 IPv6 或域名 可选用户名密码 上游故障时连接失败 不会回退直连 DNS 由 Snell 专用的 unbound 通过上游完成
+- 目标访问限制 Snell 只能连接名单里的 地址:端口 组合 其余全部拒绝 名单为空时拒绝所有目标 只转发 TCP UDP 业务一律拒绝 同一个地址的其他端口 或其他地址的同一个端口 都不放行 网关自己的地址不能加入名单
+- 名单里的域名在启用 重启和 `access refresh` 时解析并固定 Snell 通过只对它自己可见的私有挂载命名空间里的 hosts 得到固定的地址 宿主的 `/etc/hosts` 不变 解析结果变化不会自动放行新的地址 需要手动刷新
+- 实现 graftcp 通过 ptrace 接管 Snell 进程树的 connect 与 UDP 不改防火墙 路由和全局 DNS 目标访问限制再由 tinyproxy 按 地址:端口 精确匹配并默认拒绝 任何辅助进程退出都会拆除整套 不会恢复直连
+- 组件按需安装 启用前列出并确认 graftcp 是本项目维护的补丁版 固定版本和 SHA256 来自本项目 Release 补丁 许可证与构建脚本见 `third_party/graftcp` unbound 与 tinyproxy 来自 Alpine 官方仓库 卸载 Snell 不会移除这些软件包
+- 当前只验证 x86_64 需要 ptrace 与 root 容器需要 SYS_PTRACE 名单里有域名时还需要创建挂载命名空间的权限
+- SOCKS5 上游自己的回环地址 例如上游就在本机 由上游决定是否放行 Snell 本机的回环服务不会被直连
+
 ## sing-box
 
 ```sh
