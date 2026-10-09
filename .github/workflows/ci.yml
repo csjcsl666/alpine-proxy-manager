@@ -26,6 +26,18 @@ jobs:
       - name: 在 Alpine 容器内检查并测试
         run: docker run --rm -v "$PWD:/src:ro" "alpine:${{ matrix.alpine }}" sh /src/tests/ci-alpine.sh
 
+  snell-net-e2e:
+    name: Snell 网络功能端到端 (真实 Snell v6)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建补丁版 graftcp, 安装官方 Snell v6, 运行端到端测试
+        run: >
+          docker run --rm --cap-add SYS_PTRACE --cap-add SYS_ADMIN
+          --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+          -v "$PWD:/src:ro" alpine:3.24 sh /src/tests/e2e/ci-net.sh
+
   snell-official:
     name: 官方 Snell release smoke test
     runs-on: ubuntu-latest
