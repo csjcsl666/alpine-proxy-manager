@@ -9,7 +9,7 @@ APM_HOME=${_self%/*}
 APM_HOME=${APM_HOME%/*}
 export APM_HOME
 
-for _m in common environment state core model policy txn report client snell snellnet singbox manager tui; do
+for _m in common environment state core model policy txn report client snell snellnet anytlsgw singbox manager tui; do
     # shellcheck source=/dev/null
     . "$APM_HOME/lib/$_m.sh" || { echo "加载 lib/$_m.sh 失败" >&2; exit 1; }
 done
@@ -35,6 +35,14 @@ usage() {
                 | enable [--yes] | disable]     SOCKS5 出口 Snell 的 TCP UDP DNS 全部经指定上游 上游故障时失败 不直连
   snell access [show | add 主机 端口 | delete 主机 端口 | clear | refresh | enable [--yes] | disable]
                                        目标访问限制 只允许名单里的 地址:端口 其余全部拒绝 只转发 TCP
+  anytls-gateway status | info | log [N]    AnyTLS Gateway 极简 AnyTLS 入站加固定 SOCKS5 上游 只转发 TCP
+  anytls-gateway install [--port P --socks-server 地址 --socks-port 端口 --socks-username 名 --socks-password-stdin]
+  anytls-gateway start | stop | restart
+  anytls-gateway update [--force]      更新二进制 失败自动回滚
+  anytls-gateway uninstall [--purge]   卸载 默认保留配置
+  anytls-gateway listener list | add 参数同 install | delete ID | set ID (--socks-server --socks-port --socks-username --socks-password-stdin | --new-password)
+  anytls-gateway cert [show | generate | import --cert-file 文件 --key-file 文件]
+  anytls-gateway export [info | secret ID或端口]
   sing-box status | info | log [N] | check            状态 事实 日志 配置检查
   sing-box install [--release 标签]    下载官方 musl release 安装并启动 默认 v1.13.14
   sing-box start | stop | restart
@@ -81,6 +89,7 @@ case ${1:-help} in
         esac
         ;;
     snell) shift; snell_cli "$@"; exit $? ;;
+    anytls-gateway) shift; agw_cli "$@"; exit $? ;;
     manager) shift; manager_cli "$@"; exit $? ;;
     sing-box|singbox) shift; singbox_cli "$@"; exit $? ;;
     help|--help|-h) usage ;;

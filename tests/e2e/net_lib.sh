@@ -80,21 +80,23 @@ start_dnsd() { # ADDR ANSWER
 # MODE permissive 出站绑定 127.0.0.77, 回环目标也会被它直连 (用来用对端地址证明流量走了上游)
 #      rejectlocal 上游自己拒绝回环目标 (模拟远端上游, 目标零命中)
 # 可选第 3 参数用户名: 启用密码认证
-start_upstream() { # PORT MODE [USER]
-    local _users _rules
+start_upstream() { # PORT MODE [USER] [BIND]
+    local _users _rules _bind
+    _bind=${4:-127.0.0.77}
     _users=
     [ -z "${3:-}" ] || _users="\"users\":[{\"username\":\"$3\",\"password\":\"$UPPASS\"}],"
     _rules=
     [ "$2" != rejectlocal ] || _rules='"rules":[{"ip_cidr":["127.0.0.0/8","::1/128"],"action":"reject"}],'
-    cat > "$E2E_DIR/upstream.json" <<JEOF
+    cat > "$E2E_DIR/upstream${UP_TAG:-}.json" <<JEOF
 {"log":{"level":"debug"},"inbounds":[{"type":"socks","tag":"s","listen":"127.0.0.1","listen_port":$1,$_users"sniff":false}],
- "outbounds":[{"type":"direct","tag":"direct","inet4_bind_address":"127.0.0.77"}],
+ "outbounds":[{"type":"direct","tag":"direct","inet4_bind_address":"$_bind"}],
  "route":{$_rules"final":"direct"}}
 JEOF
-    : > "$E2E_DIR/upstream.log"
-    "$SB_BIN" run -c "$E2E_DIR/upstream.json" > "$E2E_DIR/upstream.log" 2>&1 &
+    : > "$E2E_DIR/upstream${UP_TAG:-}.log"
+    "$SB_BIN" run -c "$E2E_DIR/upstream${UP_TAG:-}.json" > "$E2E_DIR/upstream${UP_TAG:-}.log" 2>&1 &
     UP_PID=$!
     track "$UP_PID"
+    eval "UP_PID_$1=$UP_PID"
     wait_tcp 127.0.0.1 "$1" || { say "上游没有启动"; return 1; }
 }
 
@@ -142,6 +144,21 @@ JEOF
 
 # Snell 重启后客户端的旧连接失效, 测试里重新建立客户端 (真实客户端会自动重连)
 restart_client() { start_client; }
+
+# AnyTLS 客户端 (官方 sing-box 的 anytls 出站) 连接本机端口 PORT, 本地 SOCKS5 入口 CPORT
+start_anytls_client() { # PORT PASSWORD
+    cat > "$E2E_DIR/anytls-client.json" <<JEOF
+{"log":{"level":"warn"},"inbounds":[{"type":"socks","tag":"in","listen":"127.0.0.1","listen_port":2080}],
+ "outbounds":[{"type":"anytls","tag":"at","server":"127.0.0.1","server_port":$1,"password":"$2","tls":{"enabled":true,"insecure":true,"server_name":"gw.apm.test"}}],
+ "route":{"final":"at"}}
+JEOF
+    [ -z "${CL_PID:-}" ] || { kill "$CL_PID" 2>/dev/null; wait "$CL_PID" 2>/dev/null; CL_PID=; }
+    : > "$E2E_DIR/empty-hosts"
+    "$SB_BIN" run -c "$E2E_DIR/anytls-client.json" > "$E2E_DIR/client.log" 2>&1 &
+    CL_PID=$!
+    track "$CL_PID"
+    wait_tcp 127.0.0.1 2080 || { say "AnyTLS 客户端没有启动"; cat "$E2E_DIR/client.log"; return 1; }
+}
 
 sc() { python3 -I "$E2E_HERE/sc.py" "$@"; }
 

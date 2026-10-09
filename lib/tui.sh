@@ -336,7 +336,7 @@ _tui_log() { # key
     local _n
     tui_ask "显示最后多少行 [20，最多 200]："
     _n=${TUI_IN:-20}
-    if [ "$1" = snell ]; then _tui_do snell_cli log "$_n"; else _tui_do singbox_cli log "$_n"; fi
+    case $1 in snell) _tui_do snell_cli log "$_n" ;; anytlsgw) _tui_do agw_cli log "$_n" ;; *) _tui_do singbox_cli log "$_n" ;; esac
     _tui_done
 }
 
@@ -346,11 +346,13 @@ tui_log_menu() {
         _tui_header "日志"
         printf '提示：日志可能包含访问目标，注意不要公开\n\n'
         tui_choose "snell|Snell 日志
-singbox|sing-box 日志" "返回"
+singbox|sing-box 日志
+anytlsgw|AnyTLS Gateway 日志" "返回"
         case $TUI_KEY in
             back) return 0 ;;
             snell) _tui_log snell ;;
             singbox) _tui_log singbox ;;
+            anytlsgw) _tui_log anytlsgw ;;
         esac
     done
 }
@@ -533,7 +535,7 @@ keep|仅卸载程序：保留配置、证书、实例与 SOCKS Profile，便于�
 
 _tui_core_uninstall() { # key
     local _cli
-    if [ "$1" = snell ]; then _cli=snell_cli; else _cli=singbox_cli; fi
+    case $1 in snell) _cli=snell_cli ;; anytlsgw) _cli=agw_cli ;; *) _cli=singbox_cli ;; esac
     _tui_need_root || return 0
     tui_confirm "即将卸载 $CF_NAME，默认保留配置与日志" || { _tui_pause; return 0; }
     if tui_confirm "是否同时删除配置、日志与证书 (--purge)？此操作不可恢复"; then
@@ -546,7 +548,7 @@ _tui_core_uninstall() { # key
 
 _tui_core_lifecycle() { # key op
     local _cli
-    if [ "$1" = snell ]; then _cli=snell_cli; else _cli=singbox_cli; fi
+    case $1 in snell) _cli=snell_cli ;; anytlsgw) _cli=agw_cli ;; *) _cli=singbox_cli ;; esac
     _tui_need_root || return 0
     case $2 in
         stop) tui_confirm "即将停止 $CF_NAME，所有连接会中断" || { _tui_pause; return 0; } ;;
@@ -867,6 +869,210 @@ uninstall|卸载"
                 _tui_done
                 ;;
             uninstall) _tui_core_uninstall snell ;;
+        esac
+    done
+}
+
+# ---- AnyTLS Gateway ----
+
+tui_agw_listener_menu() {
+    local _pw _srv _port _user _bind _lp
+    while :; do
+        _tui_clear
+        _tui_header "AnyTLS Gateway · Listener"
+        _tui_do agw_cli listener list
+        printf '\n'
+        tui_choose "add|添加 listener
+delete|删除 listener
+upstream|修改上游
+newpw|重新生成 AnyTLS 密码
+secret|查看 AnyTLS 密码" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            add)
+                _tui_need_root || continue
+                tui_ask "监听端口（留空随机选择）："
+                _lp=$TUI_IN
+                tui_ask "SOCKS5 上游地址（IPv4、IPv6 或域名，留空取消）："
+                _srv=$TUI_IN
+                [ -n "$_srv" ] || continue
+                tui_ask "SOCKS5 上游端口："
+                _port=$TUI_IN
+                tui_ask "SOCKS5 用户名："
+                _user=$TUI_IN
+                tui_read_secret "SOCKS5 密码（输入不回显）：" || { _tui_pause; continue; }
+                _pw=$TUI_SECRET
+                TUI_SECRET=
+                set -- --socks-server "$_srv" --socks-port "$_port" --socks-username "$_user" --socks-password-stdin
+                [ -z "$_lp" ] || set -- "$@" --port "$_lp"
+                _tui_do_secret "$_pw" agw_cli listener add "$@"
+                _pw=
+                _tui_done
+                ;;
+            delete)
+                _tui_need_root || continue
+                tui_ask "要删除的 listener ID 或端口（留空取消）："
+                [ -n "$TUI_IN" ] || continue
+                tui_confirm "即将删除 listener $TUI_IN，使用它的客户端会断开" || { _tui_pause; continue; }
+                _tui_do agw_cli listener delete "$TUI_IN"
+                _tui_done
+                ;;
+            upstream)
+                _tui_need_root || continue
+                tui_ask "listener ID 或端口（留空取消）："
+                _lp=$TUI_IN
+                [ -n "$_lp" ] || continue
+                tui_ask "新的 SOCKS5 上游地址（留空保持）："
+                _srv=$TUI_IN
+                tui_ask "新的 SOCKS5 上游端口（留空保持）："
+                _port=$TUI_IN
+                tui_ask "新的 SOCKS5 用户名（留空保持）："
+                _user=$TUI_IN
+                tui_read_secret "新的 SOCKS5 密码（输入不回显，留空保持）：" || { _tui_pause; continue; }
+                _pw=$TUI_SECRET
+                TUI_SECRET=
+                set --
+                [ -z "$_srv" ] || set -- "$@" --socks-server "$_srv"
+                [ -z "$_port" ] || set -- "$@" --socks-port "$_port"
+                [ -z "$_user" ] || set -- "$@" --socks-username "$_user"
+                if [ -n "$_pw" ]; then
+                    _tui_do_secret "$_pw" agw_cli listener set "$_lp" "$@" --socks-password-stdin
+                else
+                    _tui_do agw_cli listener set "$_lp" "$@"
+                fi
+                _pw=
+                _tui_done
+                ;;
+            newpw)
+                _tui_need_root || continue
+                tui_ask "listener ID 或端口（留空取消）："
+                [ -n "$TUI_IN" ] || continue
+                tui_confirm "将生成新的 AnyTLS 密码并显示一次，旧密码立即失效" || { _tui_pause; continue; }
+                _tui_do agw_cli listener set "$TUI_IN" --new-password
+                _tui_done
+                ;;
+            secret)
+                tui_ask "listener ID 或端口（留空取消）："
+                [ -n "$TUI_IN" ] || continue
+                tui_confirm "即将显示 AnyTLS 密码。
+请注意终端记录和截图可能泄漏凭据。" || { _tui_pause; continue; }
+                _tui_do agw_cli export secret "$TUI_IN"
+                _tui_done
+                ;;
+        esac
+    done
+}
+
+tui_agw_cert_menu() {
+    local _c _k
+    while :; do
+        _tui_clear
+        _tui_header "AnyTLS Gateway · 证书"
+        _tui_do agw_cli cert show
+        printf '\n'
+        tui_choose "generate|重新生成自签证书
+import|导入已有证书" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            generate)
+                _tui_need_root || continue
+                tui_confirm "将重新生成自签证书，客户端需要更新指纹，服务会重启" || { _tui_pause; continue; }
+                _tui_do agw_cli cert generate
+                _tui_done
+                ;;
+            import)
+                _tui_need_root || continue
+                tui_ask "证书文件路径（留空取消）："
+                _c=$TUI_IN
+                [ -n "$_c" ] || continue
+                tui_ask "私钥文件路径："
+                _k=$TUI_IN
+                _tui_do agw_cli cert import --cert-file "$_c" --key-file "$_k"
+                _tui_done
+                ;;
+        esac
+    done
+}
+
+tui_anytlsgw_menu() {
+    local _items _pw _srv _port _user
+    while :; do
+        _tui_clear
+        _tui_header "AnyTLS Gateway"
+        _tui_core_kind anytlsgw
+        printf '状态：'
+        _tui_state_dot
+        printf '\n'
+        case $TUI_CK in
+            none) printf '管理：未安装\n' ;;
+            unverified) printf '管理：未确认\n'; _tui_warn "检测到名为 anytls-socks-gateway 的入口，但它不是已确认的 ELF，拒绝写操作" ;;
+            external) printf '管理：现有部署，未接管\n'; printf '本项目不会修改现有部署，只提供只读信息\n' ;;
+            managed)
+                printf '管理：已接管\n'
+                printf '版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
+                ;;
+        esac
+        case $CF_STATE in crashed|broken) _tui_warn "AnyTLS Gateway 状态异常，详情见详细信息与日志" ;; esac
+        _tui_core_notes
+        printf '\n'
+        case $TUI_CK in
+            none) _items="install|安装 AnyTLS Gateway" ;;
+            unverified) _items="info|查看详细信息" ;;
+            external) _items="info|查看详细信息
+log|查看日志" ;;
+            managed)
+                _items="info|查看详细信息"
+                if [ "$CF_STATE" = running ]; then
+                    _items="$_items
+stop|停止
+restart|重启"
+                else
+                    _items="$_items
+start|启动"
+                fi
+                _items="$_items
+listener|Listener
+cert|证书
+log|查看日志
+update|更新
+uninstall|卸载"
+                ;;
+        esac
+        tui_choose "$_items" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            install)
+                _tui_need_root || continue
+                tui_confirm "将下载 AnyTLS Gateway（固定版本加 SHA256 校验）并安装为 Manager 管理的服务，只转发 TCP" || { _tui_pause; continue; }
+                tui_ask "要同时创建第一个 listener 吗？SOCKS5 上游地址（留空只安装）："
+                _srv=$TUI_IN
+                if [ -z "$_srv" ]; then
+                    _tui_do agw_cli install
+                else
+                    tui_ask "SOCKS5 上游端口："
+                    _port=$TUI_IN
+                    tui_ask "SOCKS5 用户名："
+                    _user=$TUI_IN
+                    tui_read_secret "SOCKS5 密码（输入不回显）：" || { _tui_pause; continue; }
+                    _pw=$TUI_SECRET
+                    TUI_SECRET=
+                    _tui_do_secret "$_pw" agw_cli install --socks-server "$_srv" --socks-port "$_port" --socks-username "$_user" --socks-password-stdin
+                    _pw=
+                fi
+                _tui_done
+                ;;
+            info) _tui_do agw_cli info; _tui_done ;;
+            start|stop|restart) _tui_core_lifecycle anytlsgw "$TUI_KEY" ;;
+            listener) tui_agw_listener_menu ;;
+            cert) tui_agw_cert_menu ;;
+            log) _tui_log anytlsgw ;;
+            update)
+                _tui_need_root || continue
+                tui_confirm "将下载固定版本的 AnyTLS Gateway 二进制，失败会自动回滚" || { _tui_pause; continue; }
+                _tui_do agw_cli update
+                _tui_done
+                ;;
+            uninstall) _tui_core_uninstall anytlsgw ;;
         esac
     done
 }
@@ -1548,14 +1754,16 @@ tui_main_menu() {
         printf 'Core 状态：\n'
         _tui_core_line snell
         _tui_core_line singbox
+        _tui_core_line anytlsgw
         _extra=0
         if ! env_is_root; then _tui_warn "当前不是 root，只能查看，写操作不可用"; _extra=$((_extra + 1)); fi
         _tui_rule
         if [ -n "$_note" ]; then printf '%s\n' "$_note"; _note=; _extra=$((_extra + 1)); fi
         # 清屏后提示符固定在第 20 行, 警告与提示各多一行
-        _tui_tick_init $((20 + _extra))
+        _tui_tick_init $((21 + _extra))
         tui_choose "snell|Snell
 singbox|sing-box
+anytlsgw|AnyTLS Gateway
 status|状态与诊断
 log|日志
 manager|Manager 管理" "退出"
@@ -1566,6 +1774,7 @@ manager|Manager 管理" "退出"
             invalid) _note='输入无效，请重新选择。'; continue ;;
             snell) tui_snell_menu ;;
             singbox) tui_singbox_menu ;;
+            anytlsgw) tui_anytlsgw_menu ;;
             status) tui_status_menu ;;
             log) tui_log_menu ;;
             manager) tui_manager_menu ;;

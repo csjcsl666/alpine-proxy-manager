@@ -14,7 +14,7 @@ SRC=${SRC:-/src}
 W=/tmp/apm-ci-net
 mkdir -p "$W/out" "$W/dl" /srv/dl
 
-apk add --no-cache openrc python3 gcompat libstdc++ libgcc unzip wget tinyproxy unbound git go gcc musl-dev make linux-headers patch >/dev/null
+apk add --no-cache openssl openrc python3 gcompat libstdc++ libgcc unzip wget tinyproxy unbound git go gcc musl-dev make linux-headers patch >/dev/null
 
 echo '== 构建补丁版 graftcp'
 sh "$SRC/third_party/graftcp/build-inner.sh" "$W/out"
@@ -22,6 +22,11 @@ GC=$W/out/graftcp-v0.8.3-apm1-linux-x86_64
 cp "$GC" /srv/dl/
 GC_SHA=$(awk '{ print $1 }' "$GC.sha256")
 echo "graftcp sha256 $GC_SHA"
+
+echo '== 构建 AnyTLS Gateway'
+sh "$SRC/third_party/anytls-gateway/build-inner.sh" "$W/gwout"
+GW_BIN=$W/gwout/anytls-socks-gateway-v0.1.0-linux-x86_64
+echo "gateway sha256 $(awk '{ print $1 }' "$GW_BIN.sha256")"
 
 echo '== 下载官方 sing-box 1.14.2'
 SB_SHA=8f6cb4bcf94d2b33c65d52e0d5b142db29a938336f1ff7267f397ac3758fc297
@@ -63,6 +68,8 @@ export APM_SNN_SHA256=$GC_SHA
 export SB_BIN
 export E2E_DIR=$W/run
 rc=0
+echo "== gw_behavior.sh"
+GW_BIN=$GW_BIN sh "$SRC/tests/e2e/gw_behavior.sh" || rc=1
 for s in net_access.sh net_egress.sh; do
     echo "== $s"
     sh "$SRC/tests/e2e/$s" || rc=1

@@ -160,6 +160,32 @@ proxy-manager snell access enable [--yes] | disable
 - 当前只验证 x86_64 需要 ptrace 与 root 容器需要 SYS_PTRACE 名单里有域名时还需要创建挂载命名空间的权限
 - SOCKS5 上游自己的回环地址 例如上游就在本机 由上游决定是否放行 Snell 本机的回环服务不会被直连
 
+## AnyTLS Gateway
+
+第三个独立 Core 极简的 AnyTLS 入站网关 每个 Listener 是 AnyTLS 加一个固定的 SOCKS5 上游 只转发 TCP 为 64 MiB 容器设计
+
+```sh
+proxy-manager anytls-gateway install                       # 只安装 不创建 listener
+printf '%s\n' "$PASS" | proxy-manager anytls-gateway install --port 30001 --socks-server 192.0.2.10 --socks-port 1080 --socks-username 用户名 --socks-password-stdin
+proxy-manager anytls-gateway status | info | log [N]
+proxy-manager anytls-gateway start | stop | restart
+proxy-manager anytls-gateway listener list
+proxy-manager anytls-gateway listener add --socks-server 地址 --socks-port 端口 --socks-username 用户名 --socks-password-stdin
+proxy-manager anytls-gateway listener set 30001 --new-password
+proxy-manager anytls-gateway listener delete 30001
+proxy-manager anytls-gateway cert show
+proxy-manager anytls-gateway export secret 30001
+proxy-manager anytls-gateway update [--force]
+proxy-manager anytls-gateway uninstall [--purge]
+```
+
+- 每个 Listener 有独立的 AnyTLS 密码 自动生成 24 位 只在创建时显示一次 之后用 `export secret` 查看 SOCKS5 密码只能通过 `--socks-password-stdin` 提供
+- 上游失败 认证错误 不可达都只会关闭连接 没有 DIRECT 路径 不处理 UDP 没有路由 DNS 日志文件的复杂功能 没有常驻管理进程
+- 默认自签证书 RSA 2048 有效期 10 年 客户端需要跳过证书校验或固定指纹 可以用 `cert import --cert-file 文件 --key-file 文件` 导入已有证书
+- 以专用非 root 用户 anytlsgw 运行 服务脚本里设置 GOMEMLIMIT=16MiB 与 GOGC=50
+- 配置格式与现网部署的 `/etc/anytls-socks-gateway/config.json` 兼容 Manager 不自动接管已有的部署 现有部署只读识别
+- 二进制 anytls-socks-gateway 是本项目维护的 Go 程序 基于 sing 与 sing-anytls GPL-3.0-or-later 源码 构建脚本 许可证在 `third_party/anytls-gateway` 二进制与对应源码包发布在 https://github.com/csjcsl666/alpine-proxy-manager/releases/tag/anytls-gateway-v0.1.0 固定版本和 SHA256 当前只验证 x86_64
+
 ## sing-box
 
 ```sh
@@ -308,6 +334,7 @@ AnyTLS Hysteria2 TUIC 使用 Manager 生成的自签名证书 客户端默认跳
 
 - Alpine Proxy Manager 自己的脚本是独立程序 不包含下面的组件
 - graftcp 补丁版 `v0.8.3-apm1` 仅在启用 Snell 网络功能时下载 基于 hmgle/graftcp v0.8.3 GPL-3.0-or-later 只加了精确 协议 地址 端口 豁免 补丁 许可证 构建脚本 第三方许可证 见 `third_party/graftcp` 二进制与对应的完整源码包发布在 https://github.com/csjcsl666/alpine-proxy-manager/releases/tag/graftcp-v0.8.3-apm1 可以用 `sh third_party/graftcp/build.sh 输出目录` 复现构建
+- AnyTLS Gateway 二进制 基于 sagernet/sing 与 sing-anytls GPL-3.0-or-later 源码 构建脚本 许可证 `third_party/anytls-gateway` 对应源码包在 https://github.com/csjcsl666/alpine-proxy-manager/releases/tag/anytls-gateway-v0.1.0
 - unbound 与 tinyproxy 来自 Alpine 官方仓库 按其各自的许可证分发
 
 ## 开发

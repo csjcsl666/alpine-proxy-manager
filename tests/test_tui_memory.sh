@@ -243,7 +243,7 @@ assert_eq "退出后没有任何 TUI 进程" 0 "$(gone)"
 start 20 APM_EUID=0
 setmem 77
 sleep 3.5
-assert_eq "20 行: 静态显示不刷新" "内存：11 / 128 MiB" "$(memrow)"
+assert_eq "20 行: 静态显示不刷新" "内存：11 / 128 MiB" "$(cap | grep '^内存：' | head -n 1)"
 tmux send-keys -t "$TS" x Enter
 sleep 0.8
 assert_contains "20 行: 无效输入仍有提示" "$(cap)" "输入无效"

@@ -43,14 +43,14 @@ out=$(T '0\n')
 assert_contains "主菜单标题" "$out" "Alpine Proxy Manager"
 assert_contains "主菜单版本" "$out" "版本：$(cat "$T_ROOT/VERSION")"
 assert_contains "主菜单 Build" "$out" "Build："
-for item in "1. Snell" "2. sing-box" "3. 状态与诊断" "4. 日志" "5. Manager 管理" "0. 退出"; do
+for item in "1. Snell" "2. sing-box" "3. AnyTLS Gateway" "4. 状态与诊断" "5. 日志" "6. Manager 管理" "0. 退出"; do
     assert_contains "主菜单项 $item" "$out" "$item"
 done
 mainmenu=$(printf '%s\n' "$out" | sed -n '/^请选择/q;/^----/,$p')
 for gone in "Core 管理" "协议实例" "目标访问限制" "SOCKS 出口" "客户端配置导出"; do
     assert_not_contains "主菜单不再有顶层 $gone" "$mainmenu" "$gone"
 done
-assert_eq "主菜单只有 5 个入口" 5 "$(printf '%s\n' "$mainmenu" | grep -c '^[1-9]\. ')"
+assert_eq "主菜单有 6 个入口" 6 "$(printf '%s\n' "$mainmenu" | grep -c '^[1-9]\. ')"
 assert_contains "主菜单显示 Snell 运行中" "$out" "Snell      ● 运行中"
 assert_contains "主菜单显示 sing-box 运行中" "$out" "sing-box   ● 运行中"
 assert_contains "已接管" "$out" "已接管"
@@ -114,11 +114,11 @@ assert_eq "三级返回后主菜单出现两次" 2 "$(printf '%s\n' "$out" | gre
 out=$(T '2\n3\n0\n0\n0\n')
 assert_contains "sing-box 菜单 3 进入 SOCKS 出口" "$out" "SOCKS Profile"
 assert_eq "SOCKS 出口 返回路径正常" 1 "$(printf '%s\n' "$out" | grep -c '已退出')"
-out=$(T '3\n0\n0\n')
-assert_contains "主菜单 3 是状态与诊断" "$out" "系统状态"
 out=$(T '4\n0\n0\n')
-assert_contains "主菜单 4 是日志" "$out" "Snell 日志"
+assert_contains "主菜单 3 是状态与诊断" "$out" "系统状态"
 out=$(T '5\n0\n0\n')
+assert_contains "主菜单 4 是日志" "$out" "Snell 日志"
+out=$(T '6\n0\n0\n')
 assert_contains "主菜单 5 是 Manager 管理" "$out" "Manager 管理"
 # 停止需要确认, 默认 N
 T '1\n2\n\n\n0\n0\n0\n' >/dev/null
@@ -571,22 +571,22 @@ T '2\n2\n1\n2\n8\ny\n\n0\n0\n0\n' >/dev/null
 assert_eq "确认后删除" no "$([ -f "$(INST Hysteria2-01)" ] && echo yes || echo no)"
 
 # ---- 日志 状态 Manager ----
-out=$(T '4\n0\n0\n')
+out=$(T '5\n0\n0\n')
 assert_contains "日志页" "$out" "1. Snell 日志"
 assert_contains "日志提示" "$out" "日志可能包含访问目标"
-out=$(T '3\n0\n0\n')
+out=$(T '4\n0\n0\n')
 for item in "系统状态" "Core 状态" "doctor 环境检查" "资源使用"; do assert_contains "状态页含 $item" "$out" ". $item"; done
-out=$(T '3\n1\n\n0\n0\n')
+out=$(T '4\n1\n\n0\n0\n')
 assert_contains "系统状态来自 report_status" "$out" "Server SOCKS Egress"
-out=$(T '3\n3\n\n0\n0\n')
+out=$(T '4\n3\n\n0\n0\n')
 assert_contains "doctor 来自 report_doctor" "$out" "Alpine Linux："
-out=$(T '3\n4\n\n0\n0\n')
+out=$(T '4\n4\n\n0\n0\n')
 assert_contains "资源页" "$out" "内存："
 assert_contains "资源页说明不持续刷新" "$out" "不做持续刷新"
-out=$(T '5\n0\n0\n')
+out=$(T '6\n0\n0\n')
 assert_contains "Manager 页版本" "$out" "当前版本：$(cat "$T_ROOT/VERSION")"
 for item in "查看版本" "检查环境" "查看帮助"; do assert_contains "Manager 页含 $item" "$out" ". $item"; done
-out=$(T '5\n1\n\n0\n0\n')
+out=$(T '6\n1\n\n0\n0\n')
 assert_contains "查看版本" "$out" "Alpine Proxy Manager $(cat "$T_ROOT/VERSION")"
 
 # ---- 秘密输入 helper ----

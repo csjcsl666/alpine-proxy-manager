@@ -15,19 +15,20 @@
 #   op: install uninstall start stop restart reload check_config update
 # Core key 使用 snell 与 singbox, 因为 POSIX sh 函数名不能含连字符
 
-CORE_KEYS="snell singbox"
+CORE_KEYS="snell singbox anytlsgw"
 
 # 二进制固定搜索目录, 不依赖 PATH, 避免 root 与普通用户结果不一致
 CORE_BIN_DIRS="/usr/local/bin /usr/bin /usr/local/sbin /usr/sbin"
 
 core_valid_key() {
-    case $1 in snell|singbox) return 0 ;; *) return 1 ;; esac
+    case $1 in snell|singbox|anytlsgw) return 0 ;; *) return 1 ;; esac
 }
 
 core_name() {
     case $1 in
         snell) printf 'Snell' ;;
         singbox) printf 'sing-box' ;;
+        anytlsgw) printf 'AnyTLS Gateway' ;;
     esac
 }
 
@@ -35,6 +36,7 @@ core_binary_name() {
     case $1 in
         snell) printf 'snell-server' ;;
         singbox) printf 'sing-box' ;;
+        anytlsgw) printf 'anytls-socks-gateway' ;;
     esac
 }
 
@@ -43,6 +45,7 @@ core_service_name() {
     case $1 in
         snell) printf 'snell' ;;
         singbox) printf 'sing-box' ;;
+        anytlsgw) printf 'anytls-socks-gateway' ;;
     esac
 }
 
@@ -51,6 +54,7 @@ core_version_arg() {
     case $1 in
         snell) printf -- '-v' ;;
         singbox) printf 'version' ;;
+        anytlsgw) printf -- '-version' ;;
     esac
 }
 
@@ -59,6 +63,7 @@ core_config_candidates() {
     case $1 in
         snell) printf '%s\n' /etc/snell-server.conf /etc/snell/snell-server.conf ;;
         singbox) printf '%s\n' /etc/sing-box/config.json ;;
+        anytlsgw) printf '%s\n' /etc/anytls-socks-gateway/config.json ;;
     esac
 }
 
@@ -266,6 +271,9 @@ _core_query_version() {
             ;;
         singbox)
             CF_VERSION_REPORTED=$(printf '%s\n' "$_out" | sed -n 's/^sing-box version \([^ ]*\).*/\1/p' | head -n 1)
+            ;;
+        anytlsgw)
+            CF_VERSION_REPORTED=$(printf '%s\n' "$_out" | sed -n 's/^anytls-socks-gateway \(v[0-9][0-9A-Za-z.-]*\).*/\1/p' | head -n 1)
             ;;
     esac
     if [ -n "$CF_VERSION_REPORTED" ]; then
@@ -727,6 +735,60 @@ core_snell_discover_extra() {
             CF_NOTES="${CF_NOTES}无法读取服务进程的 socket, 监听按配置端口匹配, 未确认归属于该进程
 "
         fi
+    fi
+}
+
+# AnyTLS Gateway 事实: 配置路径 (OpenRC 脚本 -config, 其次默认路径), 日志 metadata, 按进程 socket 归属的监听, 配置里的 listen 端口
+core_anytlsgw_discover_extra() {
+    local _argc _fs _inodes _c _ports
+    CF_CONFIG=
+    CF_CONFIG_SOURCE=none
+    CF_CONFIG_EXISTS=no
+    CF_CONFIG_READABLE=unknown
+    CF_CONFIG_PERM=
+    CF_LISTEN=
+    CF_LISTEN_ATTRIB=none
+    _ports=
+    _argc=$(printf '%s' "$CF_INIT_ARGS" | awk '{ for (i = 1; i < NF; i++) if ($i == "-config" || $i == "-c") { print $(i + 1); exit } }')
+    if [ -n "$_argc" ]; then
+        CF_CONFIG=$_argc
+        CF_CONFIG_SOURCE=service
+    else
+        for _c in $(core_config_candidates anytlsgw); do
+            if [ -e "$(env_path "$_c")" ]; then CF_CONFIG=$_c; CF_CONFIG_SOURCE=default-candidate; break; fi
+        done
+    fi
+    if [ -n "$CF_CONFIG" ]; then
+        _fs=$(env_path "$CF_CONFIG")
+        if [ -f "$_fs" ]; then
+            CF_CONFIG_EXISTS=yes
+            CF_CONFIG_PERM=$(stat -c '%a %U:%G' "$_fs" 2>/dev/null)
+            if _core_can_read "$_fs"; then
+                CF_CONFIG_READABLE=yes
+                _ports=$(sed -n 's/.*"listen"[[:space:]]*:[[:space:]]*"[^"]*:\([0-9][0-9]*\)".*/\1/p' "$_fs" | tr '\n' ' ' | sed 's/^/ /; s/$/ /')
+            else
+                CF_CONFIG_READABLE=no
+                CF_NOTES="${CF_NOTES}配置文件 $CF_CONFIG 存在但当前用户无读取权限, 监听信息按进程 socket 判断
+"
+            fi
+        fi
+    fi
+    CF_LOG_OUT_EXISTS=no
+    CF_LOG_OUT_SIZE=
+    CF_LOG_ERR_EXISTS=no
+    CF_LOG_ERR_SIZE=
+    if [ -n "$CF_LOG_OUT" ] && [ -f "$(env_path "$CF_LOG_OUT")" ]; then CF_LOG_OUT_EXISTS=yes; CF_LOG_OUT_SIZE=$(_core_file_size "$(env_path "$CF_LOG_OUT")"); fi
+    if [ -n "$CF_LOG_ERR" ] && [ -f "$(env_path "$CF_LOG_ERR")" ]; then CF_LOG_ERR_EXISTS=yes; CF_LOG_ERR_SIZE=$(_core_file_size "$(env_path "$CF_LOG_ERR")"); fi
+    if [ -n "$CF_PID" ] && [ -r "$(env_path "/proc/$CF_PID/fd")" ]; then
+        _inodes=$(_core_socket_inodes "$CF_PID")
+        if [ "$_inodes" != " " ]; then
+            CF_LISTEN=$(_core_proc_listeners "$_inodes" "")
+            CF_LISTEN_ATTRIB=pid
+        fi
+    fi
+    if [ "$CF_LISTEN_ATTRIB" = none ] && [ -n "$_ports" ] && [ "$CF_STATE" = running ]; then
+        CF_LISTEN=$(_core_proc_listeners "" "$_ports")
+        CF_LISTEN_ATTRIB=config-port
     fi
 }
 

@@ -250,6 +250,13 @@ case $svc in
         statef=$K/state-sing-box
         pidf=$R/run/sing-box.pid
         ;;
+    anytls-socks-gateway)
+        conf=$R/etc/anytls-socks-gateway/config.json
+        bin=$R/usr/local/bin/anytls-socks-gateway
+        sup=43754; wrk=43755
+        statef=$K/state-anytls-socks-gateway
+        pidf=$R/run/anytls-socks-gateway.pid
+        ;;
     *) echo "$*" >> "$K/violations"; exit 99 ;;
 esac
 # 旋钮: snell 沿用无后缀的旧名字, 两个服务都认 名字-服务名
@@ -258,6 +265,8 @@ state() { cat "$statef" 2>/dev/null || echo stopped; }
 ports_of() { # 输出 "协议 端口" 每行一个
     case $svc in
         snell) sed -n 's/^listen[[:space:]]*=[[:space:]]*//p' "$1" | tr ',' '\n' | sed -n 's/.*:\([0-9][0-9]*\)$/tcp \1 00000000/p' ;;
+        anytls-socks-gateway)
+            sed -n 's/.*"listen": *"[^":]*:\([0-9][0-9]*\)".*/tcp \1 00000000/p' "$1" ;;
         sing-box)
             # 输出 协议 端口 地址十六进制, 具体 IPv4 地址按 /proc/net 的小端写法, 通配地址为 00000000
             awk '
@@ -274,8 +283,9 @@ rebuild_net() {
     mkdir -p "$R/proc/net"
     : > "$K/tcp.rows"
     : > "$K/udp.rows"
-    for s in snell sing-box; do
+    for s in snell sing-box anytls-socks-gateway; do
         case $s in
+            anytls-socks-gateway) sf=$K/state-anytls-socks-gateway; c=$R/etc/anytls-socks-gateway/config.json; base=70000; w=43755; ng=no_listen-anytls-socks-gateway ;;
             snell) sf=$K/state; c=$R/etc/snell/snell-server.conf; base=50000; w=23755; ng=no_listen ;;
             sing-box) sf=$K/state-sing-box; c=$R/etc/sing-box/config.json; base=60000; w=33002; ng=no_listen-sing-box ;;
         esac
@@ -315,7 +325,7 @@ stop_proc() {
     rm -rf "$R/proc/$sup" "$R/proc/$wrk" "$pidf"
     rebuild_net
     # 没有任何服务在运行时不留 tcp 与 udp 表, 与未启动前一致
-    [ "$(cat "$K/state" 2>/dev/null)" = started ] || [ "$(cat "$K/state-sing-box" 2>/dev/null)" = started ] || rm -f "$R/proc/net/tcp" "$R/proc/net/udp"
+    [ "$(cat "$K/state" 2>/dev/null)" = started ] || [ "$(cat "$K/state-sing-box" 2>/dev/null)" = started ] || [ "$(cat "$K/state-anytls-socks-gateway" 2>/dev/null)" = started ] || rm -f "$R/proc/net/tcp" "$R/proc/net/udp"
 }
 start_proc() {
     mkdir -p "$R/run" "$R/proc/$sup" "$R/proc/$wrk/fd" "$R/proc/net"
@@ -326,6 +336,7 @@ start_proc() {
     case $svc in
         snell) printf 'ld-linux-x86-64.so.2\0--argv0\0/usr/local/bin/snell-server\0--\0/usr/local/bin/snell-server\0-c\0/etc/snell/snell-server.conf\0' > "$R/proc/$wrk/cmdline" ;;
         sing-box) printf '/usr/local/bin/sing-box\0run\0--disable-color\0-D\0/var/lib/sing-box\0-c\0/etc/sing-box/config.json\0' > "$R/proc/$wrk/cmdline" ;;
+        anytls-socks-gateway) printf '/usr/local/bin/anytls-socks-gateway\0-config\0/etc/anytls-socks-gateway/config.json\0' > "$R/proc/$wrk/cmdline" ;;
     esac
     rebuild_net
 }
@@ -339,6 +350,8 @@ do_start() {
         grep -q ":$fp" "$conf" && return 1
         grep -q "\"listen_port\": $fp" "$conf" && return 1
     fi
+    # AnyTLS Gateway 的 start_pre 会先用 -check 校验配置 (桩二进制不解析参数, 这里只检查配置存在且非空)
+    [ "$svc" != anytls-socks-gateway ] || [ -s "$conf" ] || return 1
     # sing-box 的 start_pre 会先 check 配置
     if [ "$svc" = sing-box ]; then
         "$bin" check -c "$conf" >/dev/null 2>&1 || return 1
