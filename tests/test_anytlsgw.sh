@@ -304,6 +304,13 @@ assert_eq "purge 删除事实来源" 0 "$([ -e "$A$ST" ] && echo 1 || echo 0)"
 assert_eq "purge 删除日志目录" 0 "$([ -e "$A/var/log/anytls-socks-gateway" ] && echo 1 || echo 0)"
 assert_eq "purge 删除元数据" 0 "$([ -e "$A/var/lib/alpine-proxy-manager/cores/anytlsgw.meta" ] && echo 1 || echo 0)"
 assert_eq "purge 删除创建的用户" 0 "$(grep -c '^anytlsgw:' "$A/etc/passwd")"
+new_g u3
+printf '%s\n' "$SOCKSPW" | gw install --port 30001 --socks-server 192.0.2.10 --socks-port 1080 --socks-username upuser --socks-password-stdin >/dev/null 2>&1
+gw uninstall >/dev/null 2>&1
+gw install >/dev/null 2>&1
+gw uninstall --purge >/dev/null 2>&1
+assert_eq "卸载 重装 再 purge 仍删除 Manager 创建的用户" 0 "$(grep -c '^anytlsgw:' "$A/etc/passwd")"
+assert_eq "卸载 重装 再 purge 删除用户组" 0 "$(grep -c '^anytlsgw:' "$A/etc/group")"
 assert_eq "purge 不留任何含 SOCKS5 密码的文件" "" "$(grep -rl "$SOCKSPW" "$A" 2>/dev/null)"
 
 # ---- 现有部署 (External) 不接管 ----

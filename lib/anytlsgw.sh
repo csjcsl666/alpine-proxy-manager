@@ -216,16 +216,15 @@ _agw_commit() { # CAND_STATE
         agw_gen_json "$1" > "$_cj" || { rm -f -- "$_cj"; return 1; }
         chmod 640 -- "$_cj"
         _agw_check_json "$_cj" || { rm -f -- "$_cj"; return 1; }
-        txn_commit "$(env_path "$AGW_CONF")" "$_cj" _agw_nonempty || return 1
-        _snell_chown "root:$AGW_GROUP" "$(env_path "$AGW_CONF")"
-        chmod 640 -- "$(env_path "$AGW_CONF")"
+        # config.json 是由事实来源生成的派生文件, 直接原子替换, 不做备份 (备份名 config.json.bak 会与 sing-box 的混淆)
+        _snell_chown "root:$AGW_GROUP" "$_cj"
+        mv -f -- "$_cj" "$(env_path "$AGW_CONF")" || { rm -f -- "$_cj"; return 1; }
     else
         rm -f -- "$(env_path "$AGW_CONF")"
     fi
     txn_commit "$_sf" "$1" _agw_check_state || return 1
 }
 
-_agw_nonempty() { [ -s "$1" ]; }
 
 _agw_save() { # 保存当前两个文件的副本到 暂存目录, 路径在 AGW_SAVED_STATE AGW_SAVED_CONF
     _snell_ensure_staging || return 1
@@ -499,6 +498,9 @@ agw_install() {
     _snell_say "[2/6] 用户与目录"
     _mark_group=no
     _mark_user=no
+    # 上一次卸载 (保留数据) 时用户是 Manager 创建的, 记号文件留在配置目录里, 清除时据此删除
+    [ ! -e "$(env_path "$AGW_CONF_DIR")/.apm-created-user" ] || _mark_user=yes
+    [ ! -e "$(env_path "$AGW_CONF_DIR")/.apm-created-group" ] || _mark_group=yes
     if ! _agw_group_exists; then _snell_run addgroup -S "$AGW_GROUP" >/dev/null 2>&1 || { apm_err "创建用户组失败"; return 1; }; R_GROUP=1; _mark_group=yes; fi
     if ! _agw_user_exists; then _snell_run adduser -S -G "$AGW_GROUP" -H -h /var/empty -s /sbin/nologin "$AGW_USER" >/dev/null 2>&1 || { _agw_install_fail "创建用户失败"; return 1; }; R_USER=1; _mark_user=yes; fi
     [ "$_had_conf" = yes ] || R_CONFDIR=1
@@ -507,6 +509,8 @@ agw_install() {
     chmod 750 -- "$(env_path "$AGW_CONF_DIR")" "$(env_path "$AGW_LOG_DIR")"
     _snell_chown "root:$AGW_GROUP" "$(env_path "$AGW_CONF_DIR")"
     _snell_chown "$AGW_USER:$AGW_GROUP" "$(env_path "$AGW_LOG_DIR")"
+    [ "$_mark_user" != yes ] || : > "$(env_path "$AGW_CONF_DIR")/.apm-created-user"
+    [ "$_mark_group" != yes ] || : > "$(env_path "$AGW_CONF_DIR")/.apm-created-group"
     _snell_say "[3/6] 证书"
     if [ -f "$(env_path "$AGW_CERT")" ] && [ -f "$(env_path "$AGW_KEY")" ]; then
         _snell_say "沿用已保留的证书"
@@ -808,12 +812,14 @@ agw_update() {
 # ---- uninstall ----
 
 agw_uninstall() {
-    local _purge _cu _cg
+    local _purge _cu _cg _bk
     _purge=0
     while [ $# -gt 0 ]; do case $1 in --purge) _purge=1 ;; *) apm_err "未知参数: $1"; return 2 ;; esac; shift; done
     _agw_begin yes || return $?
     _cu=$(kv_get "$(core_meta_file anytlsgw)" created_user)
     _cg=$(kv_get "$(core_meta_file anytlsgw)" created_group)
+    [ ! -e "$(env_path "$AGW_CONF_DIR")/.apm-created-user" ] || _cu=yes
+    [ ! -e "$(env_path "$AGW_CONF_DIR")/.apm-created-group" ] || _cg=yes
     if [ "$CF_STATE" = running ] || [ "$CF_SERVICE_STATE" = started ] || [ -n "$CF_PID" ]; then
         _agw_rc stop >/dev/null 2>&1 || { apm_err "停止失败, 卸载已中止, 没有删除任何文件"; return 1; }
         _agw_wait_stopped || { apm_err "服务没有停止, 卸载已中止, 没有删除任何文件"; return 1; }
@@ -823,10 +829,12 @@ agw_uninstall() {
     rm -f -- "$(env_path "$AGW_BIN")" "$(env_path "$AGW_BIN").old"
     if [ "$_purge" = 1 ]; then
         rm -rf -- "$(env_path "$AGW_CONF_DIR")" "$(env_path "$AGW_LOG_DIR")" "$(_agw_state)"
+        for _bk in "$(state_backup_dir)"/anytlsgw.conf.bak.*; do [ -e "$_bk" ] && rm -f -- "$_bk"; done
         [ "$_cu" != yes ] || ! _agw_user_exists || _snell_run deluser "$AGW_USER" >/dev/null 2>&1 || apm_warn "删除用户 $AGW_USER 失败, 已保留"
         [ "$_cg" != yes ] || ! _agw_group_exists || _snell_run delgroup "$AGW_GROUP" >/dev/null 2>&1 || apm_warn "删除用户组 $AGW_GROUP 失败, 已保留"
     fi
     rm -f -- "$(core_meta_file anytlsgw)"
+    for _bk in "$(state_backup_dir)"/anytlsgw.meta.bak.*; do [ -e "$_bk" ] && rm -f -- "$_bk"; done
     _snell_say "AnyTLS Gateway 已卸载"
     if [ "$_purge" = 1 ]; then _snell_say "已删除: 服务, 二进制, 配置, 证书, 日志, listener 记录, 元数据 (以及由 Manager 创建的用户与用户组)"
     else _snell_say "已保留: 配置 $AGW_CONF_DIR, 日志 $AGW_LOG_DIR, listener 记录 (重新安装前需先 --purge 或手工清理)"; fi
