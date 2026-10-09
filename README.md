@@ -257,6 +257,8 @@ AnyTLS Hysteria2 TUIC 使用 Manager 生成的自签名证书 客户端默认跳
 
 - 更新 Core `proxy-manager snell update` 与 `proxy-manager sing-box update` 更新前会校验 失败回滚旧版本 更新 Manager 见上文
 - 卸载 Core 默认保留配置 证书 日志 实例与 SOCKS Profile 重新安装会沿用 `--purge` 才会删除 并且只删除由 Manager 创建的内容 现有部署的任何内容都不会被删除
+- 命令行 `sing-box uninstall` 保留数据 `sing-box uninstall --purge` 完整删除 sing-box 专属的托管数据 包括协议实例 目标访问限制 客户端连接地址 SOCKS Profile 证书 运行配置 配置备份 日志与由 Manager 创建的用户 不会碰 Snell
+- TUI 里卸载 sing-box 会先列出将删除的内容与数量 再让你选择 完整卸载 或 仅卸载程序 然后确认 默认取消 完整卸载复用 `--purge`
 - 备份 每次配置变更都会在 `/var/lib/alpine-proxy-manager/backups/` 保留最近 2 份 目录 0700 文件 0600 其中包含凭据
 - 数据位置 `/etc/alpine-proxy-manager/` 实例 SOCKS Profile 客户端连接地址 `/var/lib/alpine-proxy-manager/` 元数据与备份 配置文件权限 0600 目录 0700
 
