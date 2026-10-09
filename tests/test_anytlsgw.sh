@@ -285,10 +285,15 @@ assert_eq "二进制已删除" 0 "$([ -e "$A/usr/local/bin/anytls-socks-gateway"
 assert_eq "服务脚本已删除" 0 "$([ -e "$A$INIT" ] && echo 1 || echo 0)"
 assert_ok "保留配置" test -f "$A$CONF"
 assert_ok "保留事实来源" test -f "$A$ST"
-OUT=$(gw install 2>&1)
-assert_eq "残留配置时拒绝重新安装" 4 "$?"
 OUT=$(gw uninstall --purge 2>&1)
-assert_eq "没有二进制时 uninstall 已无需处理" 4 "$?"
+assert_eq "卸载后 uninstall --purge 无对象可处理" 4 "$?"
+OUT=$(gw install 2>&1)
+assert_eq "保留配置后重新安装成功" 0 "$?"
+assert_contains "沿用保留的 listener" "$OUT" "沿用已保留的 listener 记录"
+assert_contains "沿用保留的证书" "$OUT" "沿用已保留的证书"
+core_discover anytlsgw
+assert_eq "重新安装后保留的 listener 在运行" running "$CF_STATE"
+assert_contains "listener 仍在" "$(gw listener list)" "30001"
 
 new_g u1
 printf '%s\n' "$SOCKSPW" | gw install --port 30001 --socks-server 192.0.2.10 --socks-port 1080 --socks-username upuser --socks-password-stdin >/dev/null 2>&1

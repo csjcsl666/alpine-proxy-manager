@@ -457,30 +457,42 @@ _agw_add_to() { # CAND
 }
 
 agw_install() {
-    local _rc _mark_user _mark_group _rel _cand
+    local _rc _mark_user _mark_group _cand _had_conf _had_state _have_ids _newlistener
     _agw_parse_listener_args "$@" || return $?
     _snell_need_root || return 4
     _agw_asset_ok || return 4
     _snell_lock || return 4
     trap '_snell_cleanup' EXIT
     core_discover anytlsgw
-    if [ "$CF_INSTALLED" != no ] || [ -n "$CF_SERVICE" ] || [ -e "$(env_path "$AGW_CONF_DIR")" ] || [ -e "$(_agw_state)" ]; then
+    if [ "$CF_INSTALLED" != no ] || [ -n "$CF_SERVICE" ]; then
         if [ "$CF_MANAGED" = yes ]; then
             apm_err "AnyTLS Gateway 已由 Manager 安装, 不隐式更新; 请使用 anytls-gateway update"
         else
-            apm_err "检测到现有 AnyTLS Gateway 或残留文件, 拒绝安装; 不会覆盖或接管现有部署"
+            apm_err "检测到现有 AnyTLS Gateway 部署, 拒绝安装; 不会覆盖或接管现有部署"
         fi
         return 4
     fi
+    _had_conf=no
+    _had_state=no
+    [ ! -e "$(env_path "$AGW_CONF_DIR")" ] || _had_conf=yes
+    [ ! -e "$(_agw_state)" ] || _had_state=yes
     R_STARTED=0; R_RCUPDATE=0; R_INIT=0; R_BIN=0; R_STATE=0; R_CONFDIR=0; R_LOGDIR=0; R_USER=0; R_GROUP=0
     _agw_need_openssl || return 1
-    [ -z "$AGW_A_SHOST" ] || { _snell_ensure_staging || return 1; }
-    if [ -n "$AGW_A_SHOST" ]; then
-        _cand=$SNELL_STAGING/state.cand
+    _snell_ensure_staging || return 1
+    _cand=$SNELL_STAGING/state.cand
+    if [ "$_had_state" = yes ]; then
+        _agw_check_state "$(_agw_state)" || { apm_err "保留的 listener 记录无效, 请先修复或清理 $(_agw_state)"; return 1; }
+        cp -- "$(_agw_state)" "$_cand"
+        _snell_say "沿用已保留的 listener 记录"
+    else
         : > "$_cand"
+    fi
+    _newlistener=no
+    if [ -n "$AGW_A_SHOST" ]; then
         _agw_add_to "$_cand"
         _rc=$?
         [ "$_rc" -eq 0 ] || return "$_rc"
+        _newlistener=yes
     fi
     _snell_say "[1/6] 下载并校验 AnyTLS Gateway $AGW_VER"
     _agw_stage_binary || return 1
@@ -489,27 +501,30 @@ agw_install() {
     _mark_user=no
     if ! _agw_group_exists; then _snell_run addgroup -S "$AGW_GROUP" >/dev/null 2>&1 || { apm_err "创建用户组失败"; return 1; }; R_GROUP=1; _mark_group=yes; fi
     if ! _agw_user_exists; then _snell_run adduser -S -G "$AGW_GROUP" -H -h /var/empty -s /sbin/nologin "$AGW_USER" >/dev/null 2>&1 || { _agw_install_fail "创建用户失败"; return 1; }; R_USER=1; _mark_user=yes; fi
+    [ "$_had_conf" = yes ] || R_CONFDIR=1
+    [ -e "$(env_path "$AGW_LOG_DIR")" ] || R_LOGDIR=1
     mkdir -p -- "$(env_path "$AGW_CONF_DIR")" "$(env_path "$AGW_LOG_DIR")" || { _agw_install_fail "创建目录失败"; return 1; }
-    R_CONFDIR=1; R_LOGDIR=1
     chmod 750 -- "$(env_path "$AGW_CONF_DIR")" "$(env_path "$AGW_LOG_DIR")"
     _snell_chown "root:$AGW_GROUP" "$(env_path "$AGW_CONF_DIR")"
     _snell_chown "$AGW_USER:$AGW_GROUP" "$(env_path "$AGW_LOG_DIR")"
-    _snell_say "[3/6] 自签证书"
-    _agw_gen_cert || { _agw_install_fail "证书生成失败"; return 1; }
+    _snell_say "[3/6] 证书"
+    if [ -f "$(env_path "$AGW_CERT")" ] && [ -f "$(env_path "$AGW_KEY")" ]; then
+        _snell_say "沿用已保留的证书"
+    else
+        _agw_gen_cert || { _agw_install_fail "证书生成失败"; return 1; }
+    fi
     _snell_say "[4/6] 配置"
     state_ensure_dirs || { _agw_install_fail "无法创建状态目录"; return 1; }
-    if [ -n "$AGW_A_SHOST" ]; then
-        # 二进制先放到位, 配置校验要用网关自己的 -check
-        atomic_install "$AGW_NEW_BIN" "$(env_path "$AGW_BIN")" 755 || { _agw_install_fail "安装二进制失败"; return 1; }
-        R_BIN=1
-        _snell_chown root:root "$(env_path "$AGW_BIN")"
-        R_STATE=1
+    atomic_install "$AGW_NEW_BIN" "$(env_path "$AGW_BIN")" 755 || { _agw_install_fail "安装二进制失败"; return 1; }
+    R_BIN=1
+    _snell_chown root:root "$(env_path "$AGW_BIN")"
+    _have_ids=$(_agw_ids "$_cand")
+    if [ -n "$_have_ids" ]; then
+        [ "$_had_state" = yes ] || R_STATE=1
         _agw_commit "$_cand" || { _agw_install_fail "写入配置失败"; return 1; }
-    else
-        : > "$(_agw_state)"; chmod 600 -- "$(_agw_state)"; R_STATE=1
-        atomic_install "$AGW_NEW_BIN" "$(env_path "$AGW_BIN")" 755 || { _agw_install_fail "安装二进制失败"; return 1; }
-        R_BIN=1
-        _snell_chown root:root "$(env_path "$AGW_BIN")"
+    elif [ "$_had_state" != yes ]; then
+        R_STATE=1
+        : > "$(_agw_state)"; chmod 600 -- "$(_agw_state)"
     fi
     _snell_say "[5/6] 安装 OpenRC 服务"
     _agw_write_init || { _agw_install_fail "写入 $AGW_INIT 失败"; return 1; }
@@ -517,10 +532,9 @@ agw_install() {
     _snell_run rc-update add anytls-socks-gateway default >/dev/null 2>&1 || { _agw_install_fail "加入默认运行级别失败"; return 1; }
     R_RCUPDATE=1
     _agw_write_meta "$AGW_NEW_REPORTED" "$_mark_user" "$_mark_group" || { _agw_install_fail "写入元数据失败"; return 1; }
-    _rel=$AGW_VER
-    if [ -z "$AGW_A_SHOST" ]; then
+    if [ -z "$_have_ids" ]; then
         _snell_say "[6/6] 完成 (没有 listener, 服务未启动)"
-        _snell_say "AnyTLS Gateway $_rel 已安装; 添加第一个 listener: proxy-manager anytls-gateway listener add ..."
+        _snell_say "AnyTLS Gateway $AGW_VER 已安装; 添加第一个 listener: proxy-manager anytls-gateway listener add ..."
         return 0
     fi
     _snell_say "[6/6] 启动并验证"
@@ -528,14 +542,18 @@ agw_install() {
         core_discover anytlsgw
         _agw_show_failure
         R_STARTED=1
+        # 保留的数据不在失败时删除
+        [ "$_had_state" = yes ] && R_STATE=0
         _agw_install_fail "服务没有进入健康状态"
         return 1
     fi
     _snell_say "AnyTLS Gateway 安装完成并已验证"
     _snell_say "  版本：$AGW_NEW_REPORTED"
-    _snell_say "  监听：$AGW_A_BIND:$AGW_A_PORT (容器或系统内端口, NAT 公网映射需自行配置)"
-    _snell_say "  AnyTLS 密码：$AGW_NEW_PW (只显示这一次, 之后用 anytls-gateway export secret $AGW_NEW_ID 查看)"
-    _snell_say "  证书：自签, 客户端需要跳过证书校验或固定指纹 $(_agw_cert_fp)"
+    if [ "$_newlistener" = yes ]; then
+        _snell_say "  监听：$AGW_A_BIND:$AGW_A_PORT (容器或系统内端口, NAT 公网映射需自行配置)"
+        _snell_say "  AnyTLS 密码：$AGW_NEW_PW (只显示这一次, 之后用 anytls-gateway export secret $AGW_NEW_ID 查看)"
+    fi
+    _snell_say "  证书：$(_agw_cert_fp) (自签证书需要客户端跳过校验或固定该指纹)"
 }
 
 # ---- start stop restart ----
