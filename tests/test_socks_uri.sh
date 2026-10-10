@@ -88,6 +88,14 @@ assert_eq "错误提示不含用户名与密码" "" "$SECRET_SEEN"
 P 'socks5://alice:SecretX@192.0.2.10:99999'
 assert_eq "失败后不保留主机" "" "$TUI_SK_HOST"
 
+# 地址或链接的混合输入提示必须是正常可见输入, 不能使用隐藏输入
+TGT_SRC=$(sed -n '/^_tui_socks_target()/,/^}/p' "$T_ROOT/lib/tui.sh")
+assert_contains "混合输入提示读取函数存在" "$TGT_SRC" "tui_ask"
+assert_not_contains "混合输入提示不使用隐藏输入" "$TGT_SRC" "tui_read_secret"
+assert_not_contains "混合输入提示不关闭回显" "$TGT_SRC" "stty"
+for p in '上游地址或完整 socks5:// 链接' 'SOCKS5 出口地址或完整 socks5:// 链接' 'SOCKS5 服务器地址或完整 socks5:// 链接'; do
+    assert_not_contains "混合输入提示文案不声明不回显: $p" "$(grep -F "$p" "$T_ROOT/lib/tui.sh")" "输入不回显"
+done
 # ---- sing-box SOCKS Profile: TUI 入口 ----
 T() { printf '%b' "$1" | ( _tui_socks_add ) 2>&1; }
 SPW='Fict%Pass:01@x'
@@ -150,9 +158,9 @@ a=$(grep -v '^#' "$(PROF plain1)" | sed 's/^name=.*//' | sort | tr '\n' ' ')
 T 'socks5://plainuser:FictPlainPw01@192.0.2.70:1095\nplain1b\n' >/dev/null
 b=$(grep -v '^#' "$(PROF plain1b)" | sed 's/^name=.*//' | sort | tr '\n' ' ')
 assert_eq "链接与分项输入生成相同配置" "$a" "$b"
-# TTY 路径下链接不回显
+# TTY 路径下程序自己不打印密码 (终端回显由用户自己的终端负责)
 out=$(printf 'socks5://dave:FictTtyPw@192.0.2.72:1099\nttyprof\n\n' | ( APM_TUI_TEST_TTY=1 _tui_socks_add ) 2>&1)
-case $out in *FictTtyPw*) t_fail "TTY 路径不回显密码" ;; *) t_pass "TTY 路径不回显密码" ;; esac
+case $out in *FictTtyPw*) t_fail "TTY 路径程序不打印密码" ;; *) t_pass "TTY 路径程序不打印密码" ;; esac
 
 # ---- Snell SOCKS5 出口: TUI 入口 ----
 S() { printf '%b' "$1" | ( tui_snell_egress_menu ) 2>&1; }
