@@ -162,7 +162,7 @@ proxy-manager snell access enable [--yes] | disable
 
 ## AnyTLS Gateway
 
-第三个独立 Core 极简的 AnyTLS 入站网关 每个 Listener 是 AnyTLS 加一个固定的 SOCKS5 上游 只转发 TCP 为 64 MiB 容器设计
+第三个独立 Core 极简的 AnyTLS 入站网关 每条转发线路是一个 AnyTLS 入站端口加一个固定的 SOCKS5 出口 只转发 TCP 为 64 MiB 容器设计
 
 ```sh
 proxy-manager anytls-gateway install                       # 只安装 不创建 listener
@@ -179,7 +179,8 @@ proxy-manager anytls-gateway update [--force]
 proxy-manager anytls-gateway uninstall [--purge]
 ```
 
-- 每个 Listener 有独立的 AnyTLS 密码 自动生成 24 位 只在创建时显示一次 之后用 `export secret` 查看 SOCKS5 密码只能通过 `--socks-password-stdin` 提供
+- 每条转发线路有独立的 AnyTLS 密码 自动生成 24 位 只在创建时显示一次 之后用 `export secret` 查看 SOCKS5 密码只能通过 `--socks-password-stdin` 提供
+- 交互界面里添加或修改 SOCKS5 出口时 可以直接粘贴完整的 `socks5://用户名:密码@主机:端口` 链接 自动识别主机 端口和认证 用户名密码可以百分号编码 IPv6 需要方括号 链接不完整时只补问缺少的字段 输入普通地址仍按原有方式逐项填写 链接输入不回显 解析失败不改动任何配置 sing-box 的 SOCKS Profile 和 Snell 的 SOCKS5 出口交互界面行为一致 命令行仍然只接受分项参数
 - 上游失败 认证错误 不可达都只会关闭连接 没有 DIRECT 路径 不处理 UDP 没有路由 DNS 日志文件的复杂功能 没有常驻管理进程
 - 默认自签证书 RSA 2048 有效期 10 年 客户端需要跳过证书校验或固定指纹 可以用 `cert import --cert-file 文件 --key-file 文件` 导入已有证书
 - 以专用非 root 用户 anytlsgw 运行 服务脚本里设置 GOMEMLIMIT=16MiB 与 GOGC=50

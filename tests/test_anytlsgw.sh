@@ -4,7 +4,7 @@
 # 真实的最小 ELF 桩代替网关二进制 真实的 openssl 行为由模拟脚本代替 真实进程行为由 tests/e2e/gw_behavior.sh 覆盖
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report client snell snellnet anytlsgw singbox
+t_load common environment state core model policy txn report client snell snellnet anytlsgw singbox tui
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then
@@ -116,7 +116,7 @@ assert_eq "不支持的架构被拒绝" 4 "$?"
 new_g i0
 OUT=$(gw install 2>&1)
 assert_eq "只安装成功" 0 "$?"
-assert_contains "说明没有 listener" "$OUT" "没有 listener"
+assert_contains "说明没有转发线路" "$OUT" "没有转发线路"
 assert_eq "二进制是 ELF" elf "$(core_file_kind "$A/usr/local/bin/anytls-socks-gateway")"
 assert_eq "二进制权限" 755 "$(stat -c %a "$A/usr/local/bin/anytls-socks-gateway")"
 assert_eq "没有 config.json" 0 "$([ -e "$A$CONF" ] && echo 1 || echo 0)"
@@ -176,7 +176,7 @@ assert_contains "发现: 监听" "$CF_LISTEN" ":30001"
 OUT=$(gw status)
 assert_contains "status 显示运行" "$OUT" "运行中"
 OUT=$(gw info)
-assert_contains "info 显示 listener" "$OUT" "监听 0.0.0.0:30001"
+assert_contains "info 显示转发线路" "$OUT" "30001 → 192.0.2.10:1080"
 assert_not_contains "info 不含密码" "$OUT" "$PW1"
 assert_not_contains "info 不含 SOCKS5 密码" "$OUT" "$SOCKSPW"
 OUT=$(gw export info)
@@ -214,7 +214,7 @@ assert_eq "删除后 JSON 里两个 listener" 2 "$(grep -c '"listen"' "$A$CONF")
 OUT=$(gw listener delete 31000 2>&1)
 assert_eq "删除不存在的 listener 被拒绝" 2 "$?"
 OUT=$(gw listener list)
-assert_contains "list 显示上游" "$OUT" "上游 203.0.113.5:2080"
+assert_contains "list 显示上游" "$OUT" "→ 203.0.113.5:2080"
 assert_not_contains "list 不含密码" "$OUT" "NewSocksPassNotSecret0002"
 # 端口被其他程序占用
 printf '   9: 00000000:%04X 00000000:0000 0A 00000000:00000000 00:00000000 00000000   100        0 99999 1 0\n' 31111 >> "$A/proc/net/tcp"
@@ -289,7 +289,7 @@ OUT=$(gw uninstall --purge 2>&1)
 assert_eq "卸载后 uninstall --purge 无对象可处理" 4 "$?"
 OUT=$(gw install 2>&1)
 assert_eq "保留配置后重新安装成功" 0 "$?"
-assert_contains "沿用保留的 listener" "$OUT" "沿用已保留的 listener 记录"
+assert_contains "沿用保留的 listener" "$OUT" "沿用已保留的转发线路记录"
 assert_contains "沿用保留的证书" "$OUT" "沿用已保留的证书"
 core_discover anytlsgw
 assert_eq "重新安装后保留的 listener 在运行" running "$CF_STATE"
@@ -312,6 +312,137 @@ gw uninstall --purge >/dev/null 2>&1
 assert_eq "卸载 重装 再 purge 仍删除 Manager 创建的用户" 0 "$(grep -c '^anytlsgw:' "$A/etc/passwd")"
 assert_eq "卸载 重装 再 purge 删除用户组" 0 "$(grep -c '^anytlsgw:' "$A/etc/group")"
 assert_eq "purge 不留任何含 SOCKS5 密码的文件" "" "$(grep -rl "$SOCKSPW" "$A" 2>/dev/null)"
+
+# ---- TUI: 转发线路管理 与 SOCKS5 链接 ----
+export APM_TUI_ANSI=0
+TG() { printf '%b' "$1" | ( tui_anytlsgw_menu ) 2>&1; }
+TR() { printf '%b' "$1" | ( tui_agw_listener_menu ) 2>&1; }
+new_g tui1
+gw install >/dev/null 2>&1
+out=$(TG '0\n')
+assert_contains "网关主菜单标题" "$out" "AnyTLS Gateway"
+for item in "1. 查看详细信息" "2. 启动" "3. 转发线路管理" "4. 证书管理" "5. 查看日志" "6. 更新" "7. 卸载" "0. 返回"; do
+    assert_contains "网关主菜单项 $item" "$out" "$item"
+done
+assert_not_contains "网关主菜单不再出现 Listener" "$out" "Listener"
+out=$(TG '3\n0\n0\n')
+assert_contains "转发线路子菜单标题" "$out" "AnyTLS Gateway · 转发线路管理"
+assert_contains "没有线路时显示" "$out" "当前线路：无"
+for item in "1. 添加转发线路" "2. 删除转发线路" "3. 修改 SOCKS5 出口" "4. 重新生成 AnyTLS 密码" "5. 查看 AnyTLS 密码" "0. 返回"; do
+    assert_contains "子菜单项 $item" "$out" "$item"
+done
+assert_not_contains "子菜单不再出现 listener" "$out" "listener"
+assert_not_contains "子菜单不再出现 修改上游" "$out" "修改上游"
+out=$(TG '4\n0\n0\n')
+assert_contains "证书管理页标题" "$out" "AnyTLS Gateway · 证书管理"
+# 完整链接添加
+FPW='Fict%Gw:Pass01'
+out=$(TR '1\n30101\nsocks5://tw-user:Fict%25Gw%3APass01@proxy.example.com:1080\n\n0\n')
+assert_contains "完整链接直接添加转发线路" "$out" "已添加转发线路"
+assert_contains "给出识别摘要" "$out" "已识别：主机 proxy.example.com，端口 1080"
+assert_not_contains "完整链接不再询问出口端口" "$out" "SOCKS5 出口端口"
+assert_not_contains "完整链接不再询问用户名" "$out" "SOCKS5 用户名"
+assert_not_contains "输出不含 SOCKS5 密码" "$out" "$FPW"
+assert_not_contains "输出不含编码密码" "$out" "Gw%3A"
+assert_eq "状态记录 socks_server" "proxy.example.com:1080" "$(kv_get "$A$ST" listener.1.socks_server)"
+assert_eq "状态记录 用户名" tw-user "$(kv_get "$A$ST" listener.1.socks_username)"
+assert_eq "状态记录 密码已解码" "$FPW" "$(kv_get "$A$ST" listener.1.socks_password)"
+assert_eq "状态记录 监听" "0.0.0.0:30101" "$(kv_get "$A$ST" listener.1.listen)"
+assert_ok "config.json 通过校验后落盘" test -s "$A$CONF"
+assert_contains "config.json 含出口" "$(cat "$A$CONF")" "proxy.example.com:1080"
+assert_eq "状态文件权限 600" 600 "$(stat -c %a "$A$ST")"
+assert_eq "config.json 权限不宽于 640" yes "$(case $(stat -c %a "$A$CONF") in 600|640) echo yes ;; esac)"
+out=$(TR '0\n')
+assert_contains "线路列表显示端口与出口" "$out" "1  30101 → proxy.example.com:1080"
+assert_not_contains "线路列表不含用户名" "$out" "tw-user"
+assert_not_contains "线路列表不含密码" "$out" "$FPW"
+assert_contains "线路列表显示条数" "$out" "当前线路：1 条"
+# 分项输入与链接得到相同配置
+out=$(TR '1\n30102\nproxy.example.com\n1080\ntw-user\n'"$FPW"'\n\n0\n')
+assert_contains "分项输入仍询问出口端口" "$out" "SOCKS5 出口端口"
+assert_contains "分项输入仍询问用户名" "$out" "SOCKS5 用户名"
+assert_contains "分项输入添加成功" "$out" "已添加转发线路"
+for k in socks_server socks_username socks_password; do
+    assert_eq "链接与分项输入一致: $k" "$(kv_get "$A$ST" listener.1.$k)" "$(kv_get "$A$ST" listener.2.$k)"
+done
+assert_contains "分项输入照常打印" "$(cat "$A$CONF")" "30102"
+# 不完整链接
+out=$(TR '1\n30103\nsocks5://tw2-user:FictGwPw2@192.0.2.31\n1081\n\n0\n')
+assert_contains "缺端口的链接补问出口端口" "$out" "SOCKS5 出口端口"
+assert_not_contains "缺端口的链接不再问用户名" "$out" "SOCKS5 用户名"
+assert_eq "补全后端口" "192.0.2.31:1081" "$(kv_get "$A$ST" listener.3.socks_server)"
+assert_eq "补全后保留链接里的密码" FictGwPw2 "$(kv_get "$A$ST" listener.3.socks_password)"
+out=$(TR '1\n30104\nsocks5://jp-user@192.0.2.32:1082\nFictGwPw3\n\n0\n')
+assert_contains "只有用户名的链接补问密码" "$out" "SOCKS5 密码"
+assert_not_contains "只有用户名的链接不再问用户名" "$out" "SOCKS5 用户名"
+assert_eq "补问后密码" FictGwPw3 "$(kv_get "$A$ST" listener.4.socks_password)"
+out=$(TR '1\n30105\nsocks5://[2001:db8::9]:1083\nsg-user\nFictGwPw4\n\n0\n')
+assert_contains "无认证链接对网关补问凭据" "$out" "SOCKS5 用户名"
+assert_eq "IPv6 出口规范化" "[2001:db8::9]:1083" "$(kv_get "$A$ST" listener.5.socks_server)"
+assert_eq "IPv6 出口用户名" sg-user "$(kv_get "$A$ST" listener.5.socks_username)"
+# 非法链接: 配置不变, 允许重新输入
+SUM=$(sha256sum "$A$ST" "$A$CONF" | awk '{ print $1 }')
+out=$(TR '1\n30106\nhttp://x:FictBadGw@192.0.2.33:1080\nsocks5://x:FictBadGw@192.0.2.33:70000\nsocks5://x:FictBadGw@[::1:1080\nsocks5://x:Fict%zz@192.0.2.33:1080\n\n0\n')
+assert_contains "非法协议提示" "$out" "错误：不支持的协议"
+assert_contains "非法端口提示" "$out" "错误：端口无效"
+assert_contains "畸形 IPv6 提示" "$out" "错误：IPv6 地址格式无效"
+assert_contains "非法编码提示" "$out" "错误：密码的百分号编码无效"
+assert_not_contains "错误不回显链接" "$out" "FictBadGw"
+assert_eq "非法链接后状态与配置不变" "$SUM" "$(sha256sum "$A$ST" "$A$CONF" | awk '{ print $1 }')"
+out=$(TR '1\n\n\n0\n')
+assert_eq "留空取消后配置不变" "$SUM" "$(sha256sum "$A$ST" "$A$CONF" | awk '{ print $1 }')"
+# 修改 SOCKS5 出口
+out=$(TR '3\n1\nsocks5://new-user:FictGwNew%21@new.example.com:2080\n\n0\n')
+assert_contains "修改出口成功" "$out" "已更新转发线路"
+assert_eq "修改后出口" "new.example.com:2080" "$(kv_get "$A$ST" listener.1.socks_server)"
+assert_eq "修改后用户名" new-user "$(kv_get "$A$ST" listener.1.socks_username)"
+assert_eq "修改后密码已解码" 'FictGwNew!' "$(kv_get "$A$ST" listener.1.socks_password)"
+assert_not_contains "修改页不回显密码" "$out" "FictGwNew"
+assert_eq "修改后监听端口不变" "0.0.0.0:30101" "$(kv_get "$A$ST" listener.1.listen)"
+out=$(TR '3\n2\n\n3000\n\n\n\n0\n')
+assert_eq "只改端口时主机保持" "proxy.example.com:3000" "$(kv_get "$A$ST" listener.2.socks_server)"
+assert_eq "留空保持用户名" tw-user "$(kv_get "$A$ST" listener.2.socks_username)"
+assert_eq "留空保持密码" "$FPW" "$(kv_get "$A$ST" listener.2.socks_password)"
+out=$(TR '3\n3\nsocks5://x:FictBadGw@192.0.2.33:70000\n\n\n\n\n0\n')
+assert_contains "修改页非法链接提示" "$out" "错误：端口无效"
+assert_eq "修改页非法链接后出口不变" "192.0.2.31:1081" "$(kv_get "$A$ST" listener.3.socks_server)"
+# AnyTLS 密码管理与删除
+OLDPW=$(kv_get "$A$ST" listener.4.password)
+out=$(TR '4\n4\ny\n\n0\n')
+assert_contains "重新生成 AnyTLS 密码" "$out" "已更新转发线路"
+NEWPW=$(kv_get "$A$ST" listener.4.password)
+assert_eq "AnyTLS 密码确实改变" no "$([ "$OLDPW" = "$NEWPW" ] && echo yes || echo no)"
+out=$(TR '5\n4\ny\n\n0\n')
+assert_contains "查看 AnyTLS 密码需确认后才显示" "$out" "$NEWPW"
+out=$(TR '5\n4\nn\n\n0\n')
+assert_not_contains "拒绝确认不显示 AnyTLS 密码" "$out" "$NEWPW"
+out=$(TR '2\n5\ny\n\n0\n')
+assert_contains "删除转发线路" "$out" "已删除转发线路"
+assert_eq "线路已删除" "" "$(kv_get "$A$ST" listener.5.listen)"
+out=$(TR '2\n4\nn\n\n0\n')
+assert_eq "删除取消后线路仍在" "0.0.0.0:30104" "$(kv_get "$A$ST" listener.4.listen)"
+out=$(TR '0\n')
+assert_contains "多条线路列表" "$out" "当前线路：4 条"
+# 凭据不泄漏: 备份与其他文件
+for pw in FictGwPw2 FictGwPw3 FictGwNew; do
+    leak=$(grep -rl "$pw" "$A" 2>/dev/null | grep -v "$ST\|$CONF" | grep -v '/anytlsgw\.conf\.bak\.' )
+    assert_eq "$pw 只出现在受控文件" "" "$leak"
+done
+for f in "$A"/etc/alpine-proxy-manager/anytlsgw.conf.bak.*; do
+    [ -e "$f" ] || continue
+    assert_eq "事务备份权限 600: ${f##*/}" 600 "$(stat -c %a "$f")"
+done
+# 安装时同时创建第一条线路 (链接)
+new_g tui2
+out=$(TG '1\ny\nsocks5://ins-user:FictInsPw@192.0.2.40:1090\n\n0\n')
+assert_contains "安装流程接受完整链接" "$out" "已识别：主机 192.0.2.40，端口 1090"
+assert_eq "安装流程写入出口" "192.0.2.40:1090" "$(kv_get "$A$ST" listener.1.socks_server)"
+assert_eq "安装流程写入密码" FictInsPw "$(kv_get "$A$ST" listener.1.socks_password)"
+assert_not_contains "安装流程输出不含密码" "$out" "FictInsPw"
+new_g tui3
+out=$(TG '1\ny\n\n\n0\n')
+assert_ok "安装流程留空只安装" test -x "$A/usr/local/bin/anytls-socks-gateway"
+assert_eq "留空只安装没有线路" "" "$(kv_get "$A$ST" listener.1.listen)"
 
 # ---- 现有部署 (External) 不接管 ----
 new_g x1

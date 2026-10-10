@@ -128,6 +128,166 @@ tui_read_secret() { # 提示, 结果在 TUI_SECRET
     return 0
 }
 
+
+# ---- SOCKS5 链接 (socks5://[用户[:密码]@]主机[:端口]) 的共享解析 ----
+# 只负责安全提取字段, 不回显输入, 不写任何文件; 最终配置仍由各 Core 自己的生成器处理
+
+# 百分号解码, 只接受可打印 ASCII, 结果在 TUI_PD
+_tui_pct_decode() { # 文本
+    local _s _pre _h _v _o
+    _s=$1
+    TUI_PD=
+    while :; do
+        case $_s in
+            *%*)
+                _pre=${_s%%\%*}
+                _s=${_s#*%}
+                _h=${_s%"${_s#??}"}
+                case $_h in [0-9A-Fa-f][0-9A-Fa-f]) ;; *) return 1 ;; esac
+                _v=$((0x$_h))
+                [ "$_v" -ge 32 ] && [ "$_v" -le 126 ] || return 1
+                _o=$(printf '%03o' "$_v")
+                _s=${_s#??}
+                TUI_PD=$TUI_PD$_pre$(printf '%b' "\\0$_o")
+                ;;
+            *) TUI_PD=$TUI_PD$_s; return 0 ;;
+        esac
+    done
+}
+
+# 解析一行输入. 返回 0=完整或部分链接 (字段在 TUI_SK_*), 1=明确无效 (原因在 TUI_SK_ERR, 不含输入内容), 2=不是链接 (按普通主机处理)
+# TUI_SK_PORT 为空表示链接没有给端口; TUI_SK_HASUSER/HASPASS 表示用户名/密码是否由链接给出
+tui_socks_uri_parse() { # 输入
+    local _r _auth _hp _ui _h _p _l
+    TUI_SK_HOST=; TUI_SK_PORT=; TUI_SK_USER=; TUI_SK_PASS=; TUI_SK_HASUSER=0; TUI_SK_HASPASS=0; TUI_SK_ERR=
+    _l=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    case $_l in
+        socks5://*) ;;
+        *://*) TUI_SK_ERR='不支持的协议，只接受 socks5://'; return 1 ;;
+        *@*|*/*|*' '*) TUI_SK_ERR='不是有效的地址，完整链接需要以 socks5:// 开头'; return 1 ;;
+        *) return 2 ;;
+    esac
+    _r=${1#?????????}
+    _r=${_r%/}
+    case $_r in
+        *[/?#' ']*) TUI_SK_ERR='链接格式有歧义，不接受路径、参数或空白'; return 1 ;;
+        '') TUI_SK_ERR='链接缺少主机'; return 1 ;;
+    esac
+    case $_r in
+        *@*) _ui=${_r%@*}; _hp=${_r##*@}; _auth=1 ;;
+        *) _ui=; _hp=$_r; _auth=0 ;;
+    esac
+    if [ "$_auth" = 1 ]; then
+        case $_ui in
+            '') TUI_SK_ERR='认证信息为空'; return 1 ;;
+            :*) TUI_SK_ERR='缺少用户名'; return 1 ;;
+            *:) TUI_SK_ERR='密码为空'; return 1 ;;
+            *:*)
+                _tui_pct_decode "${_ui%%:*}" || { TUI_SK_ERR='用户名的百分号编码无效'; return 1; }
+                TUI_SK_USER=$TUI_PD
+                _tui_pct_decode "${_ui#*:}" || { TUI_SK_ERR='密码的百分号编码无效'; return 1; }
+                TUI_SK_PASS=$TUI_PD
+                TUI_SK_HASPASS=1
+                ;;
+            *)
+                _tui_pct_decode "$_ui" || { TUI_SK_ERR='用户名的百分号编码无效'; return 1; }
+                TUI_SK_USER=$TUI_PD
+                ;;
+        esac
+        TUI_SK_HASUSER=1
+    fi
+    case $_hp in
+        '['*)
+            case $_hp in
+                '['*']') _h=${_hp#\[}; _h=${_h%\]}; _p= ;;
+                '['*']:'*) _h=${_hp#\[}; _h=${_h%%\]*}; _p=${_hp##*\]:}; [ -n "$_p" ] || { TUI_SK_ERR='端口为空'; return 1; } ;;
+                *) TUI_SK_ERR='IPv6 地址格式无效'; return 1 ;;
+            esac
+            case $_h in
+                '') TUI_SK_ERR='链接缺少主机'; return 1 ;;
+                *[!0-9A-Fa-f:.]*|*']'*|*'['*) TUI_SK_ERR='IPv6 地址格式无效'; return 1 ;;
+            esac
+            _h="[$_h]"
+            ;;
+        *:*:*) TUI_SK_ERR='IPv6 地址需要用方括号包起来'; return 1 ;;
+        *:*) _h=${_hp%%:*}; _p=${_hp#*:}; [ -n "$_p" ] || { TUI_SK_ERR='端口为空'; return 1; } ;;
+        *) _h=$_hp; _p= ;;
+    esac
+    [ -n "$_h" ] || { TUI_SK_ERR='链接缺少主机'; return 1; }
+    if [ -n "$_p" ] && ! is_port "$_p"; then TUI_SK_ERR='端口无效 (需要 1 到 65535)'; return 1; fi
+    _sb_socks_host_normalize "$_h" "${_p:-1}" >/dev/null 2>&1 || { TUI_SK_ERR='主机地址无效'; return 1; }
+    TUI_SK_HOST=$_h
+    TUI_SK_PORT=$_p
+    return 0
+}
+
+# 读取上游地址或完整链接. 输入不回显, 因为链接里可能带密码; 普通地址读完后回显一次
+# 返回 0=有输入 (字段在 TUI_SK_*, 普通地址时 TUI_SK_URI=0), 1=留空取消
+_tui_socks_target() { # 提示
+    local _line _rc
+    while :; do
+        tui_read_secret "$1" || return 1
+        _line=$(printf '%s' "$TUI_SECRET" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        TUI_SECRET=
+        [ -n "$_line" ] || return 1
+        TUI_SK_PORT_FROM_URI=0
+        TUI_SK_URI=1
+        tui_socks_uri_parse "$_line"
+        _rc=$?
+        case $_rc in
+            0)
+                [ -z "$TUI_SK_PORT" ] || TUI_SK_PORT_FROM_URI=1
+                printf '已识别：主机 %s' "$TUI_SK_HOST"
+                [ -z "$TUI_SK_PORT" ] || printf '，端口 %s' "$TUI_SK_PORT"
+                [ "$TUI_SK_HASUSER" = 0 ] || printf '，用户名已提供'
+                [ "$TUI_SK_HASPASS" = 0 ] || printf '，密码已提供（不显示）'
+                _line=
+                printf '\n'
+                return 0
+                ;;
+            2)
+                TUI_SK_URI=0
+                TUI_SK_HOST=$_line; TUI_SK_PORT=; TUI_SK_USER=; TUI_SK_PASS=; TUI_SK_HASUSER=0; TUI_SK_HASPASS=0
+                printf '上游地址：%s\n' "$TUI_SK_HOST"
+                ;;
+            *)
+                printf '错误：%s，请重新输入，留空取消\n' "$TUI_SK_ERR"
+                continue
+                ;;
+        esac
+        return 0
+    done
+}
+
+# 链接没有给端口时, 沿用各 Core 原有的端口提问
+_tui_socks_port() { # 提示
+    [ -z "$TUI_SK_PORT" ] || return 0
+    tui_ask "$1"
+    TUI_SK_PORT=$TUI_IN
+}
+
+# 补全认证信息. ALLOW_NOAUTH=1 时允许无认证 (用户名留空); 链接带端口但没有认证信息即表示无认证
+# 链接只给了用户名时只补问密码, 其余沿用各 Core 原有的提问; 结果在 TUI_SK_USER / TUI_SK_PASS
+_tui_socks_auth() { # 用户名提示, 密码提示, ALLOW_NOAUTH
+    if [ "$TUI_SK_URI" = 1 ] && [ "$TUI_SK_HASUSER" = 0 ] && [ "$3" = 1 ] && [ "$TUI_SK_PORT_FROM_URI" = 1 ]; then
+        TUI_SK_USER=
+        TUI_SK_PASS=
+        return 0
+    fi
+    if [ "$TUI_SK_HASUSER" = 0 ]; then
+        tui_ask "$1"
+        TUI_SK_USER=$TUI_IN
+    fi
+    if [ "$TUI_SK_HASPASS" = 0 ] && { [ -n "$TUI_SK_USER" ] || [ "$3" != 1 ]; }; then
+        tui_read_secret "$2" || return 1
+        TUI_SK_PASS=$TUI_SECRET
+        TUI_SECRET=
+    fi
+    return 0
+}
+
+_tui_socks_clear() { TUI_SK_PASS=; TUI_SK_USER=; TUI_SECRET=; }
+
 tui_confirm() { # 说明文字, 默认 N
     local _a
     printf '%s\n' "$1"
@@ -709,13 +869,14 @@ disable|禁用" "返回"
             back) return 0 ;;
             set)
                 _tui_need_root || continue
-                tui_ask "上游地址（IPv4、IPv6 或域名，留空取消）："
-                _srv=$TUI_IN
-                [ -n "$_srv" ] || continue
-                tui_ask "上游端口："
-                _port=$TUI_IN
-                tui_ask "用户名（留空表示无认证）："
-                _user=$TUI_IN
+                _tui_socks_target "上游地址或完整 socks5:// 链接（输入不回显，IPv4、IPv6 或域名，留空取消）：" || continue
+                _srv=$TUI_SK_HOST
+                _tui_socks_port "上游端口："
+                _port=$TUI_SK_PORT
+                _tui_socks_auth "用户名（留空表示无认证）：" "密码（输入不回显）：" 1 || { _tui_socks_clear; _tui_pause; continue; }
+                _user=$TUI_SK_USER
+                _pw=$TUI_SK_PASS
+                _tui_socks_clear
                 tui_ask "解析用的 DNS 服务器 IP（留空使用 $SNN_DNS_SERVER_DEFAULT，查询经由上游）："
                 _dns=$TUI_IN
                 set -- --server "$_srv" --port "$_port"
@@ -723,9 +884,6 @@ disable|禁用" "返回"
                 if [ -z "$_user" ]; then
                     _tui_do snell_cli egress set "$@" --no-auth
                 else
-                    tui_read_secret "密码（输入不回显）：" || { _tui_pause; continue; }
-                    _pw=$TUI_SECRET
-                    TUI_SECRET=
                     _tui_do_secret "$_pw" snell_cli egress set "$@" --username "$_user" --password-stdin
                     _pw=
                 fi
@@ -879,30 +1037,28 @@ tui_agw_listener_menu() {
     local _pw _srv _port _user _bind _lp
     while :; do
         _tui_clear
-        _tui_header "AnyTLS Gateway · Listener"
+        _tui_header "AnyTLS Gateway · 转发线路管理"
         _tui_do agw_cli listener list
         printf '\n'
-        tui_choose "add|添加 listener
-delete|删除 listener
-upstream|修改上游
+        tui_choose "add|添加转发线路
+delete|删除转发线路
+upstream|修改 SOCKS5 出口
 newpw|重新生成 AnyTLS 密码
 secret|查看 AnyTLS 密码" "返回"
         case $TUI_KEY in
             back) return 0 ;;
             add)
                 _tui_need_root || continue
-                tui_ask "监听端口（留空随机选择）："
+                tui_ask "AnyTLS 监听端口（留空随机选择）："
                 _lp=$TUI_IN
-                tui_ask "SOCKS5 上游地址（IPv4、IPv6 或域名，留空取消）："
-                _srv=$TUI_IN
-                [ -n "$_srv" ] || continue
-                tui_ask "SOCKS5 上游端口："
-                _port=$TUI_IN
-                tui_ask "SOCKS5 用户名："
-                _user=$TUI_IN
-                tui_read_secret "SOCKS5 密码（输入不回显）：" || { _tui_pause; continue; }
-                _pw=$TUI_SECRET
-                TUI_SECRET=
+                _tui_socks_target "SOCKS5 出口地址或完整 socks5:// 链接（输入不回显，留空取消）：" || continue
+                _srv=$TUI_SK_HOST
+                _tui_socks_port "SOCKS5 出口端口："
+                _port=$TUI_SK_PORT
+                _tui_socks_auth "SOCKS5 用户名：" "SOCKS5 密码（输入不回显）：" 0 || { _tui_socks_clear; _tui_pause; continue; }
+                _user=$TUI_SK_USER
+                _pw=$TUI_SK_PASS
+                _tui_socks_clear
                 set -- --socks-server "$_srv" --socks-port "$_port" --socks-username "$_user" --socks-password-stdin
                 [ -z "$_lp" ] || set -- "$@" --port "$_lp"
                 _tui_do_secret "$_pw" agw_cli listener add "$@"
@@ -911,26 +1067,34 @@ secret|查看 AnyTLS 密码" "返回"
                 ;;
             delete)
                 _tui_need_root || continue
-                tui_ask "要删除的 listener ID 或端口（留空取消）："
+                tui_ask "要删除的转发线路 ID 或端口（留空取消）："
                 [ -n "$TUI_IN" ] || continue
-                tui_confirm "即将删除 listener $TUI_IN，使用它的客户端会断开" || { _tui_pause; continue; }
+                tui_confirm "即将删除转发线路 $TUI_IN，使用它的客户端会断开" || { _tui_pause; continue; }
                 _tui_do agw_cli listener delete "$TUI_IN"
                 _tui_done
                 ;;
             upstream)
                 _tui_need_root || continue
-                tui_ask "listener ID 或端口（留空取消）："
+                tui_ask "转发线路 ID 或端口（留空取消）："
                 _lp=$TUI_IN
                 [ -n "$_lp" ] || continue
-                tui_ask "新的 SOCKS5 上游地址（留空保持）："
-                _srv=$TUI_IN
-                tui_ask "新的 SOCKS5 上游端口（留空保持）："
-                _port=$TUI_IN
-                tui_ask "新的 SOCKS5 用户名（留空保持）："
-                _user=$TUI_IN
-                tui_read_secret "新的 SOCKS5 密码（输入不回显，留空保持）：" || { _tui_pause; continue; }
-                _pw=$TUI_SECRET
-                TUI_SECRET=
+                TUI_SK_HASUSER=0; TUI_SK_HASPASS=0; TUI_SK_PORT=; TUI_SK_USER=; TUI_SK_PASS=
+                _srv=
+                if _tui_socks_target "新的 SOCKS5 出口地址或完整 socks5:// 链接（输入不回显，留空保持）："; then _srv=$TUI_SK_HOST; fi
+                _tui_socks_port "新的 SOCKS5 出口端口（留空保持）："
+                _port=$TUI_SK_PORT
+                if [ "$TUI_SK_HASUSER" = 0 ]; then
+                    tui_ask "新的 SOCKS5 用户名（留空保持）："
+                    TUI_SK_USER=$TUI_IN
+                fi
+                _user=$TUI_SK_USER
+                if [ "$TUI_SK_HASPASS" = 0 ]; then
+                    tui_read_secret "新的 SOCKS5 密码（输入不回显，留空保持）：" || { _tui_socks_clear; _tui_pause; continue; }
+                    TUI_SK_PASS=$TUI_SECRET
+                    TUI_SECRET=
+                fi
+                _pw=$TUI_SK_PASS
+                _tui_socks_clear
                 set --
                 [ -z "$_srv" ] || set -- "$@" --socks-server "$_srv"
                 [ -z "$_port" ] || set -- "$@" --socks-port "$_port"
@@ -945,14 +1109,14 @@ secret|查看 AnyTLS 密码" "返回"
                 ;;
             newpw)
                 _tui_need_root || continue
-                tui_ask "listener ID 或端口（留空取消）："
+                tui_ask "转发线路 ID 或端口（留空取消）："
                 [ -n "$TUI_IN" ] || continue
                 tui_confirm "将生成新的 AnyTLS 密码并显示一次，旧密码立即失效" || { _tui_pause; continue; }
                 _tui_do agw_cli listener set "$TUI_IN" --new-password
                 _tui_done
                 ;;
             secret)
-                tui_ask "listener ID 或端口（留空取消）："
+                tui_ask "转发线路 ID 或端口（留空取消）："
                 [ -n "$TUI_IN" ] || continue
                 tui_confirm "即将显示 AnyTLS 密码。
 请注意终端记录和截图可能泄漏凭据。" || { _tui_pause; continue; }
@@ -967,7 +1131,7 @@ tui_agw_cert_menu() {
     local _c _k
     while :; do
         _tui_clear
-        _tui_header "AnyTLS Gateway · 证书"
+        _tui_header "AnyTLS Gateway · 证书管理"
         _tui_do agw_cli cert show
         printf '\n'
         tui_choose "generate|重新生成自签证书
@@ -1031,8 +1195,8 @@ restart|重启"
 start|启动"
                 fi
                 _items="$_items
-listener|Listener
-cert|证书
+listener|转发线路管理
+cert|证书管理
 log|查看日志
 update|更新
 uninstall|卸载"
@@ -1044,18 +1208,16 @@ uninstall|卸载"
             install)
                 _tui_need_root || continue
                 tui_confirm "将下载 AnyTLS Gateway（固定版本加 SHA256 校验）并安装为 Manager 管理的服务，只转发 TCP" || { _tui_pause; continue; }
-                tui_ask "要同时创建第一个 listener 吗？SOCKS5 上游地址（留空只安装）："
-                _srv=$TUI_IN
-                if [ -z "$_srv" ]; then
+                if ! _tui_socks_target "要同时创建第一条转发线路吗？SOCKS5 出口地址或完整 socks5:// 链接（输入不回显，留空只安装）："; then
                     _tui_do agw_cli install
                 else
-                    tui_ask "SOCKS5 上游端口："
-                    _port=$TUI_IN
-                    tui_ask "SOCKS5 用户名："
-                    _user=$TUI_IN
-                    tui_read_secret "SOCKS5 密码（输入不回显）：" || { _tui_pause; continue; }
-                    _pw=$TUI_SECRET
-                    TUI_SECRET=
+                    _srv=$TUI_SK_HOST
+                    _tui_socks_port "SOCKS5 出口端口："
+                    _port=$TUI_SK_PORT
+                    _tui_socks_auth "SOCKS5 用户名：" "SOCKS5 密码（输入不回显）：" 0 || { _tui_socks_clear; _tui_pause; continue; }
+                    _user=$TUI_SK_USER
+                    _pw=$TUI_SK_PASS
+                    _tui_socks_clear
                     _tui_do_secret "$_pw" agw_cli install --socks-server "$_srv" --socks-port "$_port" --socks-username "$_user" --socks-password-stdin
                     _pw=
                 fi
@@ -1225,7 +1387,7 @@ _tui_add_instance() { # 协议
     _tui_sb_managed || return 0
     _tui_need_root || return 0
     set --
-    tui_ask "监听端口（留空随机选择）："
+    tui_ask "AnyTLS 监听端口（留空随机选择）："
     [ -z "$TUI_IN" ] || set -- "$@" --port "$TUI_IN"
     case $_t in
         anytls|hysteria2|tuic)
@@ -1518,24 +1680,22 @@ _tui_socks_add() {
     local _srv _port _name _user _pw
     _tui_need_root || return 0
     _tui_sb_managed || return 0
-    tui_ask "SOCKS5 服务器地址（IPv4 或 IPv6，留空取消）："
-    [ -n "$TUI_IN" ] || return 0
-    _srv=$TUI_IN
-    tui_ask "端口："
-    [ -n "$TUI_IN" ] || return 0
-    _port=$TUI_IN
+    _tui_socks_target "SOCKS5 服务器地址或完整 socks5:// 链接（输入不回显，IPv4 或 IPv6，留空取消）：" || return 0
+    _srv=$TUI_SK_HOST
+    _tui_socks_port "端口："
+    [ -n "$TUI_SK_PORT" ] || { _tui_socks_clear; return 0; }
+    _port=$TUI_SK_PORT
     tui_ask "Profile 名称（留空自动编号）："
     _name=$TUI_IN
-    tui_ask "用户名（留空表示无认证）："
-    _user=$TUI_IN
+    _tui_socks_auth "用户名（留空表示无认证）：" "密码（输入不回显）：" 1 || { _tui_socks_clear; _tui_pause; return 0; }
+    _user=$TUI_SK_USER
+    _pw=$TUI_SK_PASS
+    _tui_socks_clear
     set -- --server "$_srv" --port "$_port"
     [ -z "$_name" ] || set -- "$@" --name "$_name"
     if [ -z "$_user" ]; then
         _tui_do singbox_cli socks add "$@" --no-auth
     else
-        tui_read_secret "密码（输入不回显）：" || { _tui_pause; return 0; }
-        _pw=$TUI_SECRET
-        TUI_SECRET=
         if [ -z "$_pw" ]; then
             printf '密码不能为空\n'
             _tui_pause

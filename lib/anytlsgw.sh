@@ -91,16 +91,16 @@ _agw_check_state() { # FILE
     for _id in $(_agw_ids "$_f"); do
         _n=$((_n + 1))
         _l=$(_agw_get "$_f" "$_id" listen)
-        _agw_listen_ok "$_l" || { apm_err "$_f: listener $_id 的监听地址无效: $_l"; _rc=1; }
+        _agw_listen_ok "$_l" || { apm_err "$_f: 转发线路 $_id 的监听地址无效: $_l"; _rc=1; }
         case " $_seen " in *" ${_l##*:} "*) apm_err "$_f: 监听端口重复: ${_l##*:}"; _rc=1 ;; esac
         _seen="$_seen ${_l##*:}"
-        _agw_pw_ok "$(_agw_get "$_f" "$_id" password)" || { apm_err "$_f: listener $_id 的 AnyTLS 密码无效"; _rc=1; }
+        _agw_pw_ok "$(_agw_get "$_f" "$_id" password)" || { apm_err "$_f: 转发线路 $_id 的 AnyTLS 密码无效"; _rc=1; }
         _s=$(_agw_get "$_f" "$_id" socks_server)
-        _sb_socks_host_normalize "${_s%:*}" "${_s##*:}" >/dev/null 2>&1 || { apm_err "$_f: listener $_id 的 SOCKS5 地址无效: $_s"; _rc=1; }
-        _agw_secret_ok "$(_agw_get "$_f" "$_id" socks_username)" && [ -n "$(_agw_get "$_f" "$_id" socks_username)" ] || { apm_err "$_f: listener $_id 的 SOCKS5 用户名无效"; _rc=1; }
-        _agw_secret_ok "$(_agw_get "$_f" "$_id" socks_password)" && [ -n "$(_agw_get "$_f" "$_id" socks_password)" ] || { apm_err "$_f: listener $_id 的 SOCKS5 密码无效"; _rc=1; }
+        _sb_socks_host_normalize "${_s%:*}" "${_s##*:}" >/dev/null 2>&1 || { apm_err "$_f: 转发线路 $_id 的 SOCKS5 地址无效: $_s"; _rc=1; }
+        _agw_secret_ok "$(_agw_get "$_f" "$_id" socks_username)" && [ -n "$(_agw_get "$_f" "$_id" socks_username)" ] || { apm_err "$_f: 转发线路 $_id 的 SOCKS5 用户名无效"; _rc=1; }
+        _agw_secret_ok "$(_agw_get "$_f" "$_id" socks_password)" && [ -n "$(_agw_get "$_f" "$_id" socks_password)" ] || { apm_err "$_f: 转发线路 $_id 的 SOCKS5 密码无效"; _rc=1; }
     done
-    [ "$_n" -le "$AGW_MAX_LISTENERS" ] || { apm_err "$_f: listener 数量超过上限 $AGW_MAX_LISTENERS"; _rc=1; }
+    [ "$_n" -le "$AGW_MAX_LISTENERS" ] || { apm_err "$_f: 转发线路数量超过上限 $AGW_MAX_LISTENERS"; _rc=1; }
     return "$_rc"
 }
 
@@ -246,7 +246,7 @@ _agw_apply() {
     _snell_say "重启 AnyTLS Gateway 使新配置生效"
     if [ -z "$(_agw_ids "$(_agw_state)")" ]; then
         _agw_rc stop >/dev/null 2>&1
-        _snell_say "没有 listener 了, 服务已停止"
+        _snell_say "没有转发线路了, 服务已停止"
         return 0
     fi
     if _agw_rc restart >/dev/null 2>&1 && _agw_wait_healthy; then
@@ -436,9 +436,9 @@ _agw_add_to() { # CAND
     if [ -z "$AGW_A_PORT" ]; then AGW_A_PORT=$(_snell_rand_port) || { apm_err "无法选择空闲端口"; return 1; }; fi
     _snell_valid_port "$AGW_A_PORT" || { apm_err "端口必须是 1025 到 65535: $AGW_A_PORT"; return 2; }
     _agw_listen_ok "$AGW_A_BIND:$AGW_A_PORT" || { apm_err "监听地址无效: $AGW_A_BIND"; return 2; }
-    if grep -q "^listener\.[0-9]*\.listen=.*:$AGW_A_PORT\$" "$1" 2>/dev/null; then apm_err "端口 $AGW_A_PORT 已被另一个 listener 使用"; return 2; fi
+    if grep -q "^listener\.[0-9]*\.listen=.*:$AGW_A_PORT\$" "$1" 2>/dev/null; then apm_err "端口 $AGW_A_PORT 已被另一条转发线路使用"; return 2; fi
     if _snell_port_in_use "$AGW_A_PORT"; then apm_err "端口 $AGW_A_PORT 已被其他程序监听"; return 4; fi
-    [ "$(_agw_ids "$1" | grep -c .)" -lt "$AGW_MAX_LISTENERS" ] || { apm_err "listener 数量已达上限 $AGW_MAX_LISTENERS"; return 2; }
+    [ "$(_agw_ids "$1" | grep -c .)" -lt "$AGW_MAX_LISTENERS" ] || { apm_err "转发线路数量已达上限 $AGW_MAX_LISTENERS"; return 2; }
     AGW_NEW_PW=$(_agw_gen_pw) || { apm_err "生成密码失败"; return 1; }
     _next=$(kv_get "$1" next_id)
     case $_next in ''|*[!0-9]*) _next=1 ;; esac
@@ -480,9 +480,9 @@ agw_install() {
     _snell_ensure_staging || return 1
     _cand=$SNELL_STAGING/state.cand
     if [ "$_had_state" = yes ]; then
-        _agw_check_state "$(_agw_state)" || { apm_err "保留的 listener 记录无效, 请先修复或清理 $(_agw_state)"; return 1; }
+        _agw_check_state "$(_agw_state)" || { apm_err "保留的转发线路记录无效, 请先修复或清理 $(_agw_state)"; return 1; }
         cp -- "$(_agw_state)" "$_cand"
-        _snell_say "沿用已保留的 listener 记录"
+        _snell_say "沿用已保留的转发线路记录"
     else
         : > "$_cand"
     fi
@@ -537,8 +537,8 @@ agw_install() {
     R_RCUPDATE=1
     _agw_write_meta "$AGW_NEW_REPORTED" "$_mark_user" "$_mark_group" || { _agw_install_fail "写入元数据失败"; return 1; }
     if [ -z "$_have_ids" ]; then
-        _snell_say "[6/6] 完成 (没有 listener, 服务未启动)"
-        _snell_say "AnyTLS Gateway $AGW_VER 已安装; 添加第一个 listener: proxy-manager anytls-gateway listener add ..."
+        _snell_say "[6/6] 完成 (没有转发线路, 服务未启动)"
+        _snell_say "AnyTLS Gateway $AGW_VER 已安装; 添加第一条转发线路: proxy-manager anytls-gateway listener add ..."
         return 0
     fi
     _snell_say "[6/6] 启动并验证"
@@ -565,7 +565,7 @@ agw_install() {
 agw_start() {
     _agw_begin no || return $?
     core_discover anytlsgw
-    [ -n "$(_agw_ids "$(_agw_state)")" ] || { apm_err "没有 listener, 请先添加: anytls-gateway listener add"; return 4; }
+    [ -n "$(_agw_ids "$(_agw_state)")" ] || { apm_err "没有转发线路, 请先添加: anytls-gateway listener add"; return 4; }
     if [ "$CF_STATE" = running ]; then _snell_say "AnyTLS Gateway 已在运行"; return 0; fi
     _agw_rc start >/dev/null 2>&1 && _agw_wait_healthy || { core_discover anytlsgw; _agw_show_failure; apm_err "启动失败"; return 1; }
     _snell_say "AnyTLS Gateway 已启动并验证"
@@ -582,7 +582,7 @@ agw_stop() {
 
 agw_restart() {
     _agw_begin no || return $?
-    [ -n "$(_agw_ids "$(_agw_state)")" ] || { apm_err "没有 listener, 请先添加: anytls-gateway listener add"; return 4; }
+    [ -n "$(_agw_ids "$(_agw_state)")" ] || { apm_err "没有转发线路, 请先添加: anytls-gateway listener add"; return 4; }
     _agw_rc restart >/dev/null 2>&1 && _agw_wait_healthy || { core_discover anytlsgw; _agw_show_failure; apm_err "重启失败"; return 1; }
     _snell_say "AnyTLS Gateway 已重启并验证"
 }
@@ -601,7 +601,7 @@ agw_listener_add() {
     [ "$_rc" -eq 0 ] || return "$_rc"
     _agw_save || return 1
     _agw_commit "$_cand" || return 1
-    _snell_say "已添加 listener $AGW_NEW_ID: $AGW_A_BIND:$AGW_A_PORT"
+    _snell_say "已添加转发线路 $AGW_NEW_ID: $AGW_A_BIND:$AGW_A_PORT"
     _snell_say "  AnyTLS 密码：$AGW_NEW_PW (只显示这一次, 之后用 anytls-gateway export secret $AGW_NEW_ID 查看)"
     core_discover anytlsgw
     if [ "$CF_STATE" = running ]; then _agw_apply; return $?; fi
@@ -622,13 +622,13 @@ agw_listener_delete() {
     local _id _cand
     [ $# -eq 1 ] || { apm_err "用法: anytls-gateway listener delete ID或端口"; return 2; }
     _agw_begin no || return $?
-    _id=$(_agw_find_id "$1") || { apm_err "没有这个 listener: $1"; return 2; }
+    _id=$(_agw_find_id "$1") || { apm_err "没有这条转发线路: $1"; return 2; }
     _snell_ensure_staging || return 1
     _cand=$SNELL_STAGING/state.cand
     grep -v "^listener\.$_id\." "$(_agw_state)" > "$_cand"
     _agw_save || return 1
     _agw_commit "$_cand" || return 1
-    _snell_say "已删除 listener $_id"
+    _snell_say "已删除转发线路 $_id"
     _agw_apply
 }
 
@@ -654,7 +654,7 @@ agw_listener_set() {
     if [ "$_pwin" = yes ]; then IFS= read -r _sp || :; [ -n "$_sp" ] || { apm_err "从标准输入没有读到 SOCKS5 密码"; return 2; }; _agw_secret_ok "$_sp" || { apm_err "SOCKS5 密码无效"; return 2; }; fi
     [ -z "$_user" ] || _agw_secret_ok "$_user" || { apm_err "SOCKS5 用户名无效"; return 2; }
     _agw_begin no || return $?
-    _id=$(_agw_find_id "$_id") || { apm_err "没有这个 listener: $_id"; return 2; }
+    _id=$(_agw_find_id "$_id") || { apm_err "没有这条转发线路: $_id"; return 2; }
     _snell_ensure_staging || return 1
     _cand=$SNELL_STAGING/state.cand
     cp -- "$(_agw_state)" "$_cand"
@@ -673,7 +673,7 @@ agw_listener_set() {
     fi
     _agw_save || return 1
     _agw_commit "$_cand" || return 1
-    _snell_say "已更新 listener $_id"
+    _snell_say "已更新转发线路 $_id"
     [ "$_newpw" != yes ] || _snell_say "  新的 AnyTLS 密码：$AGW_NEW_PW (只显示这一次)"
     _agw_apply
 }
@@ -683,12 +683,15 @@ _agw_set_key() { # FILE KEY VALUE
 }
 
 agw_listener_list() {
-    local _id _f
+    local _id _f _n _l
     _f=$(_agw_state)
-    if [ ! -f "$_f" ] || [ -z "$(_agw_ids "$_f")" ]; then printf 'Listener：没有\n'; return 0; fi
-    printf 'Listener：\n'
+    if [ ! -f "$_f" ] || [ -z "$(_agw_ids "$_f")" ]; then printf '当前线路：无\n'; return 0; fi
+    _n=$(_agw_ids "$_f" | grep -c .)
+    printf '当前线路：%s 条\n' "$_n"
     for _id in $(_agw_ids "$_f"); do
-        printf '  %s  监听 %s  上游 %s  SOCKS5 用户名 %s (密码已配置)  AnyTLS 密码已配置\n' "$_id" "$(_agw_get "$_f" "$_id" listen)" "$(_agw_get "$_f" "$_id" socks_server)" "$(_agw_get "$_f" "$_id" socks_username)"
+        _l=$(_agw_get "$_f" "$_id" listen)
+        case $_l in 0.0.0.0:*) _l=${_l#0.0.0.0:} ;; esac
+        printf '  %s  %s → %s\n' "$_id" "$_l" "$(_agw_get "$_f" "$_id" socks_server)"
     done
 }
 
@@ -765,9 +768,9 @@ agw_export() {
             ;;
         secret)
             [ $# -eq 1 ] || { apm_err "用法: anytls-gateway export secret ID或端口"; return 2; }
-            _id=$(_agw_find_id "$1") || { apm_err "没有这个 listener: $1"; return 2; }
+            _id=$(_agw_find_id "$1") || { apm_err "没有这条转发线路: $1"; return 2; }
             _l=$(_agw_get "$_f" "$_id" listen)
-            printf 'listener %s 监听端口 %s\n' "$_id" "${_l##*:}"
+            printf '转发线路 %s 监听端口 %s\n' "$_id" "${_l##*:}"
             printf 'AnyTLS 密码：%s\n' "$(_agw_get "$_f" "$_id" password)"
             printf '客户端出站 (sing-box):\n  {"type":"anytls","server":"<服务器地址>","server_port":<映射端口>,"password":"%s","tls":{"enabled":true,"insecure":true}}\n' "$(_agw_get "$_f" "$_id" password)"
             ;;
@@ -836,8 +839,8 @@ agw_uninstall() {
     rm -f -- "$(core_meta_file anytlsgw)"
     for _bk in "$(state_backup_dir)"/anytlsgw.meta.bak.*; do [ -e "$_bk" ] && rm -f -- "$_bk"; done
     _snell_say "AnyTLS Gateway 已卸载"
-    if [ "$_purge" = 1 ]; then _snell_say "已删除: 服务, 二进制, 配置, 证书, 日志, listener 记录, 元数据 (以及由 Manager 创建的用户与用户组)"
-    else _snell_say "已保留: 配置 $AGW_CONF_DIR, 日志 $AGW_LOG_DIR, listener 记录 (重新安装前需先 --purge 或手工清理)"; fi
+    if [ "$_purge" = 1 ]; then _snell_say "已删除: 服务, 二进制, 配置, 证书, 日志, 转发线路记录, 元数据 (以及由 Manager 创建的用户与用户组)"
+    else _snell_say "已保留: 配置 $AGW_CONF_DIR, 日志 $AGW_LOG_DIR, 转发线路记录 (重新安装前需先 --purge 或手工清理)"; fi
 }
 
 # ---- 只读报告 ----

@@ -70,6 +70,8 @@ export E2E_DIR=$W/run
 rc=0
 echo "== gw_behavior.sh"
 GW_BIN=$GW_BIN sh "$SRC/tests/e2e/gw_behavior.sh" || rc=1
+echo "== uri_forward.sh"
+GW_BIN=$GW_BIN sh "$SRC/tests/e2e/uri_forward.sh" || rc=1
 for s in net_access.sh net_egress.sh; do
     echo "== $s"
     sh "$SRC/tests/e2e/$s" || rc=1
