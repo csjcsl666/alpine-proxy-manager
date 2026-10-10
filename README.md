@@ -20,10 +20,10 @@ VLESS Reality 与 Trojan 不在支持计划内
 
 ## 安装
 
-以 root 登录 Alpine VPS 后执行 下面固定安装当前稳定版 `v0.7.0`
+以 root 登录 Alpine VPS 后执行 下面固定安装当前稳定版 `v0.7.2`
 
 ```sh
-APM_REF=v0.7.0 sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.7.0/install.sh)"
+APM_REF=v0.7.2 sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.7.2/install.sh)"
 ```
 
 只需要 Alpine 自带的 `wget` 不需要 `curl` `git` 或 `sudo` 安装完成后运行 `apm` 进入管理界面 运行 `apm doctor` 检查环境 `apm` 是官方短入口 与完整命令 `proxy-manager` 完全等价
@@ -31,9 +31,9 @@ APM_REF=v0.7.0 sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/al
 这条命令会以 root 身份执行下载到的脚本 如果希望先审查
 
 ```sh
-wget -O install.sh https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.7.0/install.sh
+wget -O install.sh https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.7.2/install.sh
 less install.sh
-APM_REF=v0.7.0 sh install.sh
+APM_REF=v0.7.2 sh install.sh
 ```
 
 校验归档 每个 GitHub Release 都附带 `SHA256SUMS` 与源码归档 可以用 `APM_ARCHIVE_URL` 指向 Release 里的归档 并用 `APM_SHA256` 指定期望的校验和 不匹配就拒绝安装 校验和用于发现下载损坏 不提供独立的发布者身份证明 发布方式是 GitHub 的 HTTPS 加 Release 不需要也不要求你验证 Git tag 签名
@@ -58,7 +58,7 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 
 ### 升级 Manager
 
-升级到新的正式版 把命令里的 `v0.7.0` 换成新版本的 tag 即可 README 的默认命令会随每次正式发布更新 同一 Build 且工作正常时不做任何改动 新版本自检失败会继续使用旧版本 升级 Manager 本身不会重启 Snell 与 sing-box 不会改写任何已有配置与实例
+升级到新的正式版 把命令里的 `v0.7.2` 换成新版本的 tag 即可 README 的默认命令会随每次正式发布更新 同一 Build 且工作正常时不做任何改动 新版本自检失败会继续使用旧版本 升级 Manager 本身不会重启 Snell 与 sing-box 不会改写任何已有配置与实例
 
 也可以直接在 `apm` 里升级 `Manager 管理` 里选 `检查更新` 只查询 GitHub 上最新的正式 Release 不自动下载 `更新 Manager` 会先确认 默认 N 需要 root 并复用同一个安装脚本 所以原子切换 自检失败回滚 与 sha256 校验都一样 只更新到正式 Release 的 tag 不会更新到 main 草稿或预发布 不会降级 更新成功后请重新运行 `apm`
 
@@ -72,7 +72,7 @@ apm manager update          # 需要 root 会提示确认
 ### 卸载 Manager
 
 ```sh
-sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.7.0/install.sh)" -- --uninstall
+sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-manager/v0.7.2/install.sh)" -- --uninstall
 ```
 
 只删除 Manager 自己 包括本项目创建的 `apm` 不是本项目创建的 `apm` 会保留 不删除 Snell sing-box `/etc/alpine-proxy-manager` 中的配置与 `/var/lib/alpine-proxy-manager` 中的数据
