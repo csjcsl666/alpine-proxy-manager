@@ -622,14 +622,23 @@ _snn_restore() { # FILE SAVED
     fi
 }
 
-# 读取 y/N, 默认 N
+# 读取 Y/n, 回车默认 Yes; 不是交互终端 EOF 读取失败都不算确认
 _snn_confirm_tty() { # 提示
-    local _a
+    local _a _rc
     [ -t 0 ] || return 1
-    printf '%s [y/N]：' "$1"
-    IFS= read -r _a || return 1
-    case $_a in y|Y|yes|YES) return 0 ;; esac
-    return 1
+    while :; do
+        printf '%s [Y/n]：' "$1"
+        _a=
+        _rc=0
+        IFS= read -r _a || _rc=$?
+        [ "$_rc" -eq 0 ] || [ -n "$_a" ] || return 1
+        _a=$(printf '%s' "$_a" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        case $_a in
+            ''|y|Y|yes|YES|Yes) return 0 ;;
+            n|N|no|NO|No) return 1 ;;
+        esac
+        printf '输入无效，请输入 y 或 n，直接按 Enter 表示 Yes\n'
+    done
 }
 
 # ---- 通用辅助 ----

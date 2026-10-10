@@ -778,6 +778,19 @@ agw_export() {
     esac
 }
 
+# 交互式查看: 按配置顺序一次列出全部转发线路的 AnyTLS 密码 只读 只给 TUI 使用 命令行的 export secret 不变
+agw_export_secrets() {
+    local _f _id _n
+    _f=$(_agw_state)
+    if [ ! -f "$_f" ] || [ -z "$(_agw_ids "$_f")" ]; then printf '当前没有转发线路\n'; return 0; fi
+    kv_check_syntax "$_f" >/dev/null 2>&1 || { apm_err "读取转发线路记录失败"; return 1; }
+    _n=$(_agw_ids "$_f" | grep -c .)
+    printf '\n当前线路：%s 条\n' "$_n"
+    for _id in $(_agw_ids "$_f"); do
+        printf '\n%s. %s\n   AnyTLS 密码：%s\n' "$_id" "$(_agw_get "$_f" "$_id" listen | sed 's/.*://')" "$(_agw_get "$_f" "$_id" password)"
+    done
+}
+
 # ---- update ----
 
 agw_update() {

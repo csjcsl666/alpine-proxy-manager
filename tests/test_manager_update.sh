@@ -384,17 +384,18 @@ if command -v script >/dev/null 2>&1; then
     assert_contains "检查更新: 更新选项" "$out" "1. 更新到 0.5.2"
     assert_eq "只检查不更新" "Alpine Proxy Manager 0.5.1" "$("$MPM" --version | sed -n 1p)"
     assert_not_contains "检查更新不下载归档" "$(cat "$MOCK_LOG")" "tar.gz"
-    # 拒绝更新: 默认 N
+    # 拒绝更新: 输入 n
     out=$(tui '6\n3\nn\n\n0\n0\n')
     assert_contains "更新确认: 目标版本" "$out" "目标版本：0.5.2"
     assert_contains "更新确认: 只更新 Manager" "$out" "此次操作只更新 Alpine Proxy Manager。"
     for item in "Snell 服务及配置" "sing-box 服务及配置" "协议实例" "SOCKS Profile" "目标访问限制" "PSK / 密钥" "客户端连接地址"; do
         assert_contains "更新确认列出不会修改: $item" "$out" "- $item"
     done
-    assert_contains "更新确认默认 N" "$out" "[y/N]"
+    assert_contains "更新确认默认 Yes" "$out" "[Y/n]"
     assert_eq "拒绝更新后版本不变" "Alpine Proxy Manager 0.5.1" "$("$MPM" --version | sed -n 1p)"
-    out=$(tui '6\n3\n\n\n0\n0\n')
-    assert_eq "直接回车(默认 N)版本不变" "Alpine Proxy Manager 0.5.1" "$("$MPM" --version | sed -n 1p)"
+    out=$(tui '6\n3\nx\nN\n\n0\n0\n')
+    assert_contains "无效输入后重新询问" "$out" "输入无效，请输入 y 或 n"
+    assert_eq "无效输入后输入 N 版本不变" "Alpine Proxy Manager 0.5.1" "$("$MPM" --version | sed -n 1p)"
     assert_not_contains "拒绝更新不显示成功" "$out" "Manager 更新成功"
     # 网络失败不卡死, 正常返回
     out=$(MOCK_NET=down tui '6\n2\n\n0\n0\n')
@@ -410,7 +411,7 @@ if command -v script >/dev/null 2>&1; then
     publish 0.5.2 "$NEW_ARCH"
     setlatest v0.5.2 false false
     printf '{\n  "sha": "%s"\n}\n' "$NEW_SHA" > "$MOCKD/commit.json"
-    out=$(tui '6\n3\ny\n\n')
+    out=$(tui '6\n3\n\n\n')
     assert_contains "TUI 更新成功" "$out" "Manager 更新成功。"
     assert_contains "TUI 成功后提示重新运行 apm" "$out" "请重新运行 apm 使用新版管理界面。"
     after=$(printf '%s\n' "$out" | sed -n '/请重新运行 apm/,$p')

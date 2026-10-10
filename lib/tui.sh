@@ -287,15 +287,27 @@ _tui_socks_auth() { # 用户名提示, 密码提示, ALLOW_NOAUTH
 
 _tui_socks_clear() { TUI_SK_PASS=; TUI_SK_USER=; TUI_SECRET=; }
 
-tui_confirm() { # 说明文字, 默认 N
-    local _a
+tui_confirm() { # 说明文字, 回车默认 Yes
+    local _a _rc
     printf '%s\n' "$1"
-    printf '继续？[y/N]：'
-    _a=
-    IFS= read -r _a || { TUI_EOF=1; _a=; }
-    case $_a in y|Y|yes|YES) return 0 ;; esac
-    printf '已取消\n'
-    return 1
+    while :; do
+        printf '继续？[Y/n]：'
+        _a=
+        _rc=0
+        IFS= read -r _a || _rc=$?
+        # 读取失败且没有读到任何内容 (EOF 或终端断开) 不是空回车, 必须中止
+        if [ "$_rc" -ne 0 ] && [ -z "$_a" ]; then
+            TUI_EOF=1
+            printf '\n已取消\n'
+            return 1
+        fi
+        _a=$(printf '%s' "$_a" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        case $_a in
+            ''|y|Y|yes|YES|Yes) return 0 ;;
+            n|N|no|NO|No) printf '已取消\n'; return 1 ;;
+        esac
+        printf '输入无效，请输入 y 或 n，直接按 Enter 表示 Yes\n'
+    done
 }
 
 _tui_pause() {
@@ -779,7 +791,7 @@ _tui_snell_install() {
 
 # Snell 的客户端信息: 只有两个操作, 不需要先设置客户端连接地址
 #   查看连接信息 经 snell export info 按需查询服务器公网 IP, 端口与版本来自 Snell 现有配置, 只读, 查询失败时其余信息照常显示
-#   查看 PSK 先确认, 默认 N, 经 snell export secret 显示, 不生成不修改
+#   查看 PSK 先确认, 经 snell export secret 显示, 不生成不修改
 tui_snell_client_menu() {
     while :; do
         _tui_clear
@@ -1115,11 +1127,9 @@ secret|查看 AnyTLS 密码" "返回"
                 _tui_done
                 ;;
             secret)
-                tui_ask "转发线路 ID 或端口（留空取消）："
-                [ -n "$TUI_IN" ] || continue
-                tui_confirm "即将显示 AnyTLS 密码。
-请注意终端记录和截图可能泄漏凭据。" || { _tui_pause; continue; }
-                _tui_do agw_cli export secret "$TUI_IN"
+                _tui_clear
+                _tui_header "AnyTLS Gateway · 查看 AnyTLS 密码"
+                _tui_do agw_export_secrets
                 _tui_done
                 ;;
         esac

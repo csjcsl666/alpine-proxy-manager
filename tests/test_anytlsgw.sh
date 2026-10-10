@@ -412,10 +412,23 @@ out=$(TR '4\n4\ny\n\n0\n')
 assert_contains "重新生成 AnyTLS 密码" "$out" "已更新转发线路"
 NEWPW=$(kv_get "$A$ST" listener.4.password)
 assert_eq "AnyTLS 密码确实改变" no "$([ "$OLDPW" = "$NEWPW" ] && echo yes || echo no)"
-out=$(TR '5\n4\ny\n\n0\n')
-assert_contains "查看 AnyTLS 密码需确认后才显示" "$out" "$NEWPW"
-out=$(TR '5\n4\nn\n\n0\n')
-assert_not_contains "拒绝确认不显示 AnyTLS 密码" "$out" "$NEWPW"
+BEFORE_SUM=$(sha256sum "$A$ST" "$A$CONF" | awk '{ print $1 }')
+out=$(TR '5\n\n0\n')
+assert_contains "查看 AnyTLS 密码页标题" "$out" "AnyTLS Gateway · 查看 AnyTLS 密码"
+assert_contains "直接显示线路条数" "$out" "当前线路：5 条"
+for n in 1 2 3 4 5; do
+    assert_contains "显示线路 $n 的端口" "$out" "$n. $(kv_get "$A$ST" listener.$n.listen | sed 's/.*://')"
+    assert_contains "显示线路 $n 的 AnyTLS 密码" "$out" "AnyTLS 密码：$(kv_get "$A$ST" listener.$n.password)"
+done
+assert_not_contains "不再询问线路 ID 或端口" "$out" "ID 或端口"
+assert_not_contains "不再二次确认" "$out" "继续？"
+assert_not_contains "不显示 SOCKS5 密码" "$out" "$FPW"
+assert_not_contains "不显示 SOCKS5 用户名" "$out" "tw-user"
+assert_eq "查看密码严格只读" "$BEFORE_SUM" "$(sha256sum "$A$ST" "$A$CONF" | awk '{ print $1 }')"
+out=$(TR '0\n')
+assert_not_contains "普通线路列表不含 AnyTLS 密码" "$out" "$NEWPW"
+out=$(TG '3\n0\n0\n')
+assert_not_contains "子菜单不含 AnyTLS 密码" "$out" "$NEWPW"
 out=$(TR '2\n5\ny\n\n0\n')
 assert_contains "删除转发线路" "$out" "已删除转发线路"
 assert_eq "线路已删除" "" "$(kv_get "$A$ST" listener.5.listen)"
@@ -432,6 +445,16 @@ for f in "$A"/etc/alpine-proxy-manager/anytlsgw.conf.bak.*; do
     [ -e "$f" ] || continue
     assert_eq "事务备份权限 600: ${f##*/}" 600 "$(stat -c %a "$f")"
 done
+# 直接回车就是确认 (所有交互式确认统一默认 Yes)
+out=$(TR '2\n4\n\n\n0\n')
+assert_contains "回车确认删除转发线路" "$out" "已删除转发线路"
+assert_eq "回车确认后线路已删除" "" "$(kv_get "$A$ST" listener.4.listen)"
+out=$(TR '2\n3\nx\nn\n\n0\n')
+assert_contains "无效输入后重新询问" "$out" "输入无效，请输入 y 或 n"
+assert_eq "无效输入后 n 保留线路" "0.0.0.0:30103" "$(kv_get "$A$ST" listener.3.listen)"
+BEFORE_SUM=$(sha256sum "$A$ST" "$A$CONF" | awk '{ print $1 }')
+out=$(printf '2\n3\n' | ( tui_agw_listener_menu ) 2>&1)
+assert_eq "确认处遇到 EOF 不删除" "$BEFORE_SUM" "$(sha256sum "$A$ST" "$A$CONF" | awk '{ print $1 }')"
 # 安装时同时创建第一条线路 (链接)
 new_g tui2
 out=$(TG '1\ny\nsocks5://ins-user:FictInsPw@192.0.2.40:1090\n\n0\n')
@@ -439,10 +462,16 @@ assert_contains "安装流程接受完整链接" "$out" "已识别：主机 192.
 assert_eq "安装流程写入出口" "192.0.2.40:1090" "$(kv_get "$A$ST" listener.1.socks_server)"
 assert_eq "安装流程写入密码" FictInsPw "$(kv_get "$A$ST" listener.1.socks_password)"
 assert_not_contains "安装流程输出不含密码" "$out" "FictInsPw"
+out=$(TR '5\n\n0\n')
+assert_contains "单条线路直接显示" "$out" "当前线路：1 条"
+assert_contains "单条线路密码" "$out" "AnyTLS 密码：$(kv_get "$A$ST" listener.1.password)"
+assert_not_contains "单条线路也不询问 ID" "$out" "ID 或端口"
 new_g tui3
 out=$(TG '1\ny\n\n\n0\n')
 assert_ok "安装流程留空只安装" test -x "$A/usr/local/bin/anytls-socks-gateway"
 assert_eq "留空只安装没有线路" "" "$(kv_get "$A$ST" listener.1.listen)"
+out=$(TR '5\n\n0\n')
+assert_contains "没有线路时的提示" "$out" "当前没有转发线路"
 
 # ---- 现有部署 (External) 不接管 ----
 new_g x1

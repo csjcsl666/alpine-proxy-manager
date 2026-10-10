@@ -121,7 +121,7 @@ assert_contains "主菜单 4 是日志" "$out" "Snell 日志"
 out=$(T '6\n0\n0\n')
 assert_contains "主菜单 5 是 Manager 管理" "$out" "Manager 管理"
 # 停止需要确认, 默认 N
-T '1\n2\n\n\n0\n0\n0\n' >/dev/null
+T '1\n2\nn\n\n0\n0\n0\n' >/dev/null
 core_discover snell
 assert_eq "确认默认 N 不停止" running "$CF_STATE"
 out=$(T '1\n2\ny\n\n0\n0\n0\n')
@@ -262,7 +262,7 @@ assert_not_contains "新密码没有出现在输出里" "$out" "$PW2"
 # 无末尾换行的秘密 (EOF 前最后一个输入)
 # 启用与禁用: Core 运行中且还有其他启用的实例时, 先提示会重启 sing-box, 默认取消
 RB=$(grep -c 'sing-box.*restart' "$K/calls" 2>/dev/null || true)
-out=$(T '2\n2\n1\n1\n2\n\n\n0\n0\n0\n')
+out=$(T '2\n2\n1\n1\n2\nn\n\n0\n0\n0\n')
 assert_contains "禁用前提示会重启 sing-box" "$out" "此操作需要重启 sing-box"
 assert_contains "提示说明可能影响其他协议实例" "$out" "可能短暂影响该 Core 下的其他协议实例"
 assert_eq "禁用提示默认取消不修改配置" true "$(kv_get "$(INST AnyTLS-01)" enabled)"
@@ -336,7 +336,7 @@ out=$(T '2\n3\n1\n1\n6\ny\n\n0\n0\n0\n')
 assert_eq "被引用的 Profile 没有被删除" yes "$([ -f "$(PROF SOCKS-01)" ] && echo yes)"
 assert_contains "业务层拒绝说明" "$out" "AnyTLS-01"
 # 批量禁用需要确认
-T '2\n3\n4\n\n\n0\n0\n' >/dev/null
+T '2\n3\n4\nn\n\n0\n0\n' >/dev/null
 assert_eq "批量禁用默认取消" true "$(kv_get "$(PROF SOCKS-01)" enabled)"
 T '2\n3\n4\ny\n\n0\n0\n' >/dev/null
 assert_eq "批量禁用确认后执行" false "$(kv_get "$(PROF SOCKS-01)" enabled)"
@@ -348,10 +348,10 @@ assert_eq "批量启用" true "$(kv_get "$(PROF SOCKS-01)" enabled)"
 T '2\n2\n1\n1\n4\n1\n\n0\n0\n0\n0\n' >/dev/null
 assert_eq "回到 DIRECT" "" "$(kv_get "$(INST AnyTLS-01)" egress_socks)"
 # 现在可以删除未被引用的 Profile, 默认 N
-T '2\n3\n1\n1\n6\n\n\n0\n0\n0\n' >/dev/null
+T '2\n3\n1\n1\n6\nn\n\n0\n0\n0\n' >/dev/null
 assert_eq "默认 N 不删除" yes "$([ -f "$(PROF SOCKS-01)" ] && echo yes)"
-T '2\n3\n1\n1\n6\ny\n\n0\n0\n0\n' >/dev/null
-assert_eq "确认后删除" no "$([ -f "$(PROF SOCKS-01)" ] && echo yes || echo no)"
+T '2\n3\n1\n1\n6\n\n\n0\n0\n0\n' >/dev/null
+assert_eq "直接回车确认后删除 SOCKS Profile" no "$([ -f "$(PROF SOCKS-01)" ] && echo yes || echo no)"
 
 # ---- 客户端连接地址 ----
 CS0=$(CFGSUM)
@@ -406,7 +406,7 @@ assert_not_contains "连接信息不含凭据" "$out" "$APW"
 out=$(T '2\n2\n1\n1\n6\n2\nn\n\n0\n0\n0\n0\n')
 assert_not_contains "拒绝确认不显示凭据" "$out" "$APW"
 assert_contains "确认提示" "$out" "即将显示客户端凭据。终端记录或截图可能包含 Secret。"
-out=$(T '2\n2\n1\n1\n6\n2\n\n\n0\n0\n0\n0\n')
+out=$(T '2\n2\n1\n1\n6\n2\nn\n\n0\n0\n0\n0\n')
 assert_not_contains "默认 N 不显示凭据" "$out" "$APW"
 out=$(T '2\n2\n1\n1\n6\n2\ny\n\n0\n0\n0\n0\n')
 assert_contains "确认后显示凭据" "$out" "密码：$APW"
@@ -547,12 +547,14 @@ assert_eq "旧 endpoint 数据不被删除或修改" "$EP0" "$(cat "$A/etc/alpin
 out=$(tsnell '1\n7\n2\nn\n\n0\n0\n0\n0\n')
 assert_contains "PSK 确认提示" "$out" "即将显示 Snell PSK。"
 assert_contains "PSK 确认提示提到泄漏风险" "$out" "请注意终端记录和截图可能泄漏凭据。"
-assert_contains "PSK 确认带默认 N" "$out" "继续？[y/N]"
+assert_contains "PSK 确认带默认 Yes" "$out" "继续？[Y/n]"
 assert_not_contains "拒绝确认不显示 PSK" "$out" "TuiSnellPskNotSecret0123456789ab"
-out=$(tsnell '1\n7\n2\n\n\n0\n0\n0\n0\n')
+out=$(tsnell '1\n7\n2\nn\n\n0\n0\n0\n0\n')
 assert_not_contains "直接回车(默认 N)不显示 PSK" "$out" "TuiSnellPskNotSecret0123456789ab"
 out=$(tsnell '1\n7\n2\ny\n\n0\n0\n0\n0\n')
 assert_contains "确认后显示 PSK" "$out" "psk：TuiSnellPskNotSecret0123456789ab"
+out=$(tsnell '1\n7\n2\n\n\n0\n0\n0\n0\n')
+assert_contains "Snell: 直接回车即确认并显示 PSK" "$out" "psk：TuiSnellPskNotSecret0123456789ab"
 assert_contains "显示 PSK 带警告" "$out" "警告：以下内容包含客户端凭据"
 assert_eq "查看 PSK 不修改 Snell 配置" "$SC0" "$(cksum < "$A/etc/snell/snell-server.conf")"
 assert_eq "查看 PSK 后仍是原来的 PSK" TuiSnellPskNotSecret0123456789ab "$(sed -n 's/^psk = //p' "$A/etc/snell/snell-server.conf")"
@@ -565,7 +567,7 @@ assert_not_contains "不再有旧的导出页" "$out" "客户端配置导出 sne
 "$PM" snell endpoint clear >/dev/null 2>&1
 
 # ---- 删除实例, 默认 N ----
-T '2\n2\n1\n2\n8\n\n\n0\n0\n0\n' >/dev/null
+T '2\n2\n1\n2\n8\nn\n\n0\n0\n0\n' >/dev/null
 assert_eq "删除默认 N" yes "$([ -f "$(INST Hysteria2-01)" ] && echo yes)"
 T '2\n2\n1\n2\n8\ny\n\n0\n0\n0\n' >/dev/null
 assert_eq "确认后删除" no "$([ -f "$(INST Hysteria2-01)" ] && echo yes || echo no)"
@@ -691,7 +693,7 @@ assert_not_contains "只有一个启用实例时不提示影响其他实例" "$o
 assert_eq "唯一实例被禁用" false "$(kv_get "$(INST AnyTLS-01)" enabled)"
 "$PM" sing-box enable AnyTLS-01 >/dev/null 2>&1
 "$PM" sing-box add hysteria2 --port 20444 >/dev/null 2>&1
-out=$(T '2\n2\n1\n2\n2\n\n\n0\n0\n0\n')
+out=$(T '2\n2\n1\n2\n2\nn\n\n0\n0\n0\n')
 assert_contains "有其他启用实例时提示" "$out" "此操作需要重启 sing-box"
 assert_eq "取消后配置不变" true "$(kv_get "$(INST Hysteria2-01)" enabled)"
 # Core 没有运行: 只写入配置, 不重启, 不提示
@@ -732,12 +734,12 @@ assert_not_contains "不再是旧的 默认保留配置 提示" "$out" "默认�
 SB0=$(snap)
 T '2\n9\n0\n0\n0\n' >/dev/null
 assert_eq "选择页返回: 文件系统不变" "$SB0" "$(snap)"
-out=$(T '2\n9\n1\n\n\n0\n0\n0\n')
-assert_contains "完整卸载的确认默认取消" "$out" "已取消"
+out=$(T '2\n9\n1\nn\n\n0\n0\n0\n')
+assert_contains "完整卸载确认 n 取消" "$out" "已取消"
 assert_eq "完整卸载确认回车: 文件系统不变" "$SB0" "$(snap)"
 T '2\n9\n1\nn\n\n0\n0\n0\n' >/dev/null
 assert_eq "完整卸载确认 n: 文件系统不变" "$SB0" "$(snap)"
-T '2\n9\n2\n\n\n0\n0\n0\n' >/dev/null
+T '2\n9\n2\nn\n\n0\n0\n0\n' >/dev/null
 assert_eq "仅卸载程序确认回车: 文件系统不变" "$SB0" "$(snap)"
 assert_eq "取消时 sing-box 仍在运行" running "$(core_discover singbox; echo "$CF_STATE")"
 # 仅卸载程序: 保留实例 Profile 与配置
@@ -760,6 +762,11 @@ assert_eq "完整卸载: 全盘找不到 SOCKS 密码" "" "$(grep -rlF 'TuiUnins
 assert_eq "完整卸载: Snell 数据完全不变" "$SN2" "$(snellsum)"
 assert_eq "完整卸载: Snell 仍在运行" running "$(core_discover snell; echo "$CF_STATE")"
 assert_eq "完整卸载后 sing-box 显示未安装" none "$(core_discover singbox; _tui_core_kind singbox; echo "$TUI_CK")"
+# 回车就是 Yes: 完整卸载也一样 (用户明确要求所有确认统一默认 Yes)
+mkfull u4
+out=$(T '2\n9\n1\n\n\n0\n0\n0\n')
+assert_contains "完整卸载: 回车即确认" "$out" "sing-box 已卸载"
+assert_eq "完整卸载回车后 sing-box 专属文件一个不剩" "" "$(sbleft)"
 # 非 root 被拒绝且不改变任何东西
 mkfull u3
 SB3=$(snap)
@@ -767,6 +774,6 @@ out=$( ( APM_EUID=1000; export APM_EUID; T '2\n9\n0\n0\n0\n' ) )
 assert_contains "非 root 卸载被拒绝" "$out" "需要 root"
 assert_eq "非 root: 文件系统不变" "$SB3" "$(snap)"
 # Snell 的卸载流程保持原样
-out=$(T '1\n9\n\n0\n0\n')
+out=$(T '1\n9\nn\n\n0\n0\n')
 assert_contains "Snell 卸载流程保持原样" "$out" "即将卸载 Snell，默认保留配置与日志"
 t_done

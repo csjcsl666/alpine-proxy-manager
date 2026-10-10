@@ -60,7 +60,7 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 
 升级到新的正式版 把命令里的 `v0.7.2` 换成新版本的 tag 即可 README 的默认命令会随每次正式发布更新 同一 Build 且工作正常时不做任何改动 新版本自检失败会继续使用旧版本 升级 Manager 本身不会重启 Snell 与 sing-box 不会改写任何已有配置与实例
 
-也可以直接在 `apm` 里升级 `Manager 管理` 里选 `检查更新` 只查询 GitHub 上最新的正式 Release 不自动下载 `更新 Manager` 会先确认 默认 N 需要 root 并复用同一个安装脚本 所以原子切换 自检失败回滚 与 sha256 校验都一样 只更新到正式 Release 的 tag 不会更新到 main 草稿或预发布 不会降级 更新成功后请重新运行 `apm`
+也可以直接在 `apm` 里升级 `Manager 管理` 里选 `检查更新` 只查询 GitHub 上最新的正式 Release 不自动下载 `更新 Manager` 会先确认 回车默认 Yes 需要 root 并复用同一个安装脚本 所以原子切换 自检失败回滚 与 sha256 校验都一样 只更新到正式 Release 的 tag 不会更新到 main 草稿或预发布 不会降级 更新成功后请重新运行 `apm`
 
 ```sh
 apm manager check-update    # 只检查 有新版本时退出码为 10 非 root 也可以
@@ -180,6 +180,8 @@ proxy-manager anytls-gateway uninstall [--purge]
 ```
 
 - 每条转发线路有独立的 AnyTLS 密码 自动生成 24 位 只在创建时显示一次 之后用 `export secret` 查看 SOCKS5 密码只能通过 `--socks-password-stdin` 提供
+- 交互界面里选择 `查看 AnyTLS 密码` 会直接列出全部转发线路的端口和 AnyTLS 密码 不再询问线路 只读 不修改任何配置 命令行 `export secret` 不变
+- 交互界面里所有 Yes/No 确认统一为 `[Y/n]` 直接按 Enter 就是 Yes 输入 n 取消 无效输入会重新询问 读取失败或输入结束不会被当成确认 包括卸载和彻底卸载 命令行和无人值守脚本不受影响
 - 交互界面里添加或修改 SOCKS5 出口时 可以直接粘贴完整的 `socks5://用户名:密码@主机:端口` 链接 自动识别主机 端口和认证 用户名密码可以百分号编码 IPv6 需要方括号 链接不完整时只补问缺少的字段 输入普通地址仍按原有方式逐项填写 链接像普通地址一样可见输入 回车前可以检查和修改 程序不会再次打印也不记录链接内容 解析失败不改动任何配置 sing-box 的 SOCKS Profile 和 Snell 的 SOCKS5 出口交互界面行为一致 命令行仍然只接受分项参数
 - 上游失败 认证错误 不可达都只会关闭连接 没有 DIRECT 路径 不处理 UDP 没有路由 DNS 日志文件的复杂功能 没有常驻管理进程
 - 默认自签证书 RSA 2048 有效期 10 年 客户端需要跳过证书校验或固定指纹 可以用 `cert import --cert-file 文件 --key-file 文件` 导入已有证书
