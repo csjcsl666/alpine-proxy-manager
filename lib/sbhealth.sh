@@ -148,8 +148,14 @@ sbh_remove() {
 
 # 卸载 sing-box 时用: 连同配置一起清除
 sbh_purge() {
+    local _f
     sbh_remove
     rm -f -- "$(_sbh_conf)" "$(env_path "$SBH_LOG")"
+    # 配置的事务备份里也含有密钥, 一并删除
+    for _f in "$(state_backup_dir)"/sbhealth.conf.bak.*; do
+        [ -e "$_f" ] && rm -f -- "$_f"
+    done
+    return 0
 }
 
 # ---- 常驻进程 ----

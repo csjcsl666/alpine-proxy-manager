@@ -16,6 +16,18 @@ SBH_BACKOFF_MAX=30
 env_path() { printf '%s%s' "$R" "$1"; }
 
 
+# 守护进程被强制结束 (SIGKILL) 时来不及清理子进程, 下一次启动先回收上一次留下的 状态机 nc 与检查进程 (按命令行核对, 避免误杀 PID 复用的无关进程)
+_sbh_reap_stale() {
+    local _p _c
+    [ -f "$SBH_RUN/children" ] || return 0
+    for _p in $(cat "$SBH_RUN/children" 2>/dev/null); do
+        case $_p in ''|*[!0-9]*) continue ;; esac
+        _c=$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null) || continue
+        case $_c in *sbhealth.awk*|"nc $SBH_API_HOST "*|sleep*) kill "$_p" 2>/dev/null ;; esac
+    done
+    rm -f -- "$SBH_RUN/children"
+}
+
 _sbh_stop_children() {
     local _p _i
     # 先停 nc (订阅断开) 与检查进程, 让状态机读到 EOF 后自己执行 END (所有 Profile 回到未知并清除订阅标记), 最多等 3 秒再强制结束
@@ -26,6 +38,7 @@ _sbh_stop_children() {
     [ -z "${SBH_PIDS%% *}" ] || kill "${SBH_PIDS%% *}" 2>/dev/null
     SBH_PIDS=
     rm -f -- "$SBH_RUN/connected"
+    rm -f -- "$SBH_RUN/children"
     [ -z "${SBH_FIFO:-}" ] || rm -f -- "$SBH_FIFO"
 }
 
@@ -46,6 +59,7 @@ _sbh_stream() { # 端口 密钥
     ( sleep 1; kill -0 "$_nc" 2>/dev/null && kill -0 "$_aw" 2>/dev/null && [ ! -f "$_d/connected" ] && date +%s > "$_d/connected" ) &
     _w=$!
     SBH_PIDS="$_aw $_nc $_w"
+    printf '%s\n' "$SBH_PIDS" > "$SBH_RUN/children"
     wait "$_aw"
     SBH_RC=$?
     _sbh_stop_children
@@ -61,7 +75,8 @@ sbh_run() {
     SBH_FIFO=
     trap '_sbh_stop_children; rm -f -- "$_d/daemon.pid"; exit 0' TERM INT
     trap '_sbh_stop_children' EXIT
-    printf '%s\n' "$$" > "$_d/daemon.pid" || { apm_err "无法写入 $_d"; return 1; }
+    printf '%s\n' "$$" > "$_d/daemon.pid" || { printf "无法写入 %s\n" "$_d" >&2; exit 1; }
+    _sbh_reap_stale
     _bo=1
     while :; do
         _cfg=$SB_CONF
