@@ -51,7 +51,7 @@ awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/' "$W/kp.pem" > "$W/cert.pem"
 
 APM_HOME=$(dirname "$HERE")
 export APM_HOME
-for m in common environment state core model policy txn report client snell singbox; do
+for m in common environment state core model policy txn report client snell singbox sbhealth; do
     # shellcheck source=/dev/null
     . "$APM_HOME/lib/$m.sh"
 done
