@@ -1,5 +1,5 @@
 # shellcheck shell=sh
-# sing-box SOCKS5 上游健康监控 (v0.8.0 第一阶段)
+# sing-box SOCKS5 上游健康监控
 #
 # 架构: 事件驱动, 没有任何定时探测
 #   sing-box 的 Clash API /logs 是一个订阅流 (HTTP 分块): sing-box 每处理一个真实连接就推送日志事件, 订阅者的日志级别独立于 sing-box 自己的日志级别
