@@ -406,11 +406,13 @@ out=$(T '2\n3\n1\n0\n0\n0\n0\n')
 assert_contains "服务器页含完整信息" "$out" "上游：192.0.2.51:1081"
 
 # ---- 实例页里不再有出口与监听地址入口, 出口只在管理中心分配 ----
-out=$(inst 1 0)
+ipage() { sed -n '/^ [A-Za-z0-9-]* · /,/^请选择/p'; }
+out=$(inst 1 0 | ipage)
 assert_not_contains "实例页没有 SOCKS5 出口入口" "$out" ". SOCKS5 出口"
 assert_not_contains "实例页没有修改监听地址" "$out" "监听地址"
 for who in 1 2 3 4; do
-    out=$(inst $who 0)
+    out=$(inst $who 0 | ipage)
+    assert_contains "实例 $who 的页面确实是实例页" "$out" "0. 返回"
     assert_not_contains "实例 $who 的页面没有出口选择入口" "$out" ". SOCKS5 出口"
     assert_not_contains "实例 $who 的页面没有修改监听地址" "$out" "修改监听地址"
 done
@@ -462,6 +464,7 @@ cp "$A/usr/local/bin/sing-box" "$T_TMP/sb.good.tui"
 printf 'BADBIN\n' >> "$A/usr/local/bin/sing-box"
 out=$(T '2\n3\n2\n1\n2\n\n0\n0\n0\n0\n')
 cp "$T_TMP/sb.good.tui" "$A/usr/local/bin/sing-box"
+echo started > "$K/state-sing-box"; "$PM" sing-box restart >/dev/null 2>&1
 assert_contains "校验失败给出原因" "$out" "错误:"
 assert_eq "校验失败保持原配置" "$CSZ" "$(CFGSUM)"
 assert_eq "校验失败时实例出口不变" SOCKS-01 "$(kv_get "$(INST AnyTLS-01)" egress_socks)"

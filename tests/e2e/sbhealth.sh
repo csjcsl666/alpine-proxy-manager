@@ -174,6 +174,24 @@ expect_state "W 认证失败 -> 不可用" W unhealthy
 [ "$(thits)" = 0 ] && ok "W 失败时目标零命中 (没有 DIRECT 回退)" || bad "W 失败时目标有命中"
 [ "$(stat_of A)" = healthy ] && [ "$(stat_of B)" = healthy ] && ok "A 与 B 没有被 W 的故障污染" || bad "A/B 被污染"
 
+section "监控范围 (真实 sing-box): 被排除的服务器不产生也不保留状态, 重新纳入从未知开始, 转发不受影响"
+lok=$(stat_of B last_ok)
+printf 'B off 1\n' > "$SBDIR/profiles"
+sleep 1.3
+r=$(client 30002); case $r in OK:*) ok "B 被排除后业务照常转发" ;; *) bad "B 转发失败: $r" ;; esac
+sleep 0.5
+[ ! -e "$SBDIR/apm-socks-B.state" ] && ok "被排除的 B 没有状态文件 (旧的健康被丢弃)" || bad "B 仍有状态文件: $(stat_of B)"
+r=$(client 30001); case $r in OK:*) ok "A 照常转发" ;; *) bad "A 转发失败: $r" ;; esac
+expect_state "另一台服务器 A 不受影响" A healthy
+sleep 1.3
+printf 'B on 2\n' > "$SBDIR/profiles"
+sleep 1.3
+[ ! -e "$SBDIR/apm-socks-B.state" ] && ok "重新纳入时没有沿用旧状态" || bad "重新纳入时出现旧状态"
+r=$(client 30002); case $r in OK:*) ok "重新纳入后的真实连接成功" ;; *) bad "B 转发失败: $r" ;; esac
+expect_state "重新纳入后 B 从未知开始 由新的真实连接建立健康" B healthy
+[ "$(stat_of B last_ok)" -ge "$lok" ] && ok "last_ok 是重新纳入后的新证据" || bad "last_ok 回退"
+: > "$SBDIR/profiles"
+
 section "场景 B 上游 A 断线: 请求失败 无 DIRECT 回退 sing-box 保持运行 监控识别故障"
 kill "$UP_PID_A" 2>/dev/null; wait "$UP_PID_A" 2>/dev/null
 sleep 0.5
