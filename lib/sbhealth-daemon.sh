@@ -20,11 +20,11 @@ env_path() { printf '%s%s' "$R" "$1"; }
 _sbh_reap_stale() {
     local _p _c
     [ -f "$SBH_RUN/children" ] || return 0
-    for _p in $(cat "$SBH_RUN/children" 2>/dev/null); do
+    while read -r _p; do
         case $_p in ''|*[!0-9]*) continue ;; esac
         _c=$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null) || continue
         case $_c in *sbhealth.awk*|"nc $SBH_API_HOST "*|sleep*) kill "$_p" 2>/dev/null ;; esac
-    done
+    done < "$SBH_RUN/children"
     rm -f -- "$SBH_RUN/children"
 }
 
@@ -44,7 +44,7 @@ _sbh_stop_children() {
 
 # 订阅一次, 订阅断开 (sing-box 停止 重启 密钥错误) 时返回
 _sbh_stream() { # 端口 密钥
-    local _d _aw _nc _w
+    local _d _aw _nc _w _x
     _d=$SBH_RUN
     SBH_FIFO=$_d/stream.$$
     rm -f -- "$SBH_FIFO"
@@ -59,7 +59,7 @@ _sbh_stream() { # 端口 密钥
     ( sleep 1; kill -0 "$_nc" 2>/dev/null && kill -0 "$_aw" 2>/dev/null && [ ! -f "$_d/connected" ] && date +%s > "$_d/connected" ) &
     _w=$!
     SBH_PIDS="$_aw $_nc $_w"
-    printf '%s\n' "$SBH_PIDS" > "$SBH_RUN/children"
+    for _x in $SBH_PIDS; do printf '%s\n' "$_x"; done > "$SBH_RUN/children"
     wait "$_aw"
     SBH_RC=$?
     _sbh_stop_children

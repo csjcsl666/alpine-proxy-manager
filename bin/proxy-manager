@@ -65,6 +65,7 @@ usage() {
   sing-box socks set 名称 server|port|no-auth|credential 用户名 --password-stdin|password --password-stdin
   sing-box socks enable|disable 名称... | enable-all | disable-all | delete 名称   SOCKS 出口 Profile
   sing-box egress ID [show] | direct | socks 名称   实例出口 (DIRECT 或 SOCKS Profile, 不自动切换)
+  sing-box health [status | enable | disable]   SOCKS5 上游健康监控 事件驱动 状态来自真实连接事件 没有定时探测 不改变出口绑定 不回退 DIRECT
   sing-box endpoint ID [show] | set 主机 端口 | clear   客户端连接地址 (Public Endpoint, 不配置 NAT, 不重启)
   sing-box export ID show | secret | sing-box [--redacted] [--embed-cert] | url | qr   客户端导出 (secret url qr 包含凭据)
   snell endpoint [show] | set 主机 端口 | clear   Snell 客户端连接地址

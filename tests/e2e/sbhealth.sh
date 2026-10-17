@@ -45,6 +45,14 @@ wait_state() { # Profile 状态 [最多秒数]
 expect_state() { # 说明 Profile 状态 [秒数]
     if wait_state "$2" "$3" "${4:-10}"; then ok "$1 (状态 $3)"; else bad "$1: 期望 $3, 实际 $(stat_of "$2") 原因 $(stat_of "$2" reason)"; fi
 }
+pid_of() { # 命令行片段 -> 第一个匹配的 pid
+    local _p
+    for _p in /proc/[0-9]*; do
+        case "$(tr '\0' ' ' < "$_p/cmdline" 2>/dev/null)" in *"$1"*) echo "${_p#/proc/}"; return 0 ;; esac
+    done
+    return 1
+}
+cpu_ticks() { awk '{ print $14 + $15 }' "/proc/$1/stat" 2>/dev/null; }
 RSS_OF() { grep VmRSS "/proc/$1/status" 2>/dev/null | tr -s ' \t' ' ' | cut -d' ' -f2; }
 count_procs() { # 命令名片段
     local _n=0 _p
@@ -94,15 +102,18 @@ write_sb() {
  "inbounds":[
   {"type":"socks","tag":"in-A","listen":"127.0.0.1","listen_port":30001},
   {"type":"socks","tag":"in-B","listen":"127.0.0.1","listen_port":30002},
-  {"type":"socks","tag":"in-W","listen":"127.0.0.1","listen_port":30003}],
+  {"type":"socks","tag":"in-W","listen":"127.0.0.1","listen_port":30003},
+  {"type":"socks","tag":"in-S","listen":"127.0.0.1","listen_port":30004}],
  "outbounds":[{"type":"direct","tag":"direct"},
   {"type":"socks","tag":"apm-socks-A","server":"127.0.0.1","server_port":31101,"version":"5","username":"uu","password":"$UPPASS"},
   {"type":"socks","tag":"apm-socks-B","server":"127.0.0.1","server_port":31102,"version":"5","username":"uu","password":"$UPPASS"},
-  {"type":"socks","tag":"apm-socks-W","server":"127.0.0.1","server_port":31101,"version":"5","username":"uu","password":"WrongPwNotSecret"}],
+  {"type":"socks","tag":"apm-socks-W","server":"127.0.0.1","server_port":31101,"version":"5","username":"uu","password":"WrongPwNotSecret"},
+  {"type":"socks","tag":"apm-socks-S","server":"127.0.0.1","server_port":31103,"version":"5"}],
  "route":{"rules":[
   {"inbound":["in-A"],"action":"route","outbound":"apm-socks-A"},
   {"inbound":["in-B"],"action":"route","outbound":"apm-socks-B"},
-  {"inbound":["in-W"],"action":"route","outbound":"apm-socks-W"}]}}
+  {"inbound":["in-W"],"action":"route","outbound":"apm-socks-W"},
+  {"inbound":["in-S"],"action":"route","outbound":"apm-socks-S"}]}}
 JEOF
 }
 start_sb() {
@@ -183,7 +194,11 @@ UPLOG=$E2E_DIR/upstreamB.log
 before_a=$(grep -c "inbound connection" "$E2E_DIR/upstreamB.log" 2>/dev/null || echo 0)
 upd_a=$(stat_of A updated); upd_b=$(stat_of B updated)
 helpers_before=$(count_procs sbhealth-confirm)
+AWKP=$(pid_of sbhealth.awk); NCP=$(pid_of "nc 127.0.0.1 $API_PORT")
+cpu0="$(cpu_ticks "$MON_PID") $(cpu_ticks "$AWKP") $(cpu_ticks "$NCP")"
 sleep 12
+cpu1="$(cpu_ticks "$MON_PID") $(cpu_ticks "$AWKP") $(cpu_ticks "$NCP")"
+[ "$cpu0" = "$cpu1" ] && ok "空闲 12 秒守护进程 状态机 nc 的 CPU 时间没有增加 ($cpu0)" || bad "空闲时有 CPU 消耗: $cpu0 -> $cpu1"
 after_a=$(grep -c "inbound connection" "$E2E_DIR/upstreamB.log" 2>/dev/null || echo 0)
 [ "$before_a" = "$after_a" ] && ok "空闲 12 秒上游 B 的连接数没有增加 (监控不连接上游)" || bad "上游 B 空闲时收到了新连接 $before_a -> $after_a"
 [ "$(stat_of A updated)" = "$upd_a" ] && [ "$(stat_of B updated)" = "$upd_b" ] && ok "没有事件时状态文件没有任何更新" || bad "空闲时状态文件被改写"
@@ -233,6 +248,20 @@ r=$(client 30001); case $r in OK:*) ok "随后的短请求成功" ;; *) bad "短
 expect_state "正常连接结束后确认健康" A healthy
 kill "$HP2" 2>/dev/null
 
+section "假阳性排除: 拨号进行中 (上游 4 秒后才回复握手) 不得被确认, 握手完成且数据回传后才确认"
+client 30004 >/dev/null; client 30004 >/dev/null
+expect_state "S 的上游不存在 -> 不可用" S unhealthy
+python3 -I "$E2E_HERE/slowsocks.py" 31103 4 &
+track $!
+sleep 0.5
+hold 30004 127.0.0.2 24020 25 > "$E2E_DIR/hold4.out" 2>&1 &
+HP4=$!; track $HP4
+sleep 3
+[ "$(stat_of S)" = recovering ] && ok "拨号进行中 (第 3 秒): 仍是恢复中 没有被确认" || bad "拨号进行中却是 $(stat_of S)"
+expect_state "握手完成且目标数据回传后 (连接仍然打开) 确认为健康" S healthy 12
+kill -0 "$HP4" 2>/dev/null && ok "确认发生时连接仍在打开" || bad "连接已结束"
+kill "$HP4" 2>/dev/null
+
 section "假阳性排除: 认证失败 拨号未完成 不会被确认"
 r=$(client 30003)
 expect_state "W 仍然不可用" W unhealthy
@@ -262,6 +291,21 @@ n=0; while [ $n -lt 80 ] && [ ! -f "$SBDIR/connected" ]; do sleep 0.25; n=$((n +
 r=$(client 30001); case $r in OK:*) ok "重启后业务照常" ;; *) bad "业务失败 $r" ;; esac
 expect_state "重新订阅后新事件产生状态" A healthy
 # 密钥错误: 订阅被拒绝, 不能当作健康
+section "监控被强制结束 (kill -9) 不影响转发; 重启后回收残留进程; 命令行里没有密钥"
+leak=
+for p in /proc/[0-9]*; do
+    case "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)" in *"$API_SECRET"*) leak="$leak ${p#/proc/}" ;; esac
+done
+[ -z "$leak" ] && ok "没有任何进程的命令行含有 API 密钥" || bad "命令行含密钥的进程: $leak"
+kill -9 "$MON_PID1" 2>/dev/null; wait "$MON_PID1" 2>/dev/null
+r=$(client 30001); case $r in OK:*) ok "监控被 kill -9 后业务照常转发" ;; *) bad "业务受影响: $r" ;; esac
+[ "$(count_procs sbhealth.awk)" -ge 1 ] && ok "残留的状态机进程还在 (模拟异常退出)" || ok "残留进程已自行退出"
+start_mon && ok "重新启动监控" || bad "重启失败"
+n=0; while [ $n -lt 25 ] && [ "$(count_procs sbhealth.awk)" != 1 ]; do sleep 0.2; n=$((n + 1)); done
+[ "$(count_procs sbhealth.awk)" = 1 ] && ok "旧的状态机被回收 只剩一个" || bad "状态机进程数 $(count_procs sbhealth.awk)"
+[ "$(count_procs "nc 127.0.0.1 $API_PORT")" = 1 ] && ok "旧的 nc 被回收 只剩一个" || bad "nc 进程数 $(count_procs "nc 127.0.0.1 $API_PORT")"
+MON_PID1=$MON_PID
+
 section "事件接口不可用或密钥错误: 监控失败不得被当作上游健康"
 kill "$MON_PID1" 2>/dev/null; wait "$MON_PID1" 2>/dev/null
 cp "$ROOT/etc/sing-box/config.json" "$E2E_DIR/cfg.good"
@@ -277,7 +321,7 @@ cp "$E2E_DIR/cfg.good" "$ROOT/etc/sing-box/config.json"
 
 section "资源占用 (监控三个进程 + 一次确认)"
 start_mon || exit 1
-MON_PID=$MON_PID
+
 awk_pid=$(for p in /proc/[0-9]*; do case "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)" in *sbhealth.awk*) echo "${p#/proc/}" ;; esac; done | head -n 1)
 nc_pid=$(for p in /proc/[0-9]*; do case "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)" in "nc 127.0.0.1 $API_PORT"*) echo "${p#/proc/}" ;; esac; done | head -n 1)
 say "  RSS: 守护进程 sh $(RSS_OF "$MON_PID") kB, awk $(RSS_OF "$awk_pid") kB, nc $(RSS_OF "$nc_pid") kB (合计 $(( $(RSS_OF "$MON_PID") + $(RSS_OF "$awk_pid") + $(RSS_OF "$nc_pid") )) kB)"

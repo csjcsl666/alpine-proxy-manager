@@ -255,11 +255,15 @@ proxy-manager sing-box socks set 名称 server 地址 | port 端口 | no-auth
 proxy-manager sing-box socks set 名称 credential 用户名 --password-stdin | password --password-stdin
 proxy-manager sing-box socks enable 名称... | disable 名称... | enable-all | disable-all
 proxy-manager sing-box socks delete 名称
+proxy-manager sing-box health status
+proxy-manager sing-box health disable
+proxy-manager sing-box health enable
 proxy-manager sing-box egress ID [show] | direct | socks 名称
 ```
 
 - 它与目标访问限制不是同一个功能 目标访问限制决定可以访问哪些目标 SOCKS 出口决定允许之后从哪里出去 两者可以同时使用 允许的目标会走该实例的出口 不会绕过 SOCKS
 - 一个 Profile 可以被多个实例共享 没有绑定就是 DIRECT 升级 Manager 不会改动现有实例
+- SOCKS5 上游健康监控 默认启用 只有实例绑定了 SOCKS Profile 时才生效 一个常驻的小进程订阅 sing-box 自己的事件流 根据真实连接的失败与完成更新每个 Profile 的状态 健康 异常 不可用 恢复中 未知 没有流量时不做任何探测 也不会连接你的 SOCKS5 服务器 上游恢复后下一次真实连接成功就自动变回健康 不需要重启 sing-box 也不需要重新绑定 监控只是观察 不改变出口绑定 不会回退 DIRECT 故障时连接照常被拒绝 状态显示在 SOCKS Profile 与实例出口页面 `sing-box health status` 可以查看全部 长期不结束的连接恢复后可能要等它结束或者有别的连接结束才会确认 常驻内存约 4 MiB 状态文件在内存盘 `/run/apm-sbhealth` 只含状态和时间 不含地址 凭据
 - 只支持 SOCKS5 SOCKS5 服务器可以在本机 内网或公网 地址可以是 IPv4 `[IPv6]` 或主机名 主机名以小写存储 由 sing-box 在连接 SOCKS 服务器时解析 解析失败连接就失败 不回落 DIRECT 访问目标的域名不在本机解析 原样交给 SOCKS 服务器由上游解析 认证只有无认证与用户名加密码 密码通过 `--password-stdin` 提供 不接受命令行明文
 - UDP 通过 SOCKS5 UDP ASSOCIATE 转发 如果上游不支持 UDP 则 UDP 失败 不会直连 已用真实 SOCKS5 服务器验证
 - sing-box 的协议实例通过 sing-box 自己的出站使用 SOCKS 出口 Snell 的 SOCKS5 出口是另一套机制 见上文 Snell 网络功能

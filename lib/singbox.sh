@@ -1940,6 +1940,7 @@ _sb_egress_show() { # FILE
         printf '  出口：SOCKS %s (不存在 / 配置异常, 生成配置会被拒绝, 不会退回 DIRECT)\n' "$_n"
     elif [ "$(kv_get "$_pf" enabled)" = true ]; then
         printf '  出口：SOCKS %s (已启用)\n' "$_n"
+        printf '  上游健康：%s\n' "$(sbh_summary "$_n")"
     else
         printf '  出口：SOCKS %s (已禁用, 该实例的流量会被拒绝, 不会退回 DIRECT)\n' "$_n"
     fi
@@ -1977,6 +1978,7 @@ singbox_socks_list() {
         _u=$(_sb_socks_users "$(kv_get "$_f" name)" "$(state_instances_dir)")
         if [ -n "$(kv_get "$_f" username)" ]; then _a=用户名认证; else _a=无认证; fi
         printf '  %s  %s  %s 端口 %s  %s  引用 %s\n' "$(kv_get "$_f" name)" "$(_sb_socks_status "$_f")" "$(kv_get "$_f" host)" "$(kv_get "$_f" port)" "$_a" "${_u:-无}"
+        [ -z "$_u" ] || [ "$(kv_get "$_f" enabled)" != true ] || printf '    上游健康：%s\n' "$(sbh_summary "$(kv_get "$_f" name)")"
     done
     [ "$_n" = 1 ] || printf '  (没有 Profile)\n'
     printf '  说明：这里只表示配置有效, 不代表远端 SOCKS 服务器可达或凭据正确\n'
@@ -1999,6 +2001,9 @@ singbox_socks_show() {
     fi
     _u=$(_sb_socks_users "$1" "$(state_instances_dir)")
     printf '  引用的实例：%s\n' "${_u:-无}"
+    if [ -n "$_u" ] && [ "$(kv_get "$_f" enabled)" = true ]; then
+        sbh_print_profile "$1" | sed 's/^/  /'
+    fi
     printf '  说明：这里只表示配置有效, 不代表远端 SOCKS 服务器可达或凭据正确\n'
 }
 

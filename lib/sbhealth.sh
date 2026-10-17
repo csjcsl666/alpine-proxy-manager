@@ -175,7 +175,7 @@ sbh_monitor_up() {
 # sbh_view 名称 -> SBH_V_STATE (healthy degraded unhealthy recovering unknown off) SBH_V_REASON SBH_V_OK SBH_V_FAIL SBH_V_NOTE
 sbh_view() {
     local _f _now _ok _fail
-    SBH_V_STATE=unknown SBH_V_REASON= SBH_V_OK=0 SBH_V_FAIL=0 SBH_V_NOTE=
+    SBH_V_STATE=unknown; SBH_V_REASON=; SBH_V_OK=0; SBH_V_FAIL=0; SBH_V_NOTE=
     sbh_enabled || { SBH_V_STATE=off; SBH_V_NOTE="健康监控已关闭"; return 0; }
     _f=$(env_path "$SBH_RUN")/${SB_SOCKS_TAG_PREFIX}$1.state
     if [ -f "$_f" ]; then
@@ -247,7 +247,7 @@ sbh_summary() { # 名称
         degraded) printf '● 异常（%s）' "$(_sbh_reason_text "$SBH_V_REASON")" ;;
         unhealthy) printf '● 不可用（%s）' "$(_sbh_reason_text "$SBH_V_REASON")" ;;
         recovering) printf '● 恢复中' ;;
-        off) printf '- 已关闭' ;;
+        off) printf '%s' '- 已关闭' ;;
         *) printf '○ 未知' ;;
     esac
 }

@@ -39,6 +39,11 @@ assert_contains "ci-net 运行 AnyTLS Gateway 行为测试" "$(cat "$E/ci-net.sh
 assert_contains "ci-net 构建 AnyTLS Gateway" "$(cat "$E/ci-net.sh")" "third_party/anytls-gateway/build-inner.sh"
 assert_contains "ci-net 运行 SOCKS5 链接真实转发测试" "$(cat "$E/ci-net.sh")" "uri_forward.sh"
 assert_contains "链接转发测试: 错误密码零命中" "$(cat "$E/uri_forward.sh")" "上游认证失败 (不回退直连)"
+assert_contains "ci-net 运行 sing-box 健康监控端到端" "$(cat "$E/ci-net.sh")" "sbhealth.sh"
+assert_contains "健康监控测试: 无业务流量时不探测" "$(cat "$E/sbhealth.sh")" "监控不连接上游"
+assert_contains "健康监控测试: 上游恢复不重启 sing-box 与监控" "$(cat "$E/sbhealth.sh")" "sing-box 与监控进程都没有重启"
+assert_contains "健康监控测试: 长连接恢复确认" "$(cat "$E/sbhealth.sh")" "长连接恢复"
+assert_contains "健康监控测试: 沉默目标不被猜测为健康" "$(cat "$E/sbhealth.sh")" "没有被猜测为健康"
 GB=$(cat "$E/gw_behavior.sh")
 assert_contains "gateway 测试: 上游认证错误零命中" "$GB" "上游认证错误 TCP"
 assert_contains "gateway 测试: 上游不可达零命中" "$GB" "上游不可达 TCP"

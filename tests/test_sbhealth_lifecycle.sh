@@ -169,6 +169,29 @@ assert_not_contains "状态输出不含 SOCKS 密码" "$OUT" FictSocksPass
 assert_not_contains "状态输出不含密钥" "$OUT" "$SEC"
 "$PM" sing-box start >/dev/null 2>&1
 
+# ---- 现有页面直接显示健康状态 ----
+mkst SOCKS-01 unhealthy auth "$((NOW - 100))" "$((NOW - 5))"
+date +%s > "$D/connected"; mkdir -p "$A/proc/777"; printf '777\n' > "$D/daemon.pid"
+OUT=$("$PM" sing-box egress AnyTLS-01 show 2>&1)
+assert_contains "实例出口显示上游健康" "$OUT" "上游健康：● 不可用（SOCKS5 认证失败）"
+assert_contains "实例出口仍显示 Profile 是否启用" "$OUT" "出口：SOCKS SOCKS-01 (已启用)"
+OUT=$("$PM" sing-box socks list 2>&1)
+assert_contains "Profile 列表显示上游健康" "$OUT" "上游健康：● 不可用"
+OUT=$("$PM" sing-box socks show SOCKS-01 2>&1)
+assert_contains "Profile 详情显示健康" "$OUT" "状态：● 不可用"
+assert_contains "Profile 详情显示原因" "$OUT" "原因：SOCKS5 认证失败"
+assert_contains "Profile 详情显示最近失败" "$OUT" "最近失败："
+assert_not_contains "Profile 详情的健康块不含密码" "$OUT" FictSocksPass
+mkst SOCKS-01 healthy "" "$NOW" 0
+OUT=$("$PM" sing-box egress AnyTLS-01 show 2>&1)
+assert_contains "健康时实例出口显示" "$OUT" "上游健康：● 健康"
+"$PM" sing-box egress AnyTLS-01 direct >/dev/null 2>&1
+OUT=$("$PM" sing-box socks list 2>&1)
+assert_not_contains "没有被引用的 Profile 不显示上游健康" "$OUT" "上游健康"
+OUT=$("$PM" sing-box socks show SOCKS-01 2>&1)
+assert_not_contains "没有被引用的 Profile 详情没有健康块" "$OUT" "状态：●"
+"$PM" sing-box egress AnyTLS-01 socks SOCKS-01 >/dev/null 2>&1
+
 # ---- 卸载清理 ----
 OUT=$("$PM" sing-box uninstall 2>&1)
 assert_eq "卸载成功" 0 "$?"
