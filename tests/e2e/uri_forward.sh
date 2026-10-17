@@ -9,7 +9,7 @@ E2E_HERE=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=/dev/null
 . "$E2E_HERE/net_lib.sh"
 _SB_KEEP=$SB_BIN
-for _m in common environment state core model policy txn report client snell singbox tui; do
+for _m in common environment state core model policy txn report client snell singbox sbhealth tui; do
     # shellcheck source=/dev/null
     . "$E2E_HERE/../../lib/$_m.sh"
 done

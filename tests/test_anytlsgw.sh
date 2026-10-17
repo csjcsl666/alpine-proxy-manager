@@ -4,7 +4,7 @@
 # 真实的最小 ELF 桩代替网关二进制 真实的 openssl 行为由模拟脚本代替 真实进程行为由 tests/e2e/gw_behavior.sh 覆盖
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report client snell snellnet anytlsgw singbox tui
+t_load common environment state core model policy txn report client snell snellnet anytlsgw singbox sbhealth tui
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then

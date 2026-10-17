@@ -4,7 +4,7 @@
 # 升级本身走真实的 install.sh (APM_ROOT 隔离), 所以原子切换 自检 回滚都是真实路径
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report client snell singbox manager tui
+t_load common environment state core model policy txn report client snell singbox sbhealth manager tui
 
 PM_SRC="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then

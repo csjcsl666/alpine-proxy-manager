@@ -2,7 +2,7 @@
 # 0.5.0 Release Hardening 回归: 二进制属主, 写操作期间忽略中断信号, External Core 的写操作全面拒绝, 文件权限, 重复执行, 秘密不进 argv
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report client snell singbox tui
+t_load common environment state core model policy txn report client snell singbox sbhealth tui
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then

@@ -4,7 +4,7 @@
 # 全部使用虚构凭据, AnyTLS Gateway 的入口在 test_anytlsgw.sh
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report client snell snellnet singbox tui
+t_load common environment state core model policy txn report client snell snellnet singbox sbhealth tui
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then

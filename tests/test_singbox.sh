@@ -3,7 +3,7 @@
 # 二进制是真实的 ELF, 行为由 sidecar 脚本模拟 version check generate, 服务由模拟的 rc-service 提供
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report client snell singbox
+t_load common environment state core model policy txn report client snell singbox sbhealth
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then
@@ -274,14 +274,14 @@ BEFORE=$(snap)
 _sb_write_init() { return 1; }
 OUT=$(singbox_install 2>&1)
 RC=$?
-t_load singbox
+t_load singbox sbhealth
 fail_case "服务脚本写入失败" "$RC"
 new_s f12
 BEFORE=$(snap)
 _sb_write_meta() { return 1; }
 OUT=$(singbox_install 2>&1)
 RC=$?
-t_load singbox
+t_load singbox sbhealth
 fail_case "元数据写入失败" "$RC"
 assert_contains "元数据写入失败时已启动过再被停止" "$(calls)" "sing-box stop"
 new_s f13

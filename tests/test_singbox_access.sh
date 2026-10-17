@@ -2,7 +2,7 @@
 # 目标访问限制 (Relay Access Policy): 按实例, 跨协议, allowlist 默认拒绝, fail-closed, 事务回滚, 旧实例兼容
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report client snell singbox
+t_load common environment state core model policy txn report client snell singbox sbhealth
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then
@@ -412,7 +412,7 @@ rb "监听验证失败"
 _sb_sync_instances() { return 1; }
 OUT=$(singbox_access TUIC-01 add 192.0.2.40 8083 2>&1)
 RC=$?
-t_load singbox
+t_load singbox sbhealth
 assert_eq "保存实例失败时 add 失败" 1 "$RC"
 assert_contains "保存实例失败提示" "$OUT" "保存实例失败"
 rb "保存实例失败"

@@ -4,7 +4,7 @@
 # 覆盖公共确认函数 tui_confirm 与 Snell 命令行的安装确认, 并扫描源码防止出现默认 No 的残留
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report client snell snellnet singbox anytlsgw tui
+t_load common environment state core model policy txn report client snell snellnet singbox sbhealth anytlsgw tui
 
 # C 输入 -> 输出 返回码
 C() { printf '%b' "$1" | ( tui_confirm "测试操作" ); }

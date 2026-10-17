@@ -2,7 +2,7 @@
 # Server SOCKS Egress: SOCKS Profile 与实例 Egress Binding, 与目标访问限制组合, 禁用与异常时 fail-closed, 事务回滚, 密码安全
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report client snell singbox
+t_load common environment state core model policy txn report client snell singbox sbhealth
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then
@@ -604,7 +604,7 @@ rb "egress direct 重启失败"
 _sb_sync_instances() { return 1; }
 OUT=$(singbox_socks set SOCKS-01 port 1114 2>&1)
 RC=$?
-t_load singbox
+t_load singbox sbhealth
 assert_eq "保存失败时 set 失败" 1 "$RC"
 assert_contains "保存失败提示" "$OUT" "保存实例失败"
 rb "保存失败"

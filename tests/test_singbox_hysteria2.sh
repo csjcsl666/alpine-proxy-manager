@@ -2,7 +2,7 @@
 # Hysteria2 Protocol Instance (UDP/QUIC) 与 AnyTLS (TCP) 共存: 协议感知的端口模型, UDP 监听, 事务回滚, 密码安全
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report client snell singbox
+t_load common environment state core model policy txn report client snell singbox sbhealth
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then
@@ -374,7 +374,7 @@ _sb_sync_instances() { return 1; }
 BEFORE=$(snap)
 OUT=$(singbox_add hysteria2 --port 20905 2>&1)
 RC=$?
-t_load singbox
+t_load singbox sbhealth
 assert_eq "保存实例失败时 add 失败" 1 "$RC"
 assert_contains "保存实例失败提示" "$OUT" "保存实例失败"
 assert_eq "保存实例失败后配置恢复" "$OLDCFG" "$(CFG)"

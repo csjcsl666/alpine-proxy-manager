@@ -679,10 +679,11 @@ ${_eff#socks:}" ;; esac
 # 没有任何实例开启目标访问限制且没有任何实例绑定 SOCKS 出口时不输出 route 与额外出站, 配置与没有这些功能时逐字节相同
 # 任何实例的限制或出口绑定无效都整体失败, 绝不退回不限制或 direct
 sb_generate_config() { # INSTANCES_DIR
-    local _f _first _rules _obs
+    local _f _first _rules _obs _exp
     _rules=$(_sb_route_rules "$1") || return 1
     _obs=$(_sb_socks_outbounds "$1") || return 1
-    printf '{\n  "log": {\n    "level": "warn",\n    "timestamp": true\n  },\n  "inbounds": ['
+    _exp=$(_sbh_experimental "$_obs")
+    printf '{\n  "log": {\n    "level": "warn",\n    "timestamp": true\n  }%s,\n  "inbounds": [' "$_exp"
     _first=1
     for _f in $(state_list_confs "$1"); do
         [ "$(kv_get "$_f" enabled)" = true ] || continue
@@ -1174,6 +1175,7 @@ singbox_start() {
     fi
     _sb_wait_healthy || { _sb_show_failure; apm_err "sing-box 没有进入健康状态"; return 1; }
     _sb_say "sing-box 已启动并验证"
+    sbh_follow
 }
 
 singbox_stop() {
@@ -1188,6 +1190,7 @@ singbox_stop() {
     _sb_rc stop >/dev/null 2>&1 || { apm_err "rc-service sing-box stop 失败"; return 1; }
     _sb_wait_stopped || { apm_err "sing-box 没有停止"; return 1; }
     _sb_say "sing-box 已停止"
+    sbh_follow
 }
 
 singbox_restart() {
@@ -1203,6 +1206,7 @@ singbox_restart() {
     fi
     _sb_wait_healthy || { _sb_show_failure; apm_err "sing-box 重启后没有进入健康状态"; return 1; }
     _sb_say "sing-box 已重启并验证"
+    sbh_follow
 }
 
 # check: 用官方 sing-box check 校验当前配置, 只读
@@ -1310,7 +1314,17 @@ _sb_sync_instances() { # NEWDIR
 
 # 变更后的应用: 生成出的运行配置与当前完全相同就只保存文件, 不重启, 否则走完整事务 (check 备份 原子替换 重启 健康检查 回滚)
 # 结果通过 SB_APPLY_RESTARTED 报告 yes 或 no
+# 变更后的应用 + 健康监控跟随: 提案里有实例绑定了 SOCKS Profile 时才创建监控所需的端口与密钥, 应用成功后让监控服务跟随 sing-box 的状态
 _sb_apply() { # NEWDIR WAS_STATE
+    local _rc
+    if grep -qs '^egress_socks=' "$1"/*.conf; then sbh_conf_ensure || apm_warn "无法创建健康监控设置, 本次不启用健康监控"; fi
+    _sb_apply_core "$@"
+    _rc=$?
+    [ "$_rc" -ne 0 ] || sbh_follow
+    return $_rc
+}
+
+_sb_apply_core() { # NEWDIR WAS_STATE
     local _cand
     SB_APPLY_RESTARTED=no
     _snell_ensure_staging || return 1
@@ -2308,6 +2322,7 @@ singbox_update() {
     if [ "$_rc" = 0 ] && _sb_update_meta "$_tag" "$_new_reported"; then
         rm -f -- "$_old"
         _sb_say "更新完成并已验证: $_cur_exact -> $_tag (二进制自报 $_new_reported)"
+        sbh_follow
         return 0
     fi
     apm_err "新版本验证失败, 回滚到旧版本"
@@ -2361,6 +2376,7 @@ singbox_uninstall() {
         _sb_rc stop >/dev/null 2>&1 || { apm_err "停止 sing-box 失败, 卸载已中止, 没有删除任何文件"; return 1; }
         _sb_wait_stopped || { apm_err "sing-box 没有停止, 卸载已中止, 没有删除任何文件"; return 1; }
     fi
+    sbh_remove
     _snell_run rc-update del sing-box default >/dev/null 2>&1
     if [ -f "$(env_path "$SB_INIT")" ]; then
         if grep -q "^$SB_INIT_MARK" "$(env_path "$SB_INIT")"; then
@@ -2370,6 +2386,7 @@ singbox_uninstall() {
         fi
     fi
     rm -f -- "$(env_path "$SB_BIN")" "$(env_path "$SB_BIN").old" "$(env_path "$SB_BIN").new"
+    [ "$_purge" != 1 ] || sbh_purge
     if [ "$_purge" = 1 ]; then
         # 只删除有 Manager 标记的配置根, 没有标记说明不是 Manager 创建的, 保留
         if [ -f "$(env_path "$SB_MARK_FILE")" ]; then
@@ -2428,6 +2445,7 @@ singbox_cli() {
         show) singbox_show "$@" ;;
         access) singbox_access "$@" ;;
         socks) singbox_socks "$@" ;;
+        health) sbh_cli "$@" ;;
         egress) singbox_egress "$@" ;;
         endpoint) singbox_endpoint "$@" ;;
         export) singbox_export "$@" ;;

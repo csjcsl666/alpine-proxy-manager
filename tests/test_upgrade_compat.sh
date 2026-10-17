@@ -4,7 +4,7 @@
 # 验证当前版本读取旧数据: 不改写 不误解释 不 fail-open, 缺少新字段时使用安全默认, 候选运行配置与该版本自己的输出一致
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report client snell singbox tui
+t_load common environment state core model policy txn report client snell singbox sbhealth tui
 
 PM="$T_ROOT/bin/proxy-manager"
 if ! mk_elf_stub "$T_TMP/probe" "probe"; then

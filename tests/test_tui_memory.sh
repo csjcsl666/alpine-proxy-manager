@@ -4,7 +4,7 @@
 # 刷新的光标行为用真实终端模拟器 tmux 验证, 没有 tmux 时这部分跳过 (CI 与沙盒里 apk add tmux)
 # shellcheck source=tests/lib.sh
 . "$(dirname "$0")/lib.sh"
-t_load common environment state core model policy txn report client snell singbox manager tui
+t_load common environment state core model policy txn report client snell singbox sbhealth manager tui
 
 # ---- 伪造系统根 ----
 mkfake() { # 目录 meminfo总KB 可用KB
