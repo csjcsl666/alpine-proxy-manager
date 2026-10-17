@@ -17,7 +17,7 @@ fail() { ev error "$1" "connection: open connection to target.invalid:443 using 
 fin() { ev debug "$1" "connection: connection download finished"; }
 T() { printf '@T %s\n' "$1"; }
 # run: 标准输入是事件, 输出到目录 D; 返回后状态文件已写入
-run() { rm -f "$D"/*.state "$D"/connected "$D"/confirm.*; SBH_DIR=$D SBH_TEST_CLOCK=1 awk -f "$AWKF"; }
+run() { rm -f "$D"/*.state "$D"/connected "$D"/confirm.* "$D"/profiles; SBH_DIR=$D SBH_TEST_CLOCK=1 awk -f "$AWKF"; }
 runkeep() { SBH_DIR=$D SBH_TEST_CLOCK=1 awk -f "$AWKF"; }
 st() { kv_get "$D/apm-socks-$1.state" "${2:-state}"; }
 # 读取 kv (不依赖整个产品库)
@@ -174,7 +174,7 @@ echo "$1" >> "$CONF_LOG"
 cp "$SBH_DIR/confirm.$1.req" "$CONF_LOG.req" 2>/dev/null
 EOS
 chmod +x "$T_TMP/confirm-stub.sh"
-runc() { rm -f "$D"/*.state "$D"/connected "$D"/confirm.*; : > "$CONF_LOG"; rm -f "$CONF_LOG.req"; CONF_LOG=$CONF_LOG SBH_CONFIRM="$T_TMP/confirm-stub.sh" SBH_DIR=$D SBH_TEST_CLOCK=1 awk -f "$AWKF"; sleep 0.3; }
+runc() { rm -f "$D"/*.state "$D"/connected "$D"/confirm.* "$D"/profiles; : > "$CONF_LOG"; rm -f "$CONF_LOG.req"; CONF_LOG=$CONF_LOG SBH_CONFIRM="$T_TMP/confirm-stub.sh" SBH_DIR=$D SBH_TEST_CLOCK=1 awk -f "$AWKF"; sleep 0.3; }
 src() { ev info "$1" "inbound/socks[in-A]: inbound connection from $2"; }
 nconf() { local n; n=$(grep -c . "$CONF_LOG" 2>/dev/null); echo "${n:-0}"; }
 S() { printf '@S %s\n' "$1"; }
@@ -219,6 +219,42 @@ assert_not_contains "保留的是最新的" "$(cat "$D/confirm.apm-socks-I.req")
 # 没有设置确认脚本时完全不启用 B
 { hdr; T 100; src 1 127.0.0.1:50001; att 1 J; fail 1 J "$AUTH"; src 2 127.0.0.1:50002; att 2 J; } | run
 assert_eq "没有 SBH_CONFIRM 时不产生请求文件" "" "$(ls "$D" | grep '^confirm\.')"
+
+# ---- 每个 Profile 的监控开关: 关闭的 Profile 不产生也不保留任何状态, 重新开启从未知开始 ----
+P() { printf '@P %s\n' "$1"; }
+PC() { printf '@PC\n'; }
+runp() { rm -f "$D"/*.state "$D"/*.snap.* "$D"/connected "$D"/confirm.*; printf '%s' "$1" > "$D/profiles"; SBH_DIR=$D SBH_TEST_CLOCK=1 awk -f "$AWKF"; }
+# 启动时就关闭的 Profile: 事件被忽略, 没有状态文件; 其他 Profile 不受影响
+{ hdr; T 100; att 1 A; fin 1 A; att 2 B; fin 2 B; att 3 A; fail 3 A "$AUTH"; } | runp "A off 1
+"
+assert_eq "关闭的 Profile 没有状态文件" no "$([ -e "$D/apm-socks-A.state" ] && echo yes || echo no)"
+assert_eq "没有关闭的 Profile 照常记录" healthy "$(last B)"
+# 运行中关闭: 之前的健康状态被丢弃, 状态文件被删除
+{ hdr; T 100; att 1 C; fin 1 C; S a; PC; P "C off 1"; T 101; att 2 C; fail 2 C "$AUTH"; S b; } | runp ""
+assert_eq "关闭前是 healthy" healthy "$(snap C a)"
+assert_eq "关闭后状态文件被删除" no "$([ -e "$D/apm-socks-C.state" ] && echo yes || echo no)"
+assert_eq "关闭后的失败事件不产生状态" no "$([ -e "$D/apm-socks-C.snap.b" ] && echo yes || echo no)"
+# 重新开启: 从未知开始, 不复用关闭前的健康, 也不复用关闭前的失败计数
+{ hdr; T 100; att 1 D; fin 1 D; att 2 D; fail 2 D "$REF"; S a; PC; P "D off 1"; T 101; att 3 D; PC; P "D on 2"; T 102; att 4 D; fail 4 D "$REF"; S b; } | runp ""
+assert_eq "关闭前有一次失败 degraded" degraded "$(snap D a)"
+assert_eq "重新开启后的第一次失败是 degraded 而不是 unhealthy (旧失败计数没有被复用)" degraded "$(snap D b)"
+assert_eq "重新开启后 last_ok 不沿用旧值" 0 "$(snap D b last_ok)"
+# 关闭前的未结束连接, 在重新开启后结束, 不能被当作新的成功
+{ hdr; T 100; att 1 E; fail 1 E "$AUTH"; att 2 E; PC; P "E off 1"; T 101; att 3 E; PC; P "E on 2"; T 102; fin 2 E; fin 3 E; S a; } | runp ""
+assert_eq "关闭期间留下的未结束连接不会在重新开启后造成健康" no "$([ -e "$D/apm-socks-E.snap.a" ] && echo yes || echo no)"
+# 另一个 Profile 的开关变化不影响这一个
+{ hdr; T 100; att 1 G; fin 1 G; att 2 H; fin 2 H; PC; P "H off 1"; T 101; att 3 G; fin 3 G; S a; } | runp ""
+assert_eq "关闭 H 不影响 G" healthy "$(snap G a)"
+assert_eq "关闭 H 后 H 没有状态" no "$([ -e "$D/apm-socks-H.snap.a" ] && echo yes || echo no)"
+# 恢复确认的回报对关闭的 Profile 无效
+{ hdr; T 100; att 1 I; fail 1 I "$AUTH"; src 2 127.0.0.1:50002; att 2 I; PC; P "I off 1"; T 101; printf '@C ok apm-socks-I\n'; S a; } | runp ""
+assert_eq "关闭后收到确认回报也不产生状态" no "$([ -e "$D/apm-socks-I.snap.a" ] && echo yes || echo no)"
+# 启动时目录里残留的、已被关闭的 Profile 的状态文件被删除而不是重置为未知
+rm -f "$D"/*.state
+printf 'version=1\nstate=healthy\nreason=\nsince=1\nlast_ok=1\nlast_fail=0\nlast_fail_reason=\nstreak=0\nupdated=1\n' > "$D/apm-socks-J.state"
+printf 'J off 1\n' > "$D/profiles"
+hdr | SBH_DIR=$D SBH_TEST_CLOCK=1 awk -f "$AWKF"
+assert_eq "启动时被关闭的 Profile 的残留状态被删除" no "$([ -e "$D/apm-socks-J.state" ] && echo yes || echo no)"
 
 # ---- 源码检查: 状态机不含任何主动探测 ----
 SRC=$(cat "$AWKF")

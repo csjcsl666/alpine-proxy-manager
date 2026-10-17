@@ -250,14 +250,14 @@ assert_contains "实例页出口" "$out" "出口：直连"
 for noise in "内部监听" "::" "TCP [" "目标访问限制：未启用" "客户端连接地址：未配置" "密码：已配置" "TLS：self-signed" "内部 TCP Listener"; do
     assert_not_contains "实例页没有噪声: $noise" "$out" "$noise"
 done
-for item in "1. 禁用" "2. 修改监听端口" "3. 修改 TLS server-name" "4. 修改密码" "5. SOCKS5 出口" "6. 客户端配置" "7. 目标访问限制" "8. 修改监听地址" "9. 删除实例" "0. 返回"; do
+for item in "1. 禁用" "2. 修改监听端口" "3. 修改 TLS server-name" "4. 修改密码" "5. 客户端配置" "6. 目标访问限制" "7. 删除实例" "0. 返回"; do
     assert_contains "AnyTLS 实例页含 $item" "$out" "$item"
 done
 for gone in "修改实例" "客户端连接地址（Public Endpoint）" "查看凭据" "UUID" "method"; do assert_not_contains "AnyTLS 实例页不含 $gone" "$out" "$gone"; done
 out=$(inst 4 0)
-for item in "3. 修改 TLS server-name" "4. 修改 UUID" "5. 修改拥塞控制" "6. 修改密码" "7. SOCKS5 出口" "8. 客户端配置" "9. 目标访问限制" "10. 修改监听地址" "11. 删除实例"; do assert_contains "TUIC 实例页含 $item" "$out" "$item"; done
+for item in "3. 修改 TLS server-name" "4. 修改 UUID" "5. 修改拥塞控制" "6. 修改密码" "7. 客户端配置" "8. 目标访问限制" "9. 删除实例"; do assert_contains "TUIC 实例页含 $item" "$out" "$item"; done
 out=$(inst 3 0)
-for item in "2. 修改监听端口" "3. 修改 method 与密钥" "4. SOCKS5 出口" "5. 客户端配置" "6. 目标访问限制" "7. 修改监听地址" "8. 删除实例"; do assert_contains "Shadowsocks 实例页含 $item" "$out" "$item"; done
+for item in "2. 修改监听端口" "3. 修改 method 与密钥" "4. 客户端配置" "5. 目标访问限制" "6. 删除实例"; do assert_contains "Shadowsocks 实例页含 $item" "$out" "$item"; done
 assert_not_contains "Shadowsocks 实例页没有 server-name" "$out" "server-name"
 assert_not_contains "Shadowsocks 实例页没有修改密码" "$out" "修改密码"
 
@@ -279,12 +279,6 @@ PW2=TuiNewPasswordNeverEcho0123456789ab
 out=$(T "2\n1\n1\n4\n$PW2\n\n0\n0\n0\n")
 assert_eq "修改密码" "$PW2" "$(kv_get "$(INST AnyTLS-01)" credential.password)"
 assert_not_contains "新密码没有出现在输出里" "$out" "$PW2"
-out=$(T '2\n1\n1\n8\n127.0.0.1\n\n0\n0\n0\n')
-assert_eq "修改监听地址" 127.0.0.1 "$(kv_get "$(INST AnyTLS-01)" listen)"
-out=$(inst 1 0)
-assert_contains "改成仅本机后实例页说明监听范围" "$out" "监听端口：20445（仅本机访问）"
-T '2\n1\n1\n8\n::\n\n0\n0\n0\n' >/dev/null
-assert_eq "改回全部接口" "::" "$(kv_get "$(INST AnyTLS-01)" listen)"
 out=$(T '2\n1\n4\n4\n11111111-2222-4333-8444-666666666666\n\n0\n0\n0\n')
 assert_eq "TUIC 修改 UUID" 11111111-2222-4333-8444-666666666666 "$(kv_get "$(INST TUIC-01)" credential.uuid)"
 out=$(T '2\n1\n4\n5\nnew_reno\n\n0\n0\n0\n')
@@ -310,85 +304,183 @@ T '2\n1\n1\n1\n\n\n0\n0\n0\n' >/dev/null
 assert_eq "回车确认后再启用" true "$(kv_get "$(INST AnyTLS-01)" enabled)"
 
 # 删除实例
-T '2\n1\n2\n9\nn\n\n0\n0\n0\n' >/dev/null
+T '2\n1\n2\n7\nn\n\n0\n0\n0\n' >/dev/null
 assert_eq "输入 n 不删除" yes "$([ -f "$(INST Hysteria2-01)" ] && echo yes)"
-T '2\n1\n2\n9\ny\n\n0\n0\n0\n' >/dev/null
+T '2\n1\n2\n7\ny\n\n0\n0\n0\n' >/dev/null
 assert_eq "确认后删除" no "$([ -f "$(INST Hysteria2-01)" ] && echo yes || echo no)"
 out=$(T '2\n1\n0\n0\n0\n')
 assert_not_contains "删除后选择页不再有 Hysteria2-01" "$out" "Hysteria2-01"
 T '2\n2\n2\n20500\n\n\ny\n\n0\n0\n' >/dev/null
 
 # ---- 目标访问限制 (实例页第 7 项) ----
-out=$(T '2\n1\n1\n7\n0\n0\n0\n0\n')
+out=$(T '2
+1
+1
+6
+0\n0\n0\n0\n')
 assert_contains "目标访问限制页" "$out" "目标访问限制 AnyTLS-01"
 for item in "设置为不限制" "设置为 Allowlist" "查看允许目标" "添加允许目标" "删除允许目标" "清空允许目标"; do
     assert_contains "目标访问限制含 $item" "$out" ". $item"
 done
-out=$(T '2\n1\n1\n7\n2\ny\n\n0\n0\n0\n')
+out=$(T '2
+1
+1
+6
+2\ny\n\n0\n0\n0\n')
 assert_contains "空 Allowlist 需要确认" "$out" "新的 Allowlist 为空"
 out=$(T '2\n0\n0\n')
 assert_contains "启用空名单后主页面直接警告" "$out" "! 目标访问限制：允许名单为空，所有目标都会被拒绝"
-T '2\n1\n1\n7\n4\n192.0.2.10\n1080\n\n0\n0\n0\n' >/dev/null
+T '2
+1
+1
+6
+4\n192.0.2.10\n1080\n\n0\n0\n0\n' >/dev/null
 assert_contains "添加允许目标" "$(cat "$(INST AnyTLS-01)")" "192.0.2.10:1080"
 out=$(T '2\n0\n0\n')
 assert_contains "主页面显示生效的限制" "$out" "目标访问限制：只允许 1 个目标"
 out=$(inst 1 0)
 assert_contains "实例页显示生效的限制" "$out" "目标访问限制：只允许 1 个目标"
-out=$(T '2\n1\n1\n7\n3\n\n0\n0\n0\n')
+out=$(T '2
+1
+1
+6
+3\n\n0\n0\n0\n')
 assert_contains "查看允许目标" "$out" "192.0.2.10:1080"
-T '2\n1\n1\n7\n5\n192.0.2.10\n1080\n\n0\n0\n0\n' >/dev/null
-T '2\n1\n1\n7\n6\ny\n\n0\n0\n0\n' >/dev/null
-T '2\n1\n1\n7\n6\nn\n\n0\n0\n0\n' >/dev/null
-T '2\n1\n1\n7\n1\n\n0\n0\n0\n' >/dev/null
+T '2
+1
+1
+6
+5\n192.0.2.10\n1080\n\n0\n0\n0\n' >/dev/null
+T '2
+1
+1
+6
+6\ny\n\n0\n0\n0\n' >/dev/null
+T '2
+1
+1
+6
+6\nn\n\n0\n0\n0\n' >/dev/null
+T '2
+1
+1
+6
+1\n\n0\n0\n0\n' >/dev/null
 assert_not_contains "不限制后没有 relay_access" "$(cat "$(INST AnyTLS-01)")" relay_access
 out=$(T '2\n0\n0\n')
 assert_not_contains "不限制后主页面没有访问限制行" "$out" "目标访问限制"
-out=$(T '2\n1\n1\n7\n4\n999.1.1.1\n80\n\n0\n0\n0\n')
+out=$(T '2
+1
+1
+6
+4\n999.1.1.1\n80\n\n0\n0\n0\n')
 assert_contains "无效目标由业务层拒绝" "$out" "错误:"
 
-# ---- SOCKS5 出口页 ----
+# ---- SOCKS5 出口管理中心 (v0.8.1): 服务器管理 实例出口分配 健康监控开关 ----
+# 管理中心的三个入口: 1 管理 SOCKS5 服务器 2 分配实例出口 3 健康监控开关
 out=$(T '2\n3\n0\n0\n0\n')
-assert_contains "SOCKS5 出口页标题" "$out" "sing-box · SOCKS5 出口"
-assert_contains "没有出口时的提示" "$out" "还没有 SOCKS5 出口"
-for item in "1. 添加 SOCKS5 出口" "2. 管理出口" "3. 批量启用" "4. 批量禁用"; do assert_contains "SOCKS5 出口页含 $item" "$out" "$item"; done
-out=$(T '2\n3\n1\n192.0.2.50\n1080\n\n\n\n0\n0\n0\n')
-assert_contains "添加无认证出口" "$out" "已添加 SOCKS Profile SOCKS-01"
+assert_contains "管理中心标题" "$out" "sing-box · SOCKS5 出口管理"
+assert_contains "管理中心直接显示健康监控状态" "$out" "健康监控：已开启（现在没有需要监控的服务器）"
+assert_contains "没有服务器时的提示" "$out" "还没有 SOCKS5 服务器"
+for item in "1. 管理 SOCKS5 服务器" "2. 分配实例出口" "3. 健康监控开关" "0. 返回"; do assert_contains "管理中心含 $item" "$out" "$item"; done
+for gone in "批量启用" "批量禁用" "批量修改"; do assert_not_contains "管理中心没有重复的批量菜单: $gone" "$out" "$gone"; done
+assert_contains "管理中心显示实例出口分配" "$out" "实例出口分配："
+assert_contains "实例默认是 DIRECT" "$out" "AnyTLS-01  → DIRECT"
+# 管理 SOCKS5 服务器
+out=$(T '2\n3\n1\n0\n0\n0\n0\n')
+for item in "1. 添加 SOCKS5 服务器" "2. 管理服务器"; do assert_contains "服务器页含 $item" "$out" "$item"; done
+assert_not_contains "服务器页没有批量启用禁用" "$out" "批量"
+out=$(T '2\n3\n1\n1\n192.0.2.50\n1080\n\n\n\n0\n0\n0\n0\n')
+assert_contains "添加无认证服务器" "$out" "已添加 SOCKS Profile SOCKS-01"
 SPW=TuiSocksPasswordNeverEcho01234567
-out=$(T "2\n3\n1\n192.0.2.51\n1081\nsocks2\nsocksuser\n$SPW\n\n0\n0\n0\n")
+out=$(T "2\n3\n1\n1\n192.0.2.51\n1081\nsocks2\nsocksuser\n$SPW\n\n0\n0\n0\n0\n")
 assert_eq "SOCKS 密码已保存" "$SPW" "$(kv_get "$(PROF socks2)" password)"
 assert_not_contains "SOCKS 密码没有回显到输出" "$out" "$SPW"
 assert_eq "SOCKS 用户名" socksuser "$(kv_get "$(PROF socks2)" username)"
 out=$(T '2\n3\n0\n0\n0\n')
-assert_contains "出口卡片含上游" "$out" "上游：192.0.2.50:1080"
-assert_contains "未被使用的出口说明" "$out" "未被任何实例使用"
-assert_not_contains "出口卡片不含用户名" "$out" "socksuser"
-assert_not_contains "出口卡片不含密码" "$out" "$SPW"
+assert_contains "管理中心含服务器上游" "$out" "上游：192.0.2.50:1080"
+assert_contains "未被使用的服务器说明" "$out" "未被任何实例使用"
+assert_not_contains "管理中心不含用户名" "$out" "socksuser"
+assert_not_contains "管理中心不含密码" "$out" "$SPW"
+out=$(T '2\n3\n1\n0\n0\n0\n0\n')
+assert_contains "服务器页含完整信息" "$out" "上游：192.0.2.51:1081"
 
-# ---- 实例页绑定出口: 直连与全部出口一次列出, 选一次完成 ----
-out=$(T '2\n1\n1\n5\n0\n0\n0\n0\n')
-assert_contains "出口选择页标题" "$out" "SOCKS5 出口 · AnyTLS-01"
-assert_contains "当前是直连" "$out" "当前：直连"
-assert_contains "出口选择页含直连" "$out" "1. 直连（当前）"
-assert_contains "出口选择页含 SOCKS-01" "$out" "2. SOCKS-01"
-assert_contains "出口选择页含 socks2" "$out" "3. socks2"
-out=$(T '2\n1\n1\n5\n2\n\n0\n0\n0\n')
+# ---- 实例页里不再有出口与监听地址入口, 出口只在管理中心分配 ----
+out=$(inst 1 0)
+assert_not_contains "实例页没有 SOCKS5 出口入口" "$out" ". SOCKS5 出口"
+assert_not_contains "实例页没有修改监听地址" "$out" "监听地址"
+for who in 1 2 3 4; do
+    out=$(inst $who 0)
+    assert_not_contains "实例 $who 的页面没有出口选择入口" "$out" ". SOCKS5 出口"
+    assert_not_contains "实例 $who 的页面没有修改监听地址" "$out" "修改监听地址"
+done
+
+# ---- 分配实例出口 ----
+out=$(T '2\n3\n2\n0\n0\n0\n')
+assert_contains "分配页标题" "$out" "实例出口分配"
+for line in "1. AnyTLS-01  → DIRECT" "2. Hysteria2-01  → DIRECT" "3. Shadowsocks-01  → DIRECT" "4. TUIC-01  → DIRECT"; do assert_contains "分配页含 $line" "$out" "$line"; done
+out=$(T '2\n3\n2\n1\n0\n0\n0\n0\n')
+assert_contains "出口选择标题" "$out" "为 AnyTLS-01 选择出口"
+assert_contains "当前是 DIRECT" "$out" "当前：DIRECT"
+assert_contains "选择页第一项是服务器 SOCKS-01" "$out" "1. SOCKS-01"
+assert_contains "选择页含 socks2" "$out" "2. socks2"
+assert_contains "选择页最后是 DIRECT（当前）" "$out" "3. DIRECT（当前）"
+out=$(T '2\n3\n2\n1\n1\n\n0\n0\n0\n0\n')
 assert_contains "绑定时明确提示" "$out" "该实例流量将通过 SOCKS-01 出口，不会自动回落 DIRECT"
 assert_eq "绑定成功" SOCKS-01 "$(kv_get "$(INST AnyTLS-01)" egress_socks)"
-assert_eq "绑定成功后直接回到实例页, 出口选择页只出现一次 (只需一次选择)" 1 "$(printf '%s\n' "$out" | grep -c '^ SOCKS5 出口 · AnyTLS-01')"
-out=$(T '2\n0\n0\n')
-assert_contains "主页面显示 SOCKS5 出口与上游健康" "$out" "SOCKS5 出口：SOCKS-01  上游健康："
-out=$(inst 1 0)
-assert_contains "实例页显示 SOCKS5 出口" "$out" "SOCKS5 出口：SOCKS-01"
-assert_contains "实例页显示上游健康" "$out" "上游健康："
-assert_not_contains "实例页不再有出口：直连" "$out" "出口：直连"
+out=$(T '2\n3\n2\n0\n0\n0\n')
+assert_contains "分配页反映新绑定" "$out" "1. AnyTLS-01  → SOCKS-01"
+assert_contains "其他实例不受影响" "$out" "2. Hysteria2-01  → DIRECT"
+# 多个实例共用一个服务器, 一个一个分配
+T '2\n3\n2\n2\n1\n\n0\n0\n0\n0\n' >/dev/null
+T '2\n3\n2\n4\n2\n\n0\n0\n0\n0\n' >/dev/null
+assert_eq "Hysteria2 绑定 SOCKS-01" SOCKS-01 "$(kv_get "$(INST Hysteria2-01)" egress_socks)"
+assert_eq "TUIC 绑定 socks2" socks2 "$(kv_get "$(INST TUIC-01)" egress_socks)"
+assert_eq "Shadowsocks 不受影响" "" "$(kv_get "$(INST Shadowsocks-01)" egress_socks)"
 out=$(T '2\n3\n0\n0\n0\n')
-assert_contains "出口页显示使用它的实例" "$out" "使用它的实例：AnyTLS-01"
-# 删除被引用的出口: 业务层拒绝
-out=$(T '2\n3\n2\n1\n6\ny\n\n0\n0\n0\n0\n')
-assert_eq "被引用的出口没有被删除" yes "$([ -f "$(PROF SOCKS-01)" ] && echo yes)"
-assert_contains "业务层拒绝说明" "$out" "AnyTLS-01"
+assert_contains "管理中心显示 AnyTLS 的出口" "$out" "AnyTLS-01  → SOCKS-01"
+assert_contains "管理中心显示 TUIC 的出口" "$out" "TUIC-01  → socks2"
+assert_contains "管理中心显示 Shadowsocks 仍是 DIRECT" "$out" "Shadowsocks-01  → DIRECT"
+# 四种协议都能在这里分配 (Shadowsocks)
+T '2\n3\n2\n3\n1\n\n0\n0\n0\n0\n' >/dev/null
+assert_eq "Shadowsocks 在管理中心分配" SOCKS-01 "$(kv_get "$(INST Shadowsocks-01)" egress_socks)"
+# 从一个服务器改到另一个
+T '2\n3\n2\n1\n2\n\n0\n0\n0\n0\n' >/dev/null
+assert_eq "从 SOCKS-01 改到 socks2" socks2 "$(kv_get "$(INST AnyTLS-01)" egress_socks)"
+# 用户明确选择 DIRECT
+T '2\n3\n2\n1\n3\n\n0\n0\n0\n0\n' >/dev/null
+assert_eq "明确选择 DIRECT" "" "$(kv_get "$(INST AnyTLS-01)" egress_socks)"
+T '2\n3\n2\n1\n1\n\n0\n0\n0\n0\n' >/dev/null
+assert_eq "AnyTLS 重新绑定 SOCKS-01" SOCKS-01 "$(kv_get "$(INST AnyTLS-01)" egress_socks)"
+# 实例页只显示摘要
+out=$(inst 1 0)
+assert_contains "实例页显示 SOCKS5 出口摘要" "$out" "SOCKS5 出口：SOCKS-01"
+assert_contains "实例页显示上游健康" "$out" "上游健康："
+# 分配失败: 校验失败保持原配置 (损坏的二进制使 sing-box check 失败)
+CSZ=$(CFGSUM)
+cp "$A/usr/local/bin/sing-box" "$T_TMP/sb.good.tui"
+printf 'BADBIN\n' >> "$A/usr/local/bin/sing-box"
+out=$(T '2\n3\n2\n1\n2\n\n0\n0\n0\n0\n')
+cp "$T_TMP/sb.good.tui" "$A/usr/local/bin/sing-box"
+assert_contains "校验失败给出原因" "$out" "错误:"
+assert_eq "校验失败保持原配置" "$CSZ" "$(CFGSUM)"
+assert_eq "校验失败时实例出口不变" SOCKS-01 "$(kv_get "$(INST AnyTLS-01)" egress_socks)"
+# 取消与 EOF
+CSQ=$(CFGSUM)
+T '2\n3\n2\n1\n0\n0\n0\n0\n' >/dev/null
+T '2\n3\n2\n' >/dev/null
+assert_eq "返回和 EOF 都不改变配置" "$CSQ" "$(CFGSUM)"
+out=$(T '2\n3\n2\nabc\n0\n0\n0\n0\n')
+assert_contains "无效输入被提示" "$out" "输入无效，请重新选择"
 
-# ---- 上游健康直接显示在主页面 实例页 出口选择 出口页 ----
+# ---- 删除被引用的服务器: 说明影响, 不自动改成 DIRECT ----
+out=$(T '2\n3\n1\n2\n1\n6\n\n0\n0\n0\n0\n0\n')
+assert_eq "被引用的服务器没有被删除" yes "$([ -f "$(PROF SOCKS-01)" ] && echo yes)"
+assert_contains "说明仍被哪些实例使用" "$out" "SOCKS-01 仍被这些实例使用"
+assert_contains "说明不会自动改成 DIRECT" "$out" "不会自动改成 DIRECT"
+assert_eq "引用它的实例仍然绑定它" SOCKS-01 "$(kv_get "$(INST AnyTLS-01)" egress_socks)"
+
+# ---- 上游健康直接显示在主页面 实例页 分配页 管理中心 ----
 RUN=$A/run/apm-sbhealth
 mkdir -p "$RUN" "$A/proc/777"
 printf '777\n' > "$RUN/daemon.pid"
@@ -400,6 +492,9 @@ mkst() { # 名称 状态 原因 last_ok last_fail
 mkst SOCKS-01 healthy "" "$NOW" 0
 out=$(T '2\n0\n0\n')
 assert_contains "健康: 主页面" "$out" "SOCKS5 出口：SOCKS-01  上游健康：● 健康"
+out=$(T '2\n3\n0\n0\n0\n')
+assert_contains "健康: 管理中心" "$out" "健康：● 健康"
+assert_contains "管理中心健康监控整体状态" "$out" "健康监控：已开启（事件驱动）"
 mkst SOCKS-01 unhealthy auth "$((NOW - 50))" "$((NOW - 5))"
 out=$(T '2\n0\n0\n')
 assert_contains "不可用: 主页面" "$out" "上游健康：● 不可用（SOCKS5 认证失败）"
@@ -407,10 +502,10 @@ out=$(inst 1 0)
 assert_contains "不可用: 实例页" "$out" "上游健康：● 不可用（SOCKS5 认证失败）"
 assert_contains "不可用: 实例页原因" "$out" "原因：SOCKS5 认证失败"
 assert_contains "不可用: 实例页最近失败" "$out" "最近失败："
-out=$(T '2\n1\n1\n5\n0\n0\n0\n0\n')
-assert_contains "不可用: 出口选择页" "$out" "2. SOCKS-01  ● 不可用（SOCKS5 认证失败）（当前）"
+out=$(T '2\n3\n2\n1\n0\n0\n0\n0\n')
+assert_contains "不可用: 出口选择页" "$out" "1. SOCKS-01  ● 不可用（SOCKS5 认证失败）（当前）"
 out=$(T '2\n3\n0\n0\n0\n')
-assert_contains "不可用: 出口页" "$out" "上游健康：● 不可用（SOCKS5 认证失败）"
+assert_contains "不可用: 管理中心" "$out" "健康：● 不可用（SOCKS5 认证失败）"
 mkst SOCKS-01 recovering refused "$((NOW - 50))" "$((NOW - 5))"
 out=$(T '2\n0\n0\n')
 assert_contains "恢复中: 主页面" "$out" "上游健康：● 恢复中"
@@ -422,59 +517,164 @@ out=$(T '2\n0\n0\n')
 assert_contains "太久没有证据: 显示未知" "$out" "上游健康：○ 未知"
 mkst SOCKS-01 healthy "" "$NOW" 0
 rm -f "$RUN/connected"
-out=$(T '2\n0\n0\n')
-assert_contains "监控未订阅: 不宣称健康" "$out" "上游健康：○ 未知"
-assert_not_contains "监控未订阅: 没有健康" "$out" "● 健康"
+out=$(T '2\n3\n0\n0\n0\n')
+assert_contains "监控服务没有运行: 管理中心单独提示监控服务异常" "$out" "! 监控服务没有运行"
+assert_not_contains "监控服务没有运行: 不宣称健康" "$out" "● 健康"
+assert_contains "监控服务没有运行: 上游显示未知而不是故障" "$out" "健康：○ 未知"
 date +%s > "$RUN/connected"
 "$PM" sing-box stop >/dev/null 2>&1
 out=$(T '2\n0\n0\n')
 assert_contains "sing-box 停止: 实例状态" "$out" "○ sing-box 未运行"
 assert_not_contains "sing-box 停止: 不显示健康" "$out" "● 健康"
+out=$(T '2\n3\n0\n0\n0\n')
+assert_contains "sing-box 停止: 管理中心说明" "$out" "健康监控：已开启（sing-box 未运行）"
 "$PM" sing-box start >/dev/null 2>&1
 mkdir -p "$RUN" "$A/proc/777"; printf '777\n' > "$RUN/daemon.pid"; date +%s > "$RUN/connected"; mkst SOCKS-01 healthy "" "$NOW" 0
-out=$(T '2\n0\n0\n')
-assert_not_contains "健康状态页面不含凭据" "$out" "socksuser"
-# 出口被禁用: 明确说明 fail-closed
+# Profile 自己的启用/禁用 (和健康监控开关是两回事)
 "$PM" sing-box socks disable SOCKS-01 >/dev/null 2>&1
 out=$(T '2\n0\n0\n')
-assert_contains "出口被禁用: 主页面警告" "$out" "SOCKS5 出口：SOCKS-01  ! 已禁用，流量会被拒绝，不会回退直连"
+assert_contains "服务器被禁用: 主页面警告 (流量被拒绝 不回退直连)" "$out" "SOCKS5 出口：SOCKS-01  ! 已禁用，流量会被拒绝，不会回退直连"
+out=$(T '2\n3\n0\n0\n0\n')
+assert_contains "服务器被禁用: 管理中心" "$out" "○ 已禁用"
+out=$(T '2\n3\n2\n1\n0\n0\n0\n0\n')
+assert_contains "服务器被禁用: 分配页标出" "$out" "1. SOCKS-01  ○ 已禁用（当前）"
 "$PM" sing-box socks enable SOCKS-01 >/dev/null 2>&1
 mkdir -p "$RUN" "$A/proc/777"; printf '777\n' > "$RUN/daemon.pid"; date +%s > "$RUN/connected"; mkst SOCKS-01 healthy "" "$NOW" 0
 
-# 出口页的管理: socks2 与 SOCKS-01 都存在时先选再进入
-out=$(T '2\n3\n2\n0\n0\n0\n0\n')
-assert_contains "管理出口: 选择页" "$out" "1. SOCKS-01（192.0.2.50:1080）"
-out=$(T '2\n3\n2\n2\n0\n0\n0\n0\n')
-assert_contains "出口页标题" "$out" "SOCKS5 出口 · socks2"
-assert_contains "出口页菜单" "$out" "2. 修改服务器地址"
-assert_contains "出口页显示认证方式" "$out" "认证：用户名与密码"
-assert_not_contains "出口页不显示用户名" "$out" "socksuser"
-T '2\n3\n2\n2\n5\n\n0\n0\n0\n0\n' >/dev/null
+# 服务器页的管理: SOCKS-01 与 socks2 都存在时先选再进入
+out=$(T '2\n3\n1\n2\n0\n0\n0\n0\n0\n')
+assert_contains "管理服务器: 选择页" "$out" "1. SOCKS-01（192.0.2.50:1080）"
+out=$(T '2\n3\n1\n2\n2\n0\n0\n0\n0\n0\n')
+assert_contains "服务器页标题" "$out" "SOCKS5 服务器 · socks2"
+assert_contains "服务器页菜单" "$out" "2. 修改服务器地址"
+assert_contains "服务器页显示认证方式" "$out" "认证：用户名与密码"
+assert_contains "服务器页显示监控开关状态" "$out" "健康监控：已开启"
+assert_contains "服务器页显示使用它的实例" "$out" "使用它的实例：TUIC-01"
+assert_not_contains "服务器页不显示用户名" "$out" "socksuser"
+T '2\n3\n1\n2\n2\n5\n\n0\n0\n0\n0\n0\n' >/dev/null
 assert_eq "改为无认证" "" "$(kv_get "$(PROF socks2)" username)"
-T '2\n3\n2\n2\n1\n\n0\n0\n0\n0\n' >/dev/null
-assert_eq "禁用出口 (未被引用无需确认)" false "$(kv_get "$(PROF socks2)" enabled)"
-# 批量禁用需要确认, 输入 n 取消
-T '2\n3\n4\nn\n\n0\n0\n0\n' >/dev/null
-assert_eq "批量禁用输入 n 取消" true "$(kv_get "$(PROF SOCKS-01)" enabled)"
-T '2\n3\n4\ny\n\n0\n0\n0\n' >/dev/null
-assert_eq "批量禁用确认后执行" false "$(kv_get "$(PROF SOCKS-01)" enabled)"
-T '2\n3\n3\n\n0\n0\n0\n' >/dev/null
-assert_eq "批量启用" true "$(kv_get "$(PROF SOCKS-01)" enabled)"
-# 解除绑定 (回到直连): 选一次完成
-T '2\n1\n1\n5\n1\n\n0\n0\n0\n' >/dev/null
-assert_eq "回到 DIRECT" "" "$(kv_get "$(INST AnyTLS-01)" egress_socks)"
-out=$(inst 1 0)
-assert_contains "解绑后实例页是直连" "$out" "出口：直连"
-# 删除未被引用的出口: 输入 n 取消, 回车确认
-T '2\n3\n2\n1\n6\nn\n\n0\n0\n0\n0\n' >/dev/null
-assert_eq "输入 n 不删除出口" yes "$([ -f "$(PROF SOCKS-01)" ] && echo yes)"
-T '2\n3\n2\n1\n6\n\n\n0\n0\n0\n' >/dev/null
-assert_eq "回车确认后删除出口" no "$([ -f "$(PROF SOCKS-01)" ] && echo yes || echo no)"
-# 只有一个出口时直接进入
-out=$(T '2\n3\n2\n0\n0\n0\n')
-assert_contains "只有一个出口时直接进入出口页" "$out" "SOCKS5 出口 · socks2"
+# 修改共享服务器的地址: 引用它的实例保持引用
+T '2\n3\n1\n2\n1\n3\n1999\n\n0\n0\n0\n0\n0\n' >/dev/null
+assert_eq "修改端口" 1999 "$(kv_get "$(PROF SOCKS-01)" port)"
+assert_eq "引用它的 AnyTLS 仍然引用" SOCKS-01 "$(kv_get "$(INST AnyTLS-01)" egress_socks)"
+assert_eq "引用它的 Hysteria2 仍然引用" SOCKS-01 "$(kv_get "$(INST Hysteria2-01)" egress_socks)"
+assert_eq "引用它的 Shadowsocks 仍然引用" SOCKS-01 "$(kv_get "$(INST Shadowsocks-01)" egress_socks)"
+assert_eq "不引用它的 TUIC 不受影响" socks2 "$(kv_get "$(INST TUIC-01)" egress_socks)"
 
-# ---- 客户端配置 (实例页第 6 项), 客户端连接地址在需要时才询问 ----
+# ---- 健康监控开关: 全部监控 / 自定义监控 ----
+mkdir -p "$RUN" "$A/proc/777"; printf '777\n' > "$RUN/daemon.pid"; date +%s > "$RUN/connected"
+CONFH=$A/etc/alpine-proxy-manager/sbhealth.conf
+out=$(T '2\n3\n3\n0\n0\n0\n0\n')
+assert_contains "健康监控管理页标题" "$out" "SOCKS5 · 健康监控管理"
+assert_contains "全部监控已开启" "$out" "全部监控：已开启"
+assert_contains "当前模式" "$out" "当前模式：全部监控"
+assert_contains "服务器一览 SOCKS-01" "$out" "1. SOCKS-01    已开启"
+assert_contains "服务器一览 socks2" "$out" "2. socks2    已开启"
+assert_contains "固定名称的全部监控开关" "$out" "3. 全部监控开关"
+for gone in "开启健康监控" "关闭健康监控" "全部开启" "全部关闭" "全局监控开关" "批量"; do assert_not_contains "没有多余或会改名的菜单: $gone" "$out" "$gone"; done
+out=$(T '2\n3\n0\n0\n0\n')
+assert_contains "管理中心: 全部监控模式" "$out" "健康监控：已开启（事件驱动）"
+# 全部监控模式下选择单台服务器: 不悄悄修改, 提示先切换
+out=$(T '2\n3\n3\n2\n\n0\n0\n0\n0\n')
+assert_contains "全部监控下不能直接修改单台" "$out" "当前是全部监控模式，所有服务器都在监控，不能单独修改"
+assert_contains "提示先切换到自定义监控" "$out" "请先选择 全部监控开关 切换到自定义监控"
+assert_eq "没有改动单台设置" "" "$(kv_get "$CONFH" monitor_off)"
+assert_eq "没有改动模式" "" "$(kv_get "$CONFH" mode)"
+# 切换为自定义监控: 立即生效, 不需要确认, 首次默认各服务器均开启
+out=$(T '2\n3\n3\n3\n0\n0\n0\n0\n')
+assert_contains "切换后立即刷新: 全部监控已关闭" "$out" "全部监控：已关闭"
+assert_contains "切换后当前模式" "$out" "当前模式：自定义监控"
+assert_eq "模式持久化" custom "$(kv_get "$CONFH" mode)"
+assert_eq "首次进入自定义监控各服务器默认开启" "" "$(kv_get "$CONFH" monitor_off)"
+assert_eq "切换模式没有改变 Profile 的启用状态" true "$(kv_get "$(PROF SOCKS-01)" enabled)"
+assert_eq "切换模式没有改变 AnyTLS 的出口绑定" SOCKS-01 "$(kv_get "$(INST AnyTLS-01)" egress_socks)"
+assert_eq "切换模式没有改变 TUIC 的出口绑定" socks2 "$(kv_get "$(INST TUIC-01)" egress_socks)"
+out=$(T '2\n3\n0\n0\n0\n')
+assert_contains "管理中心: 自定义监控 2/2 台" "$out" "健康监控：已开启（自定义监控 2/2 台，事件驱动）"
+# 自定义监控: 直接切换单台服务器, 立即刷新
+out=$(T '2\n3\n3\n2\n0\n0\n0\n0\n')
+assert_contains "切换后立即刷新: socks2 已关闭" "$out" "2. socks2    已关闭"
+assert_contains "SOCKS-01 仍然开启" "$out" "1. SOCKS-01    已开启"
+assert_eq "socks2 的独立设置被记住" socks2 "$(kv_get "$CONFH" monitor_off)"
+out=$(T '2\n3\n3\n0\n0\n0\n0\n')
+assert_contains "重新进入仍然是关闭 (已持久化)" "$out" "2. socks2    已关闭"
+out=$(T '2\n3\n0\n0\n0\n')
+assert_contains "管理中心: 自定义监控 1/2 台" "$out" "自定义监控 1/2 台"
+assert_eq "关闭监控没有改变 TUIC 的出口绑定" socks2 "$(kv_get "$(INST TUIC-01)" egress_socks)"
+assert_contains "关闭监控后转发路由仍在" "$(cat "$A/etc/sing-box/config.json")" '"outbound": "apm-socks-socks2"'
+out=$(inst 4 0)
+assert_contains "被排除的服务器在实例页显示监控已关闭 (不是故障不是未知)" "$out" "上游健康：- 监控已关闭"
+# 自定义 -> 全部 -> 自定义: 原来的独立设置完整恢复
+out=$(T '2\n3\n3\n3\n0\n0\n0\n0\n')
+assert_contains "切回全部监控" "$out" "全部监控：已开启"
+assert_contains "全部监控时 socks2 也参与" "$out" "2. socks2    已开启"
+assert_eq "切回全部监控后自定义设置原样保留" socks2 "$(kv_get "$CONFH" monitor_off)"
+assert_eq "模式回到全部监控" all "$(kv_get "$CONFH" mode)"
+out=$(T '2\n3\n3\n3\n0\n0\n0\n0\n')
+assert_contains "再次切到自定义监控" "$out" "当前模式：自定义监控"
+assert_contains "socks2 的关闭设置恢复" "$out" "2. socks2    已关闭"
+assert_contains "SOCKS-01 的开启设置恢复" "$out" "1. SOCKS-01    已开启"
+# 自定义监控里再开启 socks2、再关闭 SOCKS-01, 互相独立
+T '2\n3\n3\n2\n0\n0\n0\n0\n' >/dev/null
+assert_eq "socks2 重新开启" "" "$(kv_get "$CONFH" monitor_off)"
+T '2\n3\n3\n1\n0\n0\n0\n0\n' >/dev/null
+assert_eq "只关闭 SOCKS-01" SOCKS-01 "$(kv_get "$CONFH" monitor_off)"
+T '2\n3\n3\n1\n0\n0\n0\n0\n' >/dev/null
+assert_eq "恢复 SOCKS-01" "" "$(kv_get "$CONFH" monitor_off)"
+# 全部关闭: 不需要常驻处理链
+T '2\n3\n3\n1\n0\n0\n0\n0\n' >/dev/null
+T '2\n3\n3\n2\n0\n0\n0\n0\n' >/dev/null
+assert_eq "两台都在自定义监控里关闭" "SOCKS-01 socks2" "$(kv_get "$CONFH" monitor_off)"
+assert_not_contains "全部关闭后运行配置没有 Clash API" "$(cat "$A/etc/sing-box/config.json")" clash_api
+out=$(T '2\n3\n0\n0\n0\n')
+assert_contains "全部关闭: 管理中心说明没有需要监控的服务器" "$out" "健康监控：已开启（现在没有需要监控的服务器）"
+assert_contains "全部关闭后转发路由仍在 (不回退 DIRECT)" "$(cat "$A/etc/sing-box/config.json")" '"outbound": "apm-socks-SOCKS-01"'
+out=$(T '2\n0\n0\n')
+assert_contains "全部关闭: 主页面显示监控已关闭" "$out" "上游健康：- 监控已关闭"
+# 切回全部监控: 监控回来, 自定义设置仍在
+T '2\n3\n3\n3\n0\n0\n0\n0\n' >/dev/null
+assert_contains "全部监控时运行配置重新带 Clash API" "$(cat "$A/etc/sing-box/config.json")" clash_api
+assert_eq "两台的自定义关闭设置仍在" "SOCKS-01 socks2" "$(kv_get "$CONFH" monitor_off)"
+T '2\n3\n3\n3\n0\n0\n0\n0\n' >/dev/null
+T '2\n3\n3\n1\n0\n0\n0\n0\n' >/dev/null
+T '2\n3\n3\n2\n0\n0\n0\n0\n' >/dev/null
+assert_eq "恢复为两台都开启" "" "$(kv_get "$CONFH" monitor_off)"
+# 非 root、无效输入、EOF
+out=$(APM_EUID=1000 T '2\n3\n3\n3\n0\n0\n0\n0\n')
+assert_contains "非 root 被拒绝" "$out" "需要 root"
+assert_eq "非 root 没有改变模式" custom "$(kv_get "$CONFH" mode)"
+out=$(T '2\n3\n3\nabc\n0\n0\n0\n0\n')
+assert_contains "无效输入被提示" "$out" "输入无效，请重新选择"
+CSY=$(sha256sum "$CONFH" | cut -c1-16)
+T '2\n3\n3\n' >/dev/null
+assert_eq "EOF 后设置不变" "$CSY" "$(sha256sum "$CONFH" | cut -c1-16)"
+# 命令行整体关闭 (旧脚本的 disable): 页面明确说明, 不等于模式
+"$PM" sing-box health disable >/dev/null 2>&1
+out=$(T '2\n3\n3\n0\n0\n0\n0\n')
+assert_contains "整体关闭时的说明" "$out" "健康监控被命令行整体关闭"
+out=$(T '2\n3\n0\n0\n0\n')
+assert_contains "整体关闭: 管理中心" "$out" "健康监控：已关闭"
+"$PM" sing-box health enable >/dev/null 2>&1
+# 回到全部监控, 保持后续用例的前提
+T '2\n3\n3\n3\n0\n0\n0\n0\n' >/dev/null
+assert_eq "后续用例的前提: 全部监控" all "$(kv_get "$CONFH" mode)"
+
+# 解除全部绑定后清理
+T '2\n3\n2\n1\n3\n\n0\n0\n0\n0\n' >/dev/null
+T '2\n3\n2\n2\n3\n\n0\n0\n0\n0\n' >/dev/null
+T '2\n3\n2\n3\n3\n\n0\n0\n0\n0\n' >/dev/null
+T '2\n3\n2\n4\n3\n\n0\n0\n0\n0\n' >/dev/null
+assert_eq "全部改回 DIRECT 后 AnyTLS" "" "$(kv_get "$(INST AnyTLS-01)" egress_socks)"
+# 删除未被引用的服务器: 输入 n 取消, 回车确认
+T '2\n3\n1\n2\n1\n6\nn\n\n0\n0\n0\n0\n0\n' >/dev/null
+assert_eq "输入 n 不删除服务器" yes "$([ -f "$(PROF SOCKS-01)" ] && echo yes)"
+T '2\n3\n1\n2\n1\n6\n\n\n0\n0\n0\n0\n' >/dev/null
+assert_eq "回车确认后删除服务器" no "$([ -f "$(PROF SOCKS-01)" ] && echo yes || echo no)"
+# 只剩一个服务器时直接进入
+out=$(T '2\n3\n1\n2\n0\n0\n0\n0\n')
+assert_contains "只有一个服务器时直接进入" "$out" "SOCKS5 服务器 · socks2"
+
+# ---- 客户端配置 (实例页第 5 项), 客户端连接地址在需要时才询问 ----
 # 已保存的客户端连接地址 (旧版本保存的数据) 原样保留并显示
 "$PM" sing-box endpoint TUIC-01 set legacy.example.com 32100 >/dev/null 2>&1
 LEG0=$(cat "$(INST TUIC-01)")
@@ -482,7 +682,7 @@ out=$(inst 4 0)
 assert_contains "旧版本保存的地址仍显示" "$out" "客户端连接地址：legacy.example.com:32100"
 out=$(inst 1 0)
 assert_not_contains "没有设置过地址时不显示未配置" "$out" "客户端连接地址"
-out=$(T '2\n1\n1\n6\n0\n0\n0\n0\n')
+out=$(T '2\n1\n1\n5\n0\n0\n0\n0\n')
 assert_contains "客户端配置页标题" "$out" "客户端配置 · AnyTLS-01"
 assert_contains "导出页含证书校验说明" "$out" "证书校验：跳过（自签名，免维护）"
 assert_not_contains "导出页不显示内部监听" "$out" "内部监听"
@@ -495,31 +695,31 @@ assert_not_contains "不把嵌入证书说成推荐" "$out" "推荐"
 APW=$(kv_get "$(INST AnyTLS-01)" credential.password)
 # 没有保存地址: 需要时询问并保存, 不修改运行配置
 CSB=$(CFGSUM)
-out=$(T '2\n1\n1\n6\n1\nexample.com\n32001\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n1\n5\n1\nexample.com\n32001\n\n0\n0\n0\n0\n')
 assert_contains "需要地址时说明用途" "$out" "它只用于生成配置，不会修改服务器网络"
 assert_contains "连接信息" "$out" "协议：AnyTLS"
 assert_eq "按需保存的地址" example.com "$(kv_get "$(INST AnyTLS-01)" public.host)"
 assert_eq "按需保存的端口" 32001 "$(kv_get "$(INST AnyTLS-01)" public.port)"
 assert_eq "保存地址没有改运行配置" "$CSB" "$(CFGSUM)"
 assert_not_contains "连接信息不含凭据" "$out" "$APW"
-out=$(T '2\n1\n1\n6\n1\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n1\n5\n1\n\n0\n0\n0\n0\n')
 assert_not_contains "已保存后不再询问地址" "$out" "服务器的公网 IP 或域名"
 assert_contains "已设置时导出页显示地址" "$out" "客户端连接地址：example.com:32001"
 assert_contains "已设置时才出现更改入口" "$out" "更改客户端连接地址"
 # 取消询问
 "$PM" sing-box endpoint Shadowsocks-01 clear >/dev/null 2>&1
-out=$(T '2\n1\n3\n5\n1\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n3\n4\n1\n\n0\n0\n0\n0\n')
 assert_eq "留空取消不保存地址" "" "$(kv_get "$(INST Shadowsocks-01)" public.host)"
 # 默认端口使用监听端口
-T '2\n1\n3\n5\n1\nss.example.com\n\n\n0\n0\n0\n0\n' >/dev/null
+T '2\n1\n3\n4\n1\nss.example.com\n\n\n0\n0\n0\n0\n' >/dev/null
 assert_eq "留空端口使用监听端口" 20700 "$(kv_get "$(INST Shadowsocks-01)" public.port)"
 # 无效地址由业务层拒绝
 "$PM" sing-box endpoint Shadowsocks-01 clear >/dev/null 2>&1
-out=$(T '2\n1\n3\n5\n1\n0.0.0.0\n443\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n3\n4\n1\n0.0.0.0\n443\n\n0\n0\n0\n0\n')
 assert_contains "无效地址由业务层拒绝" "$out" "错误:"
 assert_eq "无效地址没有保存" "" "$(kv_get "$(INST Shadowsocks-01)" public.host)"
 # 更改已设置的地址
-T '2\n1\n1\n6\n8\nchanged.example.com\n32002\n\n0\n0\n0\n0\n' >/dev/null
+T '2\n1\n1\n5\n8\nchanged.example.com\n32002\n\n0\n0\n0\n0\n' >/dev/null
 assert_eq "更改客户端连接地址" changed.example.com "$(kv_get "$(INST AnyTLS-01)" public.host)"
 # 旧数据没有被 TUI 浏览改动
 assert_eq "旧版本保存的地址没有被浏览改动" "$LEG0" "$(cat "$(INST TUIC-01)")"
@@ -528,45 +728,45 @@ for id in AnyTLS-01 Shadowsocks-01 TUIC-01; do
     "$PM" sing-box endpoint $id set example.com "3200$(printf '%s' "$id" | wc -c | tr -d ' ')" >/dev/null 2>&1
 done
 expo() { T "2\n1\n$1\n$2\n$3\n0\n0\n0\n0\n"; }
-out=$(expo 4 8 0)
+out=$(expo 4 7 0)
 assert_contains "TUIC 说明没有 URL" "$out" "TUIC 没有稳定的通用分享 URL"
 assert_not_contains "TUIC 不提供 URL 入口" "$out" ". 导出分享 URL"
 assert_not_contains "TUIC 不提供 QR 入口" "$out" ". 显示 QR"
-out=$(expo 3 5 0)
+out=$(expo 3 4 0)
 assert_not_contains "Shadowsocks 不显示证书校验" "$out" "证书校验"
 assert_not_contains "Shadowsocks 没有嵌入证书选项" "$out" "嵌入证书"
 assert_contains "Shadowsocks 有 URL" "$out" ". 导出分享 URL"
 # 查看凭据需要确认
-out=$(T '2\n1\n1\n6\n2\nn\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n1\n5\n2\nn\n\n0\n0\n0\n0\n')
 assert_not_contains "输入 n 不显示凭据" "$out" "$APW"
 assert_contains "确认提示" "$out" "即将显示客户端凭据。终端记录或截图可能包含 Secret。"
-out=$(T '2\n1\n1\n6\n2\ny\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n1\n5\n2\ny\n\n0\n0\n0\n0\n')
 assert_contains "确认后显示凭据" "$out" "密码：$APW"
-out=$(T '2\n1\n1\n6\n2\n\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n1\n5\n2\n\n\n0\n0\n0\n0\n')
 assert_contains "回车确认后显示凭据" "$out" "密码：$APW"
 # JSON 需要确认, 隐藏凭据版本不需要
-out=$(T '2\n1\n1\n6\n3\nn\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n1\n5\n3\nn\n\n0\n0\n0\n0\n')
 assert_not_contains "JSON 输入 n 不输出" "$out" '"type": "anytls"'
-out=$(T '2\n1\n1\n6\n3\ny\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n1\n5\n3\ny\n\n0\n0\n0\n0\n')
 assert_contains "JSON 确认后输出" "$out" '"type": "anytls"'
 assert_contains "JSON 含密码" "$out" "\"password\": \"$APW\""
 assert_contains "JSON 提示重定向" "$out" "export AnyTLS-01 sing-box > client.json"
-out=$(T '2\n1\n1\n6\n4\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n1\n5\n4\n\n0\n0\n0\n0\n')
 assert_contains "隐藏凭据版本" "$out" '"password": "REDACTED"'
 assert_not_contains "隐藏凭据版本不含密码" "$out" "$APW"
-out=$(T '2\n1\n1\n6\n5\ny\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n1\n5\n5\ny\n\n0\n0\n0\n0\n')
 assert_contains "证书固定可选" "$out" '"certificate": ['
 assert_not_contains "证书固定版本没有 insecure" "$out" insecure
-out=$(T '2\n1\n1\n6\n6\ny\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n1\n5\n6\ny\n\n0\n0\n0\n0\n')
 assert_contains "URL" "$out" "anytls://"
-out=$(T '2\n1\n1\n6\n7\ny\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n1\n5\n7\ny\n\n0\n0\n0\n0\n')
 assert_contains "缺 qrencode 的提示" "$out" "当前未安装可选工具 qrencode"
 assert_contains "不自动安装" "$out" "TUI 不会自动安装"
 assert_eq "没有安装 qrencode" 0 "$(grep -c qrencode "$A/.apk-installed" 2>/dev/null || true)"
 mkdir -p "$A/usr/bin"
 printf '#!/bin/sh\ncat > "%s/qr.in"\nprintf QRDONE\\n\n' "$T_TMP" > "$A/usr/bin/qrencode"
 chmod +x "$A/usr/bin/qrencode"
-out=$(T '2\n1\n1\n6\n7\ny\n\n0\n0\n0\n0\n')
+out=$(T '2\n1\n1\n5\n7\ny\n\n0\n0\n0\n0\n')
 assert_contains "有 qrencode 时显示" "$out" "QRDONE"
 assert_contains "stdin 收到 URL" "$(cat "$T_TMP/qr.in")" "anytls://"
 rm -f "$A/usr/bin/qrencode"

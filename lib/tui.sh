@@ -1559,11 +1559,10 @@ _tui_inst_header() { # FILE
 _tui_inst_edit() { # ID KEY
     local _pw _m
     case $2 in
-        port|listen|server-name|congestion-control)
+        port|server-name|congestion-control)
             _tui_need_root || return 0
             case $2 in
                 port) tui_ask "新的监听端口（留空取消）：" ;;
-                listen) tui_ask "新的监听地址（IPv4 或 IPv6，:: 表示全部接口，留空取消）：" ;;
                 server-name) tui_ask "新的 TLS server-name（留空取消）：" ;;
                 congestion-control) tui_ask "拥塞控制 ($SB_TUIC_CC，留空取消)：" ;;
             esac
@@ -1637,10 +1636,8 @@ method|修改 method 与密钥"
 password|修改密码"
         fi
         _items="$_items
-egress|SOCKS5 出口
 export|客户端配置
 policy|目标访问限制
-listen|修改监听地址
 delete|删除实例"
         tui_choose "$_items" "返回"
         case $TUI_KEY in
@@ -1651,9 +1648,8 @@ delete|删除实例"
                 if [ "$(kv_get "$_f" enabled)" = true ]; then _tui_do singbox_cli disable "$1"; else _tui_do singbox_cli enable "$1"; fi
                 _tui_done
                 ;;
-            port|listen|server-name|congestion-control|uuid|password|method) _tui_inst_edit "$1" "$TUI_KEY" ;;
+            port|server-name|congestion-control|uuid|password|method) _tui_inst_edit "$1" "$TUI_KEY" ;;
             policy) tui_policy_menu "$1" ;;
-            egress) tui_egress_menu "$1" ;;
             export) tui_export_menu "$1" ;;
             delete)
                 _tui_need_root || continue
@@ -1750,60 +1746,6 @@ _tui_socks_add() {
 # ---- SOCKS5 出口 ----
 
 # 实例的出口绑定: 直连与全部 Profile 一次列出（带上游健康）, 选一次即完成
-tui_egress_menu() { # ID
-    local _f _items _p _n _cur _lab
-    _f=$(state_instances_dir)/$1.conf
-    while [ -f "$_f" ]; do
-        _tui_clear
-        _tui_header "SOCKS5 出口 · $1"
-        _tui_core_kind singbox
-        _tui_exit_parts "$_f"
-        _cur=$TUI_X_NAME
-        if [ -z "$_cur" ]; then
-            printf '当前：直连\n'
-        elif [ -n "$TUI_X_PROBLEM" ]; then
-            printf '当前：%s  ! %s\n' "$_cur" "$TUI_X_PROBLEM"
-        else
-            printf '当前：%s  上游健康：%s\n' "$_cur" "$TUI_X_HEALTH"
-        fi
-        printf '\n'
-        if [ -z "$_cur" ]; then _lab='直连（当前）'; else _lab='直连'; fi
-        _items="direct|$_lab"
-        for _p in $(state_list_confs "$(state_socks_dir)"); do
-            _n=$(kv_get "$_p" name)
-            if [ "$(kv_get "$_p" enabled)" = true ]; then
-                _lab="$_n  $(sbh_summary "$_n")"
-            else
-                _lab="$_n  ○ 已禁用"
-            fi
-            [ "$_n" != "$_cur" ] || _lab="$_lab（当前）"
-            _items="$_items
-socks:$_n|$_lab"
-        done
-        if [ -z "$(state_list_confs "$(state_socks_dir)")" ]; then
-            printf '还没有 SOCKS5 出口，请先在 sing-box 菜单的 SOCKS5 出口 里添加\n\n'
-        fi
-        tui_choose "$_items" "返回"
-        case $TUI_KEY in
-            back) return 0 ;;
-            direct)
-                _tui_need_root || continue
-                _tui_sb_managed || continue
-                _tui_do singbox_cli egress "$1" direct
-                _tui_done
-                [ "$TUI_RC" -ne 0 ] || return 0
-                ;;
-            socks:*)
-                _tui_need_root || continue
-                _tui_sb_managed || continue
-                printf '该实例流量将通过 %s 出口，不会自动回落 DIRECT\n' "${TUI_KEY#socks:}"
-                _tui_do singbox_cli egress "$1" socks "${TUI_KEY#socks:}"
-                _tui_done
-                [ "$TUI_RC" -ne 0 ] || return 0
-                ;;
-        esac
-    done
-}
 
 # Profile 的卡片: 名称 上游 健康 使用它的实例
 _tui_profile_card() { # NAME
@@ -1853,9 +1795,10 @@ tui_socks_profile_menu() { # 名称
     _f=$(state_socks_dir)/$1.conf
     while [ -f "$_f" ]; do
         _tui_clear
-        _tui_header "SOCKS5 出口 · $1"
+        _tui_header "SOCKS5 服务器 · $1"
         _tui_core_kind singbox
         _tui_profile_card "$1"
+        if sbh_profile_on "$1"; then printf '  健康监控：已开启\n'; else printf '  健康监控：已关闭\n'; fi
         if [ -n "$(kv_get "$_f" username)" ]; then printf '  认证：用户名与密码\n'; else printf '  认证：无认证\n'; fi
         printf '\n'
         if [ "$(kv_get "$_f" enabled)" = true ]; then _items="toggle|禁用"; else _items="toggle|启用"; fi
@@ -1905,10 +1848,233 @@ delete|删除"
                 ;;
             delete)
                 _tui_need_root || continue
-                tui_confirm "即将删除 SOCKS5 出口 $1，仍被实例使用时会被拒绝" || { _tui_pause; continue; }
+                _u=$(_sb_socks_users "$1" "$(state_instances_dir)")
+                if [ -n "$_u" ]; then
+                    printf '%s 仍被这些实例使用：%s\n请先在 分配实例出口 里把它们改成其他服务器或 DIRECT，不会自动改成 DIRECT\n' "$1" "$_u"
+                    _tui_pause
+                    continue
+                fi
+                tui_confirm "即将删除 SOCKS5 服务器 $1" || { _tui_pause; continue; }
                 _tui_do singbox_cli socks delete "$1"
                 _tui_done
                 ;;
+        esac
+    done
+}
+
+# ---- SOCKS5 出口管理中心 ----
+# 职责分界: 实例页管理协议本身 (端口 密码 server-name 客户端配置 访问限制), SOCKS5 管理中心负责出口资源与分配
+# 一个中心完成三件事: 管理 SOCKS5 服务器, 为全部实例分配出口, 健康监控开关
+
+# 健康监控整体状态的一行说明, 监控服务异常与上游故障、监控关闭与没有连接证据都分开显示
+_tui_health_global_text() {
+    local _f _n _k _any _kn
+    if ! sbh_enabled; then printf '已关闭（命令行整体关闭，sing-box health enable 重新开启）'; return 0; fi
+    _n=0
+    _k=0
+    for _f in $(state_list_confs "$(state_socks_dir)"); do
+        _n=$((_n + 1))
+        sbh_profile_on "$(kv_get "$_f" name)" && _k=$((_k + 1))
+    done
+    _any=0
+    for _f in $(state_list_confs "$(state_instances_dir)"); do
+        _tui_exit_parts "$_f"
+        if [ -n "$TUI_X_NAME" ] && sbh_profile_on "$TUI_X_NAME"; then _any=1; break; fi
+    done
+    if [ "$_any" = 0 ]; then printf '已开启（现在没有需要监控的服务器）'; return 0; fi
+    core_discover singbox
+    _kn=
+    if [ "$(sbh_mode)" = custom ]; then _kn="自定义监控 $_k/$_n 台，"; fi
+    if [ "$CF_STATE" != running ]; then printf '已开启（%ssing-box 未运行）' "$_kn"; return 0; fi
+    if sbh_monitor_up; then printf '已开启（%s事件驱动）' "$_kn"; else printf '已开启 ! 监控服务没有运行，上游状态显示为未知，sing-box 的转发不受影响'; fi
+}
+
+# 服务器一览里的简要卡片: 名称 上游 健康
+_tui_profile_brief() { # NAME
+    local _pf _u
+    _pf=$(state_socks_dir)/$1.conf
+    _u=$(_sb_socks_users "$1" "$(state_instances_dir)")
+    printf '%s\n' "$1"
+    printf '  上游：%s:%s\n' "$(kv_get "$_pf" host)" "$(kv_get "$_pf" port)"
+    if ! _sb_socks_check "$_pf" >/dev/null 2>&1; then
+        printf '  ! 配置无效\n'
+    elif [ "$(kv_get "$_pf" enabled)" != true ]; then
+        printf '  ○ 已禁用\n'
+    elif [ -z "$_u" ]; then
+        printf '  未被任何实例使用\n'
+    else
+        printf '  健康：%s\n' "$(sbh_summary "$1")"
+    fi
+}
+
+# 一行出口去向: SOCKS-01 或 DIRECT, 绑定有问题时说明
+_tui_assign_text() { # FILE
+    _tui_exit_parts "$1"
+    if [ -z "$TUI_X_NAME" ]; then
+        printf 'DIRECT'
+    elif [ -n "$TUI_X_PROBLEM" ]; then
+        printf '%s  ! %s' "$TUI_X_NAME" "$TUI_X_PROBLEM"
+    else
+        printf '%s' "$TUI_X_NAME"
+    fi
+}
+
+# 静默执行一个会刷新页面的操作: 成功且没有需要看的信息就直接返回, 失败或发生了 sing-box 重启才显示输出并等待
+_tui_quiet() { # 命令...
+    local _out
+    _out=$( ( "$@" ) </dev/null 2>&1 )
+    TUI_RC=$?
+    case $TUI_RC:$_out in
+        0:*重启*) printf '%s\n' "$_out" ;;
+        0:*) return 0 ;;
+        *) printf '%s\n' "$_out" ;;
+    esac
+    _tui_done
+}
+
+# ---- 分配实例出口 ----
+
+# 为一个实例选择出口: 全部 SOCKS5 服务器和 DIRECT 一次列出, 选一次即完成 (自动校验并应用, 失败保留原配置)
+_tui_assign_pick() { # 实例 ID
+    local _f _items _p _n _cur _lab
+    _f=$(state_instances_dir)/$1.conf
+    _tui_clear
+    _tui_header "为 $1 选择出口"
+    _tui_core_kind singbox
+    _tui_exit_parts "$_f"
+    _cur=$TUI_X_NAME
+    printf '当前：%s\n\n' "$(_tui_assign_text "$_f")"
+    _items=
+    for _p in $(state_list_confs "$(state_socks_dir)"); do
+        _n=$(kv_get "$_p" name)
+        if [ "$(kv_get "$_p" enabled)" = true ]; then
+            _lab="$_n  $(sbh_summary "$_n")"
+        else
+            _lab="$_n  ○ 已禁用"
+        fi
+        [ "$_n" != "$_cur" ] || _lab="$_lab（当前）"
+        _items="${_items}socks:$_n|$_lab
+"
+    done
+    if [ -z "$_cur" ]; then _lab='DIRECT（当前）'; else _lab='DIRECT'; fi
+    _items="${_items}direct|$_lab"
+    tui_choose "$_items" "返回"
+    case $TUI_KEY in
+        back) return 0 ;;
+        direct)
+            _tui_need_root || return 0
+            _tui_sb_managed || return 0
+            _tui_do singbox_cli egress "$1" direct
+            _tui_done
+            ;;
+        socks:*)
+            _tui_need_root || return 0
+            _tui_sb_managed || return 0
+            printf '该实例流量将通过 %s 出口，不会自动回落 DIRECT\n' "${TUI_KEY#socks:}"
+            _tui_do singbox_cli egress "$1" socks "${TUI_KEY#socks:}"
+            _tui_done
+            ;;
+    esac
+}
+
+tui_assign_menu() {
+    local _f _items _id _n
+    while :; do
+        _tui_clear
+        _tui_header "实例出口分配"
+        _tui_core_kind singbox
+        _items=
+        _n=0
+        for _f in $(state_list_confs "$(state_instances_dir)"); do
+            _n=$((_n + 1))
+            _id=$(kv_get "$_f" id)
+            _items="${_items}${_id}|${_id}  → $(_tui_assign_text "$_f")
+"
+        done
+        if [ "$_n" -eq 0 ]; then
+            printf '还没有协议实例，请先添加实例\n'
+            _tui_pause
+            return 0
+        fi
+        printf '选择要修改出口的实例：\n\n'
+        tui_choose "$_items" "返回"
+        [ "$TUI_KEY" != back ] || return 0
+        _tui_assign_pick "$TUI_KEY"
+    done
+}
+
+# ---- 健康监控开关 ----
+# 监控范围两种互斥的模式: 全部监控 (所有服务器都监控) 和 自定义监控 (逐台设置)
+# 自定义监控里每台服务器的设置独立保存, 切换模式不改写它们
+
+tui_health_menu() {
+    local _f _items _n _on _mode
+    while :; do
+        _tui_clear
+        _tui_header "SOCKS5 · 健康监控管理"
+        _tui_core_kind singbox
+        _mode=$(sbh_mode)
+        if [ "$_mode" = all ]; then
+            printf '全部监控：已开启\n当前模式：全部监控\n'
+        else
+            printf '全部监控：已关闭\n当前模式：自定义监控\n'
+        fi
+        sbh_enabled || printf '! 健康监控被命令行整体关闭（sing-box health disable），重新开启 sing-box health enable 后才会生效\n'
+        case $(_tui_health_global_text) in *'!'*服务*) printf '! 监控服务没有运行，上游状态显示为未知，sing-box 的转发不受影响\n' ;; esac
+        printf '\n'
+        _items=
+        for _f in $(state_list_confs "$(state_socks_dir)"); do
+            _n=$(kv_get "$_f" name)
+            if sbh_profile_on "$_n"; then _on='已开启'; else _on='已关闭'; fi
+            _items="${_items}profile:$_n|$_n    $_on
+"
+        done
+        [ -n "$_items" ] || printf '还没有 SOCKS5 服务器\n\n'
+        _items="${_items}mode|全部监控开关"
+        tui_choose "$_items" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            mode)
+                _tui_need_root || continue
+                _tui_sb_managed || continue
+                if [ "$_mode" = all ]; then _tui_quiet singbox_cli health mode custom; else _tui_quiet singbox_cli health mode all; fi
+                ;;
+            profile:*)
+                if [ "$_mode" = all ]; then
+                    printf '当前是全部监控模式，所有服务器都在监控，不能单独修改。\n请先选择 全部监控开关 切换到自定义监控，各服务器再单独设置。\n'
+                    _tui_pause
+                    continue
+                fi
+                _tui_need_root || continue
+                _tui_sb_managed || continue
+                _n=${TUI_KEY#profile:}
+                if sbh_profile_on "$_n"; then _tui_quiet singbox_cli health profile "$_n" off; else _tui_quiet singbox_cli health profile "$_n" on; fi
+                ;;
+        esac
+    done
+}
+
+# ---- 管理 SOCKS5 服务器 ----
+
+tui_socks_servers_menu() {
+    local _f _any
+    while :; do
+        _tui_clear
+        _tui_header "SOCKS5 服务器"
+        _tui_core_kind singbox
+        _any=0
+        for _f in $(state_list_confs "$(state_socks_dir)"); do
+            _any=1
+            _tui_profile_card "$(kv_get "$_f" name)"
+            printf '\n'
+        done
+        [ "$_any" = 1 ] || printf '还没有 SOCKS5 服务器\n\n'
+        tui_choose "add|添加 SOCKS5 服务器
+manage|管理服务器" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            manage) if _tui_pick_profile; then tui_socks_profile_menu "$TUI_PICK"; fi ;;
+            add) _tui_socks_add ;;
         esac
     done
 }
@@ -1917,34 +2083,33 @@ tui_socks_menu() {
     local _f _any
     while :; do
         _tui_clear
-        _tui_header "sing-box · SOCKS5 出口"
+        _tui_header "sing-box · SOCKS5 出口管理"
         _tui_core_kind singbox
+        printf '健康监控：%s\n\n' "$(_tui_health_global_text)"
+        printf 'SOCKS5 服务器：\n\n'
         _any=0
         for _f in $(state_list_confs "$(state_socks_dir)"); do
             _any=1
-            _tui_profile_card "$(kv_get "$_f" name)"
+            _tui_profile_brief "$(kv_get "$_f" name)"
             printf '\n'
         done
-        [ "$_any" = 1 ] || printf '还没有 SOCKS5 出口\n\n'
-        tui_choose "add|添加 SOCKS5 出口
-manage|管理出口
-enable-all|批量启用
-disable-all|批量禁用" "返回"
+        [ "$_any" = 1 ] || printf '还没有 SOCKS5 服务器\n\n'
+        printf '实例出口分配：\n\n'
+        _any=0
+        for _f in $(state_list_confs "$(state_instances_dir)"); do
+            _any=1
+            printf '%s  → %s\n' "$(kv_get "$_f" id)" "$(_tui_assign_text "$_f")"
+        done
+        [ "$_any" = 1 ] || printf '还没有协议实例\n'
+        printf '\n'
+        tui_choose "servers|管理 SOCKS5 服务器
+assign|分配实例出口
+health|健康监控开关" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            manage) if _tui_pick_profile; then tui_socks_profile_menu "$TUI_PICK"; fi ;;
-            add) _tui_socks_add ;;
-            enable-all)
-                _tui_need_root || continue
-                _tui_do singbox_cli socks enable-all
-                _tui_done
-                ;;
-            disable-all)
-                _tui_need_root || continue
-                tui_confirm "批量禁用后，绑定这些出口的实例流量会被拒绝，不会回落 DIRECT" || { _tui_pause; continue; }
-                _tui_do singbox_cli socks disable-all
-                _tui_done
-                ;;
+            servers) tui_socks_servers_menu ;;
+            assign) tui_assign_menu ;;
+            health) tui_health_menu ;;
         esac
     done
 }

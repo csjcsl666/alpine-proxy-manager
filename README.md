@@ -258,6 +258,8 @@ proxy-manager sing-box socks delete 名称
 proxy-manager sing-box health status
 proxy-manager sing-box health disable
 proxy-manager sing-box health enable
+proxy-manager sing-box health mode all|custom
+proxy-manager sing-box health profile 名称 on|off
 proxy-manager sing-box egress ID [show] | direct | socks 名称
 ```
 

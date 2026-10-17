@@ -20,12 +20,54 @@ BEGIN {
     confirm = ENVIRON["SBH_CONFIRM"]   # 恢复确认脚本路径, 为空表示不启用 B
     inflight_ttl = 60
     cooldown = 20   # 一组查询结束后到下一组之间的最短间隔, 持续有新连接时也不会形成连续轮询
+    pfile = dir "/profiles"
+    refresh(1)
     # 上一个监控进程可能被强制结束而没有执行 END, 它留下的状态已经没有事件支撑, 一律回到 unknown (保留时间戳)
     cmd = "ls '" dir "' 2>/dev/null"
     while ((cmd | getline lf) > 0) {
-        if (lf ~ /^apm-socks-[A-Za-z0-9._-]+\.state$/) { tg0 = substr(lf, 1, length(lf) - 6); load(tg0); reason[tg0] = "monitor-down"; save(tg0) }
+        if (lf ~ /^apm-socks-[A-Za-z0-9._-]+\.state$/) {
+            tg0 = substr(lf, 1, length(lf) - 6)
+            if (tg0 in poff && poff[tg0]) { system("rm -f -- '" dir "/" lf "'"); continue }
+            load(tg0); reason[tg0] = "monitor-down"; save(tg0)
+        }
     }
     close(cmd)
+}
+
+# ---- 每个 Profile 的监控开关 ----
+# 守护进程的运行目录里有一个 profiles 文件, 每行 名称 on|off 版本号 (由 proxy-manager 写入, 没有这一行的 Profile 默认开启)
+# 状态机在处理事件时顺便重读它 (同一秒内只读一次, 不使用计时器); 版本号变化 (关闭 重新开启) 就丢弃该 Profile 在内存里的全部状态
+function refresh(first,    l, a, n, tg, nr, no, f) {
+    if (!first && pread && pstamp == now()) return
+    pread = 1; pstamp = now()
+    f = pfile
+    while ((getline l < f) > 0) {
+        n = split(l, a, " ")
+        if (n < 3 || a[1] !~ /^[A-Za-z0-9._-]+$/) continue
+        tg = prefix a[1]
+        no[tg] = (a[2] == "off"); nr[tg] = a[3] + 0
+    }
+    close(f)
+    if (!first) {
+        for (tg in nr) if (!(tg in prev) || prev[tg] != nr[tg]) forget(tg)
+        for (tg in prev) if (!(tg in nr)) forget(tg)
+    }
+    delete prev; delete poff
+    for (tg in nr) { prev[tg] = nr[tg]; poff[tg] = no[tg] }
+}
+
+# 丢弃一个 Profile 的全部内存状态与状态文件: 关闭时不再展示旧结果, 重新开启时从未知开始, 不复用过期的健康
+function forget(tag,    id) {
+    delete known[tag]; delete st[tag]; delete reason[tag]; delete lastok[tag]; delete lastfail[tag]
+    delete lastreason[tag]; delete streak[tag]; delete firstfail[tag]; delete since[tag]; delete dirty[tag]
+    delete inflight[tag]; delete cooled[tag]; delete lastsave[tag]
+    for (id in ptag) if (ptag[id] == tag) { delete ptag[id]; delete pseq[id]; delete ptime[id]; pcount-- }
+    system("rm -f -- '" dir "/" tag ".state'")
+}
+
+function monitored(tag) {
+    refresh(0)
+    return !(tag in poff && poff[tag])
 }
 
 function now() { return (tclock != "") ? fake : systime() }
@@ -177,6 +219,7 @@ function handle(line,    pl, id, tag, rest, p, q, txt, c, ty) {
         tag = substr(rest, 16)
         tag = substr(tag, 1, index(tag, "]") - 1)
         if (tag !~ /^apm-socks-[A-Za-z0-9._-]+$/) return
+        if (!monitored(tag)) return
         if (rest ~ /\]: outbound (packet )?connection to /) on_attempt(id, tag)
         return
     }
@@ -189,6 +232,7 @@ function handle(line,    pl, id, tag, rest, p, q, txt, c, ty) {
         txt = substr(tag, q + 3)
         tag = substr(tag, 1, q - 1)
         if (tag !~ /^apm-socks-[A-Za-z0-9._-]+$/) return
+        if (!monitored(tag)) return
         # 去掉 JSON 结尾的 "} 与转义
         sub(/"\}$/, "", txt)
         dropid(id)
@@ -215,13 +259,16 @@ tclock != "" && /^@T / { fake = $2 + 0; next }
 # 恢复确认脚本的回报 (经同一个 FIFO 写入): ok 找到了该 Profile 上已回传数据的连接, end 这一组查询结束
 /^@C (ok|end) / {
     tg = $3
-    if (tg ~ /^apm-socks-[A-Za-z0-9._-]+$/ && (tg in known)) {
+    if (tg ~ /^apm-socks-[A-Za-z0-9._-]+$/ && (tg in known) && monitored(tg)) {
         delete inflight[tg]; cooled[tg] = now()
         if ($2 == "ok" && st[tg] == "recovering") on_ok(tg)
     }
     next
 }
 
+# 测试用: 在流里改写 profiles 文件 (模拟 proxy-manager 在运行中切换开关)
+tclock != "" && /^@PC$/ { printf "" > pfile; close(pfile); next }
+tclock != "" && /^@P / { printf "%s\n", substr($0, 4) >> pfile; close(pfile); next }
 tclock != "" && /^@S / { for (tg in known) system("cp '" dir "/" tg ".state' '" dir "/" tg ".snap." $2 "'"); next }
 
 /^\{"type":"/ { handle($0) }
