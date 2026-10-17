@@ -304,3 +304,15 @@ sbh_conf_set() { # 键 值
     awk -v k="$1" -v v="$2" 'BEGIN { d = 0 } index($0, k "=") == 1 { print k "=" v; d = 1; next } { print } END { if (!d) print k "=" v }' "$_f" > "$_c" || { rm -f -- "$_c"; return 1; }
     txn_commit "$_f" "$_c" kv_check_syntax
 }
+
+# 只在有信息价值时输出的补充行: 原因 / 最近失败 / 说明 (用于实例页与出口页, 健康时不输出任何东西)
+sbh_detail_lines() { # 名称
+    sbh_view "$1"
+    case $SBH_V_STATE in
+        degraded|unhealthy|recovering)
+            printf '原因：%s\n' "$(_sbh_reason_text "$SBH_V_REASON")"
+            [ "${SBH_V_FAIL:-0}" = 0 ] || printf '最近失败：%s\n' "$(_sbh_hms "$SBH_V_FAIL")"
+            ;;
+    esac
+    [ -z "$SBH_V_NOTE" ] || printf '说明：%s\n' "$SBH_V_NOTE"
+}

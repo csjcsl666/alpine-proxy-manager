@@ -84,7 +84,7 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 在交互式终端直接运行 `apm` 或 `apm tui` 完整命令 `proxy-manager` 与 `proxy-manager tui` 仍然保留 两者等价
 
 - 主菜单 Snell sing-box 状态与诊断 日志 Manager 管理 数字选择 `0` 返回 主菜单的 `0` 退出 Snell 与 sing-box 是两个独立的 Core 各自直接进入
-- sing-box 菜单里有 协议实例 与 SOCKS 出口 因为它们是 sing-box 提供的能力 没有 sing-box 就不能运行 目标访问限制 客户端配置 在具体的协议实例里 启用或禁用协议实例在 sing-box 运行且还有其他启用的实例时会先提示需要重启 sing-box
+- sing-box 页面直接列出全部协议实例 每个实例显示协议 监听端口 运行状态 绑定的 SOCKS5 出口和上游健康 菜单是 管理实例 添加实例 SOCKS5 出口 启停重启 日志 更新 诊断详情 卸载 实例页里一次选择就能修改端口 密码 出口 启用禁用 目标访问限制 客户端配置 删除 不再需要手动检查配置 修改保存前和启动前都会自动校验 失败时显示原因并保持原配置 监听地址只在会影响连接时才说明 例如仅本机访问 客户端连接地址在第一次导出客户端配置时才询问 已保存的地址原样保留 底层监听 socket 等技术信息在 诊断详情 里 启用或禁用协议实例在 sing-box 运行且还有其他启用的实例时会先提示需要重启 sing-box
 - Snell 菜单里的 `客户端信息` 提供 `查看连接信息` 与 `查看 PSK` Manager 菜单提供 查看版本 检查更新 更新 Manager 检查环境 查看帮助
 - 界面以中文为主 协议与技术名词保持原名
 - TUI 只是命令行的交互层 校验 保护与事务与命令行完全一致 现有部署只提供只读入口 不显示启动 停止 更新 卸载
@@ -316,7 +316,7 @@ AnyTLS Hysteria2 TUIC 使用 Manager 生成的自签名证书 客户端默认跳
 - 更新 Core `proxy-manager snell update` 与 `proxy-manager sing-box update` 更新前会校验 失败回滚旧版本 更新 Manager 见上文
 - 卸载 Core 默认保留配置 证书 日志 实例与 SOCKS Profile 重新安装会沿用 `--purge` 才会删除 并且只删除由 Manager 创建的内容 现有部署的任何内容都不会被删除
 - 命令行 `sing-box uninstall` 保留数据 `sing-box uninstall --purge` 完整删除 sing-box 专属的托管数据 包括协议实例 目标访问限制 客户端连接地址 SOCKS Profile 证书 运行配置 配置备份 日志与由 Manager 创建的用户 不会碰 Snell
-- TUI 里卸载 sing-box 会先列出将删除的内容与数量 再让你选择 完整卸载 或 仅卸载程序 然后确认 默认取消 完整卸载复用 `--purge`
+- TUI 里卸载 sing-box 会先列出将删除的内容与数量 再让你选择 完整卸载 或 仅卸载程序 然后确认 完整卸载复用 `--purge`
 - 备份 每次配置变更都会在 `/var/lib/alpine-proxy-manager/backups/` 保留最近 2 份 目录 0700 文件 0600 其中包含凭据
 - 数据位置 `/etc/alpine-proxy-manager/` 实例 SOCKS Profile 客户端连接地址 `/var/lib/alpine-proxy-manager/` 元数据与备份 配置文件权限 0600 目录 0700
 

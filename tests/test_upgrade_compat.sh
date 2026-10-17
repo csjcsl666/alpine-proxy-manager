@@ -84,7 +84,20 @@ for V in dev2 dev3 dev4 dev5 dev6 dev7 dev8; do
     "$PM" socks list >/dev/null 2>&1
     "$PM" status >/dev/null 2>&1
     "$PM" doctor >/dev/null 2>&1
-    T '2\n1\n1\n3\n0\n4\n0\n5\n0\n0\n0\n0\n6\n1\n\n0\n0\n' >/dev/null
+    # 新界面能正确显示旧版本留下的全部实例, 且没有底层噪声
+    out=$(T '2\n0\n0\n')
+    for f in "$A"/etc/alpine-proxy-manager/instances/*.conf; do
+        assert_contains "$V: 新界面显示旧实例 $(kv_get "$f" id)" "$out" "$(kv_get "$f" id)  "
+    done
+    assert_not_contains "$V: 新界面没有内部监听噪声" "$out" "内部监听"
+    assert_not_contains "$V: 新界面没有 :: 噪声" "$out" "::"
+    # 只浏览不操作: 实例数量因版本而异, 所以不进入任何会触发写操作的菜单项 (实例页的数字选项第一项就是启用或禁用)
+    T '2\n0\n0\n' >/dev/null
+    T '2\n1\n0\n0\n0\n' >/dev/null
+    T '2\n3\n0\n0\n0\n' >/dev/null
+    T '2\n8\n\n0\n0\n' >/dev/null
+    T '1\n7\n0\n0\n0\n' >/dev/null
+    T '6\n1\n\n0\n0\n' >/dev/null
     assert_eq "$V: 只读命令与 TUI 浏览没有改动任何数据" "$BASE" "$(sum_all)"
     # 缺少新字段时使用安全默认
     out=$("$PM" sing-box access AnyTLS-01 show 2>&1)

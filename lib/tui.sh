@@ -1250,6 +1250,115 @@ uninstall|卸载"
 
 # ---- sing-box Core ----
 
+# ---- sing-box 页面的用户视角展示 ----
+# 原则: 显示用户需要理解和操作的信息 (实例 协议 监听端口 运行状态 出口 上游健康), 底层的绑定地址 内部 Listener 原始标签只在 诊断详情 里出现
+# 没有开启的可选功能不占一行, 但服务停止 出口异常 实际生效的限制 影响连接的监听范围 配置无效 一律显示
+
+_tui_type_label() {
+    case $1 in
+        anytls) printf 'AnyTLS' ;;
+        hysteria2) printf 'Hysteria2' ;;
+        tuic) printf 'TUIC' ;;
+        shadowsocks) printf 'Shadowsocks' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+# 监听端口, 只有监听范围会影响连接时才加说明 (默认的全部接口不显示 ::)
+_tui_listen_port_text() { # FILE
+    local _p _l
+    _p=$(kv_get "$1" listen_port)
+    _l=$(kv_get "$1" listen)
+    case $_l in
+        ''|::) printf '%s' "$_p" ;;
+        0.0.0.0) printf '%s（仅 IPv4）' "$_p" ;;
+        127.0.0.1) printf '%s（仅本机访问）' "$_p" ;;
+        ::1) printf '%s（仅本机访问）' "$_p" ;;
+        *) printf '%s（仅监听 %s）' "$_p" "$_l" ;;
+    esac
+}
+
+# 实例的运行状态, 需要先 core_discover singbox
+_tui_inst_state() { # FILE
+    if [ "$(kv_get "$1" enabled)" != true ]; then printf '○ 已禁用'; return 0; fi
+    if ! sb_instance_validate "$1" >/dev/null 2>&1; then printf '! 配置无效'; return 0; fi
+    if [ "$CF_STATE" != running ]; then printf '○ sing-box 未运行'; return 0; fi
+    if _sb_inst_listening "$1"; then printf '● 运行中'; else printf '! 没有监听'; fi
+}
+
+# 出口: TUI_X_NAME 为空表示直连; TUI_X_PROBLEM 非空表示绑定有问题 (流量会被拒绝, 不会回退直连); TUI_X_HEALTH 是上游健康摘要
+_tui_exit_parts() { # FILE
+    local _n _pf
+    TUI_X_NAME=; TUI_X_PROBLEM=; TUI_X_HEALTH=
+    kv_keys "$1" | grep -qx egress_socks || return 0
+    _n=$(kv_get "$1" egress_socks)
+    TUI_X_NAME=${_n:-(空)}
+    _pf=$(state_socks_dir)/$_n.conf
+    if [ -z "$_n" ] || ! is_ident "$_n" || [ ! -f "$_pf" ] || ! _sb_socks_check "$_pf" >/dev/null 2>&1; then
+        TUI_X_PROBLEM='配置异常，流量会被拒绝，不会回退直连'
+    elif [ "$(kv_get "$_pf" enabled)" != true ]; then
+        TUI_X_PROBLEM='已禁用，流量会被拒绝，不会回退直连'
+    else
+        TUI_X_HEALTH=$(sbh_summary "$_n")
+    fi
+}
+
+# 列表里的实例卡片 (两到三行)
+_tui_inst_card() { # FILE
+    local _d
+    printf '%s  %s  监听端口 %s  %s\n' "$(kv_get "$1" id)" "$(_tui_type_label "$(kv_get "$1" type)")" "$(_tui_listen_port_text "$1")" "$(_tui_inst_state "$1")"
+    _tui_exit_parts "$1"
+    if [ -n "$TUI_X_NAME" ]; then
+        if [ -n "$TUI_X_PROBLEM" ]; then
+            printf '  SOCKS5 出口：%s  ! %s\n' "$TUI_X_NAME" "$TUI_X_PROBLEM"
+        else
+            printf '  SOCKS5 出口：%s  上游健康：%s\n' "$TUI_X_NAME" "$TUI_X_HEALTH"
+        fi
+    fi
+    if _sb_policy_present "$1"; then
+        if ! _sb_policy_check "$1" >/dev/null 2>&1; then
+            printf '  ! 目标访问限制配置无效，生成配置会被拒绝\n'
+        elif _sb_policy_on "$1"; then
+            _d=$(_sb_policy_dests "$1" | grep -c .)
+            if [ "$_d" -eq 0 ]; then printf '  ! 目标访问限制：允许名单为空，所有目标都会被拒绝\n'; else printf '  目标访问限制：只允许 %s 个目标\n' "$_d"; fi
+        fi
+    fi
+}
+
+# 选择一个实例 (单个实例直接选中), 结果在 TUI_PICK, 选择返回或没有实例时失败
+_tui_pick_instance() {
+    local _f _items _id _n
+    _items=
+    _n=0
+    for _f in $(state_list_confs "$(state_instances_dir)"); do
+        _id=$(kv_get "$_f" id)
+        _n=$((_n + 1))
+        TUI_PICK=$_id
+        _items="${_items}${_id}|${_id}（$(_tui_type_label "$(kv_get "$_f" type)")，端口 $(kv_get "$_f" listen_port)）
+"
+    done
+    if [ "$_n" -eq 0 ]; then
+        printf '还没有协议实例，请先添加实例\n'
+        _tui_pause
+        return 1
+    fi
+    [ "$_n" -gt 1 ] || return 0
+    tui_choose "$_items" "返回"
+    [ "$TUI_KEY" != back ] || return 1
+    TUI_PICK=$TUI_KEY
+}
+
+_tui_add_menu() {
+    _tui_sb_managed || return 0
+    _tui_clear
+    _tui_header "sing-box · 添加实例"
+    tui_choose "anytls|AnyTLS
+hysteria2|Hysteria2
+tuic|TUIC
+shadowsocks|Shadowsocks" "返回"
+    [ "$TUI_KEY" = back ] || _tui_add_instance "$TUI_KEY"
+}
+
 _tui_count_instances() {
     local _f _t _e
     _t=0
@@ -1262,15 +1371,8 @@ _tui_count_instances() {
     TUI_N_ON=$_e
 }
 
-_tui_singbox_install() {
-    _tui_need_root || return 0
-    tui_confirm "将下载 sing-box 官方 release 并安装为 Manager 管理的服务" || { _tui_pause; return 0; }
-    _tui_do singbox_cli install
-    _tui_done
-}
-
 tui_singbox_menu() {
-    local _items
+    local _items _f _any
     while :; do
         _tui_clear
         _tui_header "sing-box"
@@ -1283,25 +1385,30 @@ tui_singbox_menu() {
             unverified) printf '管理：未确认\n'; _tui_warn "检测到名为 sing-box 的入口，但它不是已确认的 ELF，拒绝写操作" ;;
             external) printf '管理：现有部署，未接管\n'; printf '本项目不会修改现有部署，只提供只读信息\n' ;;
             managed)
-                _tui_count_instances
                 printf '管理：已接管\n'
                 printf 'Release：%s\n' "$CF_VERSION_EXACT"
                 printf '版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
-                printf '协议实例：%s，启用 %s\n' "$TUI_N_TOTAL" "$TUI_N_ON"
+                printf '\n'
+                _any=0
+                for _f in $(state_list_confs "$(state_instances_dir)"); do
+                    _any=1
+                    _tui_inst_card "$_f"
+                done
+                [ "$_any" = 1 ] || printf '还没有协议实例，选择 添加实例 创建\n'
                 ;;
         esac
-        case $CF_STATE in crashed|broken) _tui_warn "sing-box 状态异常，详情见详细信息与日志" ;; esac
+        case $CF_STATE in crashed|broken) _tui_warn "sing-box 状态异常，详情见诊断详情与日志" ;; esac
         _tui_core_notes
         printf '\n'
         case $TUI_CK in
             none) _items="install|安装 sing-box" ;;
-            unverified) _items="info|查看详细信息" ;;
-            external) _items="info|查看详细信息
+            unverified) _items="info|诊断详情" ;;
+            external) _items="info|诊断详情
 log|查看日志" ;;
             managed)
-                _items="info|查看详细信息
-instances|协议实例
-socks|SOCKS 出口"
+                _items="manage|管理实例
+add|添加实例
+socks|SOCKS5 出口"
                 if [ "$CF_STATE" = running ]; then
                     _items="$_items
 stop|停止
@@ -1311,9 +1418,9 @@ restart|重启"
 start|启动"
                 fi
                 _items="$_items
-check|检查配置
 log|查看日志
 update|更新
+info|诊断详情
 uninstall|卸载"
                 ;;
         esac
@@ -1322,10 +1429,10 @@ uninstall|卸载"
             back) return 0 ;;
             install) _tui_singbox_install ;;
             info) _tui_do singbox_cli info; _tui_done ;;
-            instances) tui_instances_menu ;;
+            manage) if _tui_pick_instance; then tui_instance_menu "$TUI_PICK"; fi ;;
+            add) _tui_add_menu ;;
             socks) tui_socks_menu ;;
             start|stop|restart) _tui_core_lifecycle singbox "$TUI_KEY" ;;
-            check) _tui_do singbox_cli check; _tui_done ;;
             log) _tui_log singbox ;;
             update)
                 _tui_need_root || continue
@@ -1338,9 +1445,13 @@ uninstall|卸载"
     done
 }
 
-# ---- 实例选择与展示 ----
+_tui_singbox_install() {
+    _tui_need_root || return 0
+    tui_confirm "将下载 sing-box 官方 release 并安装为 Manager 管理的服务" || { _tui_pause; return 0; }
+    _tui_do singbox_cli install
+    _tui_done
+}
 
-# sing-box 实例相关的写操作要求 Core 已被接管
 _tui_sb_managed() {
     _tui_core_kind singbox
     if [ "$TUI_CK" = managed ]; then return 0; fi
@@ -1353,39 +1464,6 @@ _tui_sb_managed() {
     return 1
 }
 
-_tui_inst_summary() { # FILE
-    local _st _l
-    if [ "$(kv_get "$1" enabled)" = true ]; then _st=已启用; else _st=已禁用; fi
-    sb_instance_validate "$1" >/dev/null 2>&1 || _st="$_st，配置无效"
-    printf '%s\n' "$(kv_get "$1" id) ($(kv_get "$1" type), $_st)"
-    printf '  内部监听：%s 端口 %s / %s\n' "$(kv_get "$1" listen)" "$(kv_get "$1" listen_port)" "$(_sb_type_transport "$(kv_get "$1" type)" | tr 'a-z+' 'A-Z+')"
-    _l=$(_sb_egress_show "$1" | sed -n 1p | sed 's/^  //')
-    printf '  %s\n' "$_l"
-    _l=$(_sb_policy_show "$1" | sed -n 1p | sed 's/^  //')
-    printf '  %s\n' "$_l"
-}
-
-# 选择实例, 结果在 TUI_PICK, 选择返回时失败
-_tui_pick_instance() {
-    local _f _items _id
-    _items=
-    for _f in $(state_list_confs "$(state_instances_dir)"); do
-        _id=$(kv_get "$_f" id)
-        _items="${_items}${_id}|${_id} ($(kv_get "$_f" type))
-"
-    done
-    if [ -z "$(printf '%s' "$_items" | tr -d '\n')" ]; then
-        printf '(没有实例)\n'
-        _tui_pause
-        return 1
-    fi
-    tui_choose "$_items" "返回"
-    [ "$TUI_KEY" != back ] || return 1
-    TUI_PICK=$TUI_KEY
-}
-
-# ---- 协议实例 ----
-
 _tui_gen_confirm() { # 说明
     tui_confirm "将自动生成$1，并在结果中显示一次"
 }
@@ -1396,7 +1474,7 @@ _tui_add_instance() { # 协议
     _tui_sb_managed || return 0
     _tui_need_root || return 0
     set --
-    tui_ask "AnyTLS 监听端口（留空随机选择）："
+    tui_ask "监听端口（留空随机选择）："
     [ -z "$TUI_IN" ] || set -- "$@" --port "$TUI_IN"
     case $_t in
         anytls|hysteria2|tuic)
@@ -1427,103 +1505,6 @@ _tui_add_instance() { # 协议
     _tui_done
 }
 
-tui_instances_menu() {
-    local _f _any
-    while :; do
-        _tui_clear
-        _tui_header "协议实例"
-        _any=0
-        for _f in $(state_list_confs "$(state_instances_dir)"); do
-            _any=1
-            _tui_inst_summary "$_f"
-        done
-        [ "$_any" = 1 ] || printf '(没有实例)\n'
-        printf '\n'
-        tui_choose "manage|管理现有实例
-anytls|添加 AnyTLS
-hysteria2|添加 Hysteria2
-tuic|添加 TUIC
-shadowsocks|添加 Shadowsocks" "返回"
-        case $TUI_KEY in
-            back) return 0 ;;
-            manage) _tui_pick_instance && tui_instance_menu "$TUI_PICK" ;;
-            *) _tui_add_instance "$TUI_KEY" ;;
-        esac
-    done
-}
-
-tui_instance_edit_menu() { # ID
-    local _f _t _items _pw _m
-    _f=$(state_instances_dir)/$1.conf
-    while [ -f "$_f" ]; do
-        _t=$(kv_get "$_f" type)
-        _tui_clear
-        _tui_header "修改 $1"
-        _items="port|修改监听端口
-listen|修改监听地址"
-        if _sb_type_tls "$_t"; then _items="$_items
-server-name|修改 TLS server-name"; fi
-        if [ "$_t" = tuic ]; then _items="$_items
-uuid|修改 UUID
-congestion-control|修改 congestion-control"; fi
-        if [ "$_t" = shadowsocks ]; then _items="$_items
-method|修改 method 与密钥"; fi
-        _items="$_items
-password|修改密码"
-        [ "$_t" != shadowsocks ] || _items=$(printf '%s\n' "$_items" | sed 's/^password|修改密码$/password|修改密钥/')
-        tui_choose "$_items" "返回"
-        case $TUI_KEY in
-            back) return 0 ;;
-            port|listen|server-name|congestion-control)
-                _tui_need_root || continue
-                if [ "$TUI_KEY" = congestion-control ]; then tui_ask "取值 ($SB_TUIC_CC，留空取消)："; else tui_ask "新的值（留空取消）："; fi
-                [ -n "$TUI_IN" ] || continue
-                _tui_do singbox_cli set "$1" "$TUI_KEY" "$TUI_IN"
-                _tui_done
-                ;;
-            uuid)
-                _tui_need_root || continue
-                tui_ask "新的 UUID（留空自动生成）："
-                if [ -z "$TUI_IN" ]; then _tui_do singbox_cli set "$1" uuid --generate; else _tui_do singbox_cli set "$1" uuid "$TUI_IN"; fi
-                _tui_done
-                ;;
-            password)
-                _tui_need_root || continue
-                tui_read_secret "新的密码（留空自动生成）：" || { _tui_pause; continue; }
-                _pw=$TUI_SECRET
-                TUI_SECRET=
-                if [ -z "$_pw" ]; then
-                    _tui_gen_confirm "新密码" || { _tui_pause; continue; }
-                    _tui_do singbox_cli set "$1" password --generate
-                else
-                    _tui_do_secret "$_pw" singbox_cli set "$1" password --stdin
-                fi
-                _pw=
-                _tui_done
-                ;;
-            method)
-                _tui_need_root || continue
-                tui_ask "method（$SB_SS_METHODS，留空取消）："
-                _m=$TUI_IN
-                [ -n "$_m" ] || continue
-                tui_read_secret "该 method 的密钥（留空自动生成）：" || { _tui_pause; continue; }
-                _pw=$TUI_SECRET
-                TUI_SECRET=
-                if [ -z "$_pw" ]; then
-                    _tui_gen_confirm "密钥" || { _tui_pause; continue; }
-                    _tui_do singbox_cli set "$1" method "$_m" --generate
-                else
-                    _tui_do_secret "$_pw" singbox_cli set "$1" method "$_m" --stdin
-                fi
-                _pw=
-                _tui_done
-                ;;
-        esac
-    done
-}
-
-# 启用或禁用实例会重新生成 sing-box 配置, Core 运行时需要重启整个 sing-box
-# 只有 Core 正在运行且还有其他启用的实例时才提示, 默认取消
 _tui_toggle_confirm() { # ID
     local _f _n
     _tui_core_kind singbox
@@ -1538,50 +1519,142 @@ _tui_toggle_confirm() { # ID
 可能短暂影响该 Core 下的其他协议实例。" || { _tui_pause; return 1; }
 }
 
+_tui_show_secret() { # ID
+    tui_confirm "即将显示客户端凭据。终端记录或截图可能包含 Secret。" || { _tui_pause; return 0; }
+    _tui_do singbox_cli export "$1" secret
+    _tui_done
+}
+
+# ---- 实例页 ----
+
+# 实例页头部: 只显示用户需要的信息
+_tui_inst_header() { # FILE
+    local _t _pol _ep
+    _t=$(kv_get "$1" type)
+    printf '状态：%s\n' "$(_tui_inst_state "$1")"
+    printf '监听端口：%s\n' "$(_tui_listen_port_text "$1")"
+    if _sb_type_tls "$_t"; then printf 'server-name：%s\n' "$(kv_get "$1" tls.server_name)"; fi
+    _tui_exit_parts "$1"
+    if [ -z "$TUI_X_NAME" ]; then
+        printf '出口：直连\n'
+    elif [ -n "$TUI_X_PROBLEM" ]; then
+        printf 'SOCKS5 出口：%s\n! %s\n' "$TUI_X_NAME" "$TUI_X_PROBLEM"
+    else
+        printf 'SOCKS5 出口：%s\n上游健康：%s\n' "$TUI_X_NAME" "$TUI_X_HEALTH"
+        sbh_detail_lines "$TUI_X_NAME"
+    fi
+    if _sb_policy_present "$1"; then
+        if ! _sb_policy_check "$1" >/dev/null 2>&1; then
+            printf '! 目标访问限制配置无效，生成配置会被拒绝（不会退回不限制）\n'
+        elif _sb_policy_on "$1"; then
+            _pol=$(_sb_policy_dests "$1" | grep -c .)
+            if [ "$_pol" -eq 0 ]; then printf '! 目标访问限制：允许名单为空，所有目标都会被拒绝\n'; else printf '目标访问限制：只允许 %s 个目标\n' "$_pol"; fi
+        fi
+    fi
+    _ep=$(kv_get "$1" public.host)
+    [ -z "$_ep" ] || printf '客户端连接地址：%s:%s\n' "$_ep" "$(kv_get "$1" public.port)"
+}
+
+# 修改动作, 取消（留空）不改变任何东西
+_tui_inst_edit() { # ID KEY
+    local _pw _m
+    case $2 in
+        port|listen|server-name|congestion-control)
+            _tui_need_root || return 0
+            case $2 in
+                port) tui_ask "新的监听端口（留空取消）：" ;;
+                listen) tui_ask "新的监听地址（IPv4 或 IPv6，:: 表示全部接口，留空取消）：" ;;
+                server-name) tui_ask "新的 TLS server-name（留空取消）：" ;;
+                congestion-control) tui_ask "拥塞控制 ($SB_TUIC_CC，留空取消)：" ;;
+            esac
+            [ -n "$TUI_IN" ] || return 0
+            _tui_do singbox_cli set "$1" "$2" "$TUI_IN"
+            _tui_done
+            ;;
+        uuid)
+            _tui_need_root || return 0
+            tui_ask "新的 UUID（留空自动生成）："
+            if [ -z "$TUI_IN" ]; then _tui_do singbox_cli set "$1" uuid --generate; else _tui_do singbox_cli set "$1" uuid "$TUI_IN"; fi
+            _tui_done
+            ;;
+        password)
+            _tui_need_root || return 0
+            tui_read_secret "新的密码（留空自动生成）：" || { _tui_pause; return 0; }
+            _pw=$TUI_SECRET
+            TUI_SECRET=
+            if [ -z "$_pw" ]; then
+                _tui_gen_confirm "新密码" || { _tui_pause; return 0; }
+                _tui_do singbox_cli set "$1" password --generate
+            else
+                _tui_do_secret "$_pw" singbox_cli set "$1" password --stdin
+            fi
+            _pw=
+            _tui_done
+            ;;
+        method)
+            _tui_need_root || return 0
+            tui_ask "method（$SB_SS_METHODS，留空取消）："
+            _m=$TUI_IN
+            [ -n "$_m" ] || return 0
+            tui_read_secret "该 method 的密钥（留空自动生成）：" || { _tui_pause; return 0; }
+            _pw=$TUI_SECRET
+            TUI_SECRET=
+            if [ -z "$_pw" ]; then
+                _tui_gen_confirm "密钥" || { _tui_pause; return 0; }
+                _tui_do singbox_cli set "$1" method "$_m" --generate
+            else
+                _tui_do_secret "$_pw" singbox_cli set "$1" method "$_m" --stdin
+            fi
+            _pw=
+            _tui_done
+            ;;
+    esac
+}
+
 tui_instance_menu() { # ID
-    local _f _t _items _ep
+    local _f _t _items
     _f=$(state_instances_dir)/$1.conf
     while [ -f "$_f" ]; do
         _t=$(kv_get "$_f" type)
         _tui_clear
-        _tui_header "$1"
-        _tui_do singbox_cli show "$1"
-        _ep=$(kv_get "$_f" public.host)
-        if [ -z "$_ep" ]; then
-            printf '  客户端连接地址：未配置\n'
-        else
-            printf '  客户端连接地址：%s:%s\n' "$_ep" "$(kv_get "$_f" public.port)"
-        fi
+        _tui_header "$1 · $(_tui_type_label "$_t")"
+        _tui_core_kind singbox
+        _tui_inst_header "$_f"
         printf '\n'
-        if [ "$(kv_get "$_f" enabled)" = true ]; then
-            _items="edit|修改实例
-toggle|禁用"
+        if [ "$(kv_get "$_f" enabled)" = true ]; then _items="toggle|禁用"; else _items="toggle|启用"; fi
+        _items="$_items
+port|修改监听端口"
+        if _sb_type_tls "$_t"; then _items="$_items
+server-name|修改 TLS server-name"; fi
+        if [ "$_t" = tuic ]; then _items="$_items
+uuid|修改 UUID
+congestion-control|修改拥塞控制"; fi
+        if [ "$_t" = shadowsocks ]; then
+            _items="$_items
+method|修改 method 与密钥"
         else
-            _items="edit|修改实例
-toggle|启用"
+            _items="$_items
+password|修改密码"
         fi
         _items="$_items
-policy|目标访问限制
-egress|SOCKS 出口
-endpoint|客户端连接地址（Public Endpoint）
+egress|SOCKS5 出口
 export|客户端配置
-secret|查看凭据
+policy|目标访问限制
+listen|修改监听地址
 delete|删除实例"
         tui_choose "$_items" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            edit) tui_instance_edit_menu "$1" ;;
             toggle)
                 _tui_need_root || continue
                 _tui_toggle_confirm "$1" || continue
                 if [ "$(kv_get "$_f" enabled)" = true ]; then _tui_do singbox_cli disable "$1"; else _tui_do singbox_cli enable "$1"; fi
                 _tui_done
                 ;;
+            port|listen|server-name|congestion-control|uuid|password|method) _tui_inst_edit "$1" "$TUI_KEY" ;;
             policy) tui_policy_menu "$1" ;;
             egress) tui_egress_menu "$1" ;;
-            endpoint) tui_endpoint_menu "$1" ;;
             export) tui_export_menu "$1" ;;
-            secret) _tui_show_secret "$1" ;;
             delete)
                 _tui_need_root || continue
                 tui_confirm "即将删除实例 $1，客户端将无法再连接" || { _tui_pause; continue; }
@@ -1590,12 +1663,6 @@ delete|删除实例"
                 ;;
         esac
     done
-}
-
-_tui_show_secret() { # ID
-    tui_confirm "即将显示客户端凭据。终端记录或截图可能包含 Secret。" || { _tui_pause; return 0; }
-    _tui_do singbox_cli export "$1" secret
-    _tui_done
 }
 
 # ---- 目标访问限制 ----
@@ -1649,42 +1716,6 @@ clear|清空允许目标" "返回"
     done
 }
 
-# ---- SOCKS 出口 ----
-
-tui_egress_menu() { # ID
-    local _f _items _p _cur
-    _f=$(state_instances_dir)/$1.conf
-    while [ -f "$_f" ]; do
-        _tui_clear
-        _tui_header "SOCKS 出口 $1"
-        _tui_do singbox_cli egress "$1" show
-        _cur=$(kv_get "$_f" egress_socks)
-        printf '\n'
-        _items="direct|DIRECT"
-        for _p in $(state_list_confs "$(state_socks_dir)"); do
-            _items="$_items
-socks:$(kv_get "$_p" name)|SOCKS Profile $(kv_get "$_p" name)"
-        done
-        tui_choose "$_items" "返回"
-        case $TUI_KEY in
-            back) return 0 ;;
-            direct)
-                _tui_need_root || continue
-                _tui_sb_managed || continue
-                _tui_do singbox_cli egress "$1" direct
-                _tui_done
-                ;;
-            socks:*)
-                _tui_need_root || continue
-                _tui_sb_managed || continue
-                printf '该实例流量将通过 %s 出口，不会自动测试，也不会自动回落 DIRECT\n' "${TUI_KEY#socks:}"
-                _tui_do singbox_cli egress "$1" socks "${TUI_KEY#socks:}"
-                _tui_done
-                ;;
-        esac
-    done
-}
-
 _tui_socks_add() {
     local _srv _port _name _user _pw
     _tui_need_root || return 0
@@ -1716,13 +1747,116 @@ _tui_socks_add() {
     _tui_done
 }
 
+# ---- SOCKS5 出口 ----
+
+# 实例的出口绑定: 直连与全部 Profile 一次列出（带上游健康）, 选一次即完成
+tui_egress_menu() { # ID
+    local _f _items _p _n _cur _lab
+    _f=$(state_instances_dir)/$1.conf
+    while [ -f "$_f" ]; do
+        _tui_clear
+        _tui_header "SOCKS5 出口 · $1"
+        _tui_core_kind singbox
+        _tui_exit_parts "$_f"
+        _cur=$TUI_X_NAME
+        if [ -z "$_cur" ]; then
+            printf '当前：直连\n'
+        elif [ -n "$TUI_X_PROBLEM" ]; then
+            printf '当前：%s  ! %s\n' "$_cur" "$TUI_X_PROBLEM"
+        else
+            printf '当前：%s  上游健康：%s\n' "$_cur" "$TUI_X_HEALTH"
+        fi
+        printf '\n'
+        if [ -z "$_cur" ]; then _lab='直连（当前）'; else _lab='直连'; fi
+        _items="direct|$_lab"
+        for _p in $(state_list_confs "$(state_socks_dir)"); do
+            _n=$(kv_get "$_p" name)
+            if [ "$(kv_get "$_p" enabled)" = true ]; then
+                _lab="$_n  $(sbh_summary "$_n")"
+            else
+                _lab="$_n  ○ 已禁用"
+            fi
+            [ "$_n" != "$_cur" ] || _lab="$_lab（当前）"
+            _items="$_items
+socks:$_n|$_lab"
+        done
+        if [ -z "$(state_list_confs "$(state_socks_dir)")" ]; then
+            printf '还没有 SOCKS5 出口，请先在 sing-box 菜单的 SOCKS5 出口 里添加\n\n'
+        fi
+        tui_choose "$_items" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            direct)
+                _tui_need_root || continue
+                _tui_sb_managed || continue
+                _tui_do singbox_cli egress "$1" direct
+                _tui_done
+                [ "$TUI_RC" -ne 0 ] || return 0
+                ;;
+            socks:*)
+                _tui_need_root || continue
+                _tui_sb_managed || continue
+                printf '该实例流量将通过 %s 出口，不会自动回落 DIRECT\n' "${TUI_KEY#socks:}"
+                _tui_do singbox_cli egress "$1" socks "${TUI_KEY#socks:}"
+                _tui_done
+                [ "$TUI_RC" -ne 0 ] || return 0
+                ;;
+        esac
+    done
+}
+
+# Profile 的卡片: 名称 上游 健康 使用它的实例
+_tui_profile_card() { # NAME
+    local _pf _u
+    _pf=$(state_socks_dir)/$1.conf
+    _u=$(_sb_socks_users "$1" "$(state_instances_dir)")
+    printf '%s\n' "$1"
+    printf '  上游：%s:%s\n' "$(kv_get "$_pf" host)" "$(kv_get "$_pf" port)"
+    if ! _sb_socks_check "$_pf" >/dev/null 2>&1; then
+        printf '  ! 配置无效\n'
+    elif [ "$(kv_get "$_pf" enabled)" != true ]; then
+        printf '  ○ 已禁用\n'
+    elif [ -z "$_u" ]; then
+        printf '  未被任何实例使用\n'
+    else
+        printf '  上游健康：%s\n' "$(sbh_summary "$1")"
+        sbh_detail_lines "$1" | sed 's/^/  /'
+    fi
+    [ -z "$_u" ] || printf '  使用它的实例：%s\n' "$_u"
+}
+
+# 选择一个 Profile (单个直接选中), 结果在 TUI_PICK
+_tui_pick_profile() {
+    local _f _items _n _c
+    _items=
+    _c=0
+    for _f in $(state_list_confs "$(state_socks_dir)"); do
+        _n=$(kv_get "$_f" name)
+        _c=$((_c + 1))
+        TUI_PICK=$_n
+        _items="${_items}${_n}|${_n}（$(kv_get "$_f" host):$(kv_get "$_f" port)）
+"
+    done
+    if [ "$_c" -eq 0 ]; then
+        printf '还没有 SOCKS5 出口，请先添加\n'
+        _tui_pause
+        return 1
+    fi
+    [ "$_c" -gt 1 ] || return 0
+    tui_choose "$_items" "返回"
+    [ "$TUI_KEY" != back ] || return 1
+    TUI_PICK=$TUI_KEY
+}
+
 tui_socks_profile_menu() { # 名称
     local _f _items _pw _u
     _f=$(state_socks_dir)/$1.conf
     while [ -f "$_f" ]; do
         _tui_clear
-        _tui_header "SOCKS Profile $1"
-        _tui_do singbox_cli socks show "$1"
+        _tui_header "SOCKS5 出口 · $1"
+        _tui_core_kind singbox
+        _tui_profile_card "$1"
+        if [ -n "$(kv_get "$_f" username)" ]; then printf '  认证：用户名与密码\n'; else printf '  认证：无认证\n'; fi
         printf '\n'
         if [ "$(kv_get "$_f" enabled)" = true ]; then _items="toggle|禁用"; else _items="toggle|启用"; fi
         _items="$_items
@@ -1730,14 +1864,14 @@ server|修改服务器地址
 port|修改端口
 credential|修改用户名与密码
 noauth|改为无认证
-delete|删除 Profile"
+delete|删除"
         tui_choose "$_items" "返回"
         case $TUI_KEY in
             back) return 0 ;;
             toggle)
                 _tui_need_root || continue
                 if [ "$(kv_get "$_f" enabled)" = true ]; then
-                    tui_confirm "禁用后，绑定该 Profile 的实例流量会被拒绝，不会回落 DIRECT" || { _tui_pause; continue; }
+                    tui_confirm "禁用后，绑定该出口的实例流量会被拒绝，不会回落 DIRECT" || { _tui_pause; continue; }
                     _tui_do singbox_cli socks disable "$1"
                 else
                     _tui_do singbox_cli socks enable "$1"
@@ -1746,7 +1880,7 @@ delete|删除 Profile"
                 ;;
             server|port)
                 _tui_need_root || continue
-                tui_ask "新的值（留空取消）："
+                if [ "$TUI_KEY" = server ]; then tui_ask "新的服务器地址（留空取消）："; else tui_ask "新的端口（留空取消）："; fi
                 [ -n "$TUI_IN" ] || continue
                 _tui_do singbox_cli socks set "$1" "$TUI_KEY" "$TUI_IN"
                 _tui_done
@@ -1771,7 +1905,7 @@ delete|删除 Profile"
                 ;;
             delete)
                 _tui_need_root || continue
-                tui_confirm "即将删除 SOCKS Profile $1，仍被实例引用时业务层会拒绝" || { _tui_pause; continue; }
+                tui_confirm "即将删除 SOCKS5 出口 $1，仍被实例使用时会被拒绝" || { _tui_pause; continue; }
                 _tui_do singbox_cli socks delete "$1"
                 _tui_done
                 ;;
@@ -1780,33 +1914,25 @@ delete|删除 Profile"
 }
 
 tui_socks_menu() {
-    local _f _items _n
+    local _f _any
     while :; do
         _tui_clear
-        _tui_header "SOCKS 出口"
-        _tui_do singbox_cli socks list
-        printf '\n'
-        tui_choose "manage|管理 Profile
-add|添加 SOCKS Profile
+        _tui_header "sing-box · SOCKS5 出口"
+        _tui_core_kind singbox
+        _any=0
+        for _f in $(state_list_confs "$(state_socks_dir)"); do
+            _any=1
+            _tui_profile_card "$(kv_get "$_f" name)"
+            printf '\n'
+        done
+        [ "$_any" = 1 ] || printf '还没有 SOCKS5 出口\n\n'
+        tui_choose "add|添加 SOCKS5 出口
+manage|管理出口
 enable-all|批量启用
 disable-all|批量禁用" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            manage)
-                _items=
-                for _f in $(state_list_confs "$(state_socks_dir)"); do
-                    _n=$(kv_get "$_f" name)
-                    _items="${_items}${_n}|${_n}
-"
-                done
-                if [ -z "$(printf '%s' "$_items" | tr -d '\n')" ]; then
-                    printf '(没有 Profile)\n'
-                    _tui_pause
-                    continue
-                fi
-                tui_choose "$_items" "返回"
-                [ "$TUI_KEY" = back ] || tui_socks_profile_menu "$TUI_KEY"
-                ;;
+            manage) if _tui_pick_profile; then tui_socks_profile_menu "$TUI_PICK"; fi ;;
             add) _tui_socks_add ;;
             enable-all)
                 _tui_need_root || continue
@@ -1815,7 +1941,7 @@ disable-all|批量禁用" "返回"
                 ;;
             disable-all)
                 _tui_need_root || continue
-                tui_confirm "批量禁用后，绑定这些 Profile 的实例流量会被拒绝，不会回落 DIRECT" || { _tui_pause; continue; }
+                tui_confirm "批量禁用后，绑定这些出口的实例流量会被拒绝，不会回落 DIRECT" || { _tui_pause; continue; }
                 _tui_do singbox_cli socks disable-all
                 _tui_done
                 ;;
@@ -1823,46 +1949,35 @@ disable-all|批量禁用" "返回"
     done
 }
 
-# ---- 客户端连接地址与导出 ----
+# ---- 客户端配置 ----
 
-tui_endpoint_menu() { # ID
-    local _h
-    while :; do
-        _tui_clear
-        _tui_header "客户端连接地址（Public Endpoint） $1"
-        _tui_do singbox_cli endpoint "$1" show
-        printf '\n说明：只记录客户端应该连接的地址，不配置 NAT 与防火墙，修改不会重启服务\n\n'
-        tui_choose "set|设置
-clear|清除" "返回"
-        case $TUI_KEY in
-            back) return 0 ;;
-            set)
-                _tui_need_root || continue
-                tui_ask "主机（IPv4、IPv6 或主机名，留空取消）："
-                [ -n "$TUI_IN" ] || continue
-                _h=$TUI_IN
-                tui_ask "端口："
-                [ -n "$TUI_IN" ] || continue
-                _tui_do singbox_cli endpoint "$1" set "$_h" "$TUI_IN"
-                _tui_done
-                ;;
-            clear)
-                _tui_need_root || continue
-                _tui_do singbox_cli endpoint "$1" clear
-                _tui_done
-                ;;
-        esac
-    done
+# 导出客户端配置需要客户端连接地址（服务器的公网 IP 或域名）, 没有保存过就在需要的这一刻询问并保存, 之后不再询问
+# 已保存的地址不会被改动; 它只用于生成客户端配置, 不配置 NAT 与防火墙
+_tui_need_endpoint() { # ID
+    local _f _h _p
+    _f=$(state_instances_dir)/$1.conf
+    [ -z "$(kv_get "$_f" public.host)" ] || return 0
+    _tui_need_root || return 1
+    printf '生成客户端配置需要客户端连接的服务器地址，它只用于生成配置，不会修改服务器网络\n'
+    tui_ask "服务器的公网 IP 或域名（留空取消）："
+    [ -n "$TUI_IN" ] || return 1
+    _h=$TUI_IN
+    tui_ask "客户端连接端口（留空使用监听端口 $(kv_get "$_f" listen_port)）："
+    _p=${TUI_IN:-$(kv_get "$_f" listen_port)}
+    _tui_do singbox_cli endpoint "$1" set "$_h" "$_p"
+    if [ "$TUI_RC" -ne 0 ]; then _tui_done; return 1; fi
+    return 0
 }
 
-tui_export_menu() { # ID, 只用于 sing-box 实例, Snell 的客户端信息见 tui_snell_client_menu
-    local _f _t _items
+tui_export_menu() { # ID
+    local _f _t _items _ep
     _f=$(state_instances_dir)/$1.conf
     _t=$(kv_get "$_f" type)
-    while :; do
+    while [ -f "$_f" ]; do
         _tui_clear
-        _tui_header "客户端配置 $1"
-        _tui_do singbox_cli endpoint "$1" show
+        _tui_header "客户端配置 · $1"
+        _ep=$(kv_get "$_f" public.host)
+        [ -z "$_ep" ] || printf '客户端连接地址：%s:%s\n' "$_ep" "$(kv_get "$_f" public.port)"
         if _sb_type_tls "$_t"; then
             printf '证书校验：跳过（自签名，免维护）\n'
         fi
@@ -1879,15 +1994,28 @@ json-pin|导出 sing-box JSON（可选：嵌入证书固定校验）"; fi
 url|导出分享 URL
 qr|显示 QR（需要 qrencode）" ;;
         esac
-        _items="$_items
-endpoint|设置客户端连接地址"
+        [ -z "$_ep" ] || _items="$_items
+endpoint|更改客户端连接地址"
         tui_choose "$_items" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            show) _tui_do singbox_cli export "$1" show; _tui_done ;;
             secret) _tui_show_secret "$1" ;;
-            json-redacted) _tui_do singbox_cli export "$1" sing-box --redacted; _tui_done ;;
+            endpoint)
+                _tui_need_root || continue
+                tui_ask "服务器的公网 IP 或域名（留空取消）："
+                [ -n "$TUI_IN" ] || continue
+                _ep=$TUI_IN
+                tui_ask "客户端连接端口（留空使用监听端口 $(kv_get "$_f" listen_port)）："
+                _tui_do singbox_cli endpoint "$1" set "$_ep" "${TUI_IN:-$(kv_get "$_f" listen_port)}"
+                _tui_done
+                ;;
+            show|json-redacted)
+                _tui_need_endpoint "$1" || continue
+                if [ "$TUI_KEY" = show ]; then _tui_do singbox_cli export "$1" show; else _tui_do singbox_cli export "$1" sing-box --redacted; fi
+                _tui_done
+                ;;
             json|json-pin|url|qr)
+                _tui_need_endpoint "$1" || continue
                 tui_confirm "即将输出包含客户端凭据的内容。终端记录或截图可能包含 Secret。" || { _tui_pause; continue; }
                 case $TUI_KEY in
                     json) _tui_do singbox_cli export "$1" sing-box ;;
@@ -1905,8 +2033,8 @@ endpoint|设置客户端连接地址"
                 [ "$TUI_KEY" != json ] || printf '\n提示：也可以在命令行用重定向保存：proxy-manager sing-box export %s sing-box > client.json\n' "$1"
                 _tui_done
                 ;;
-            endpoint) tui_endpoint_menu "$1" ;;
         esac
+        _f=$(state_instances_dir)/$1.conf
     done
 }
 
