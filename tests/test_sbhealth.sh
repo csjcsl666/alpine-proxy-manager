@@ -17,7 +17,7 @@ fail() { ev error "$1" "connection: open connection to target.invalid:443 using 
 fin() { ev debug "$1" "connection: connection download finished"; }
 T() { printf '@T %s\n' "$1"; }
 # run: 标准输入是事件, 输出到目录 D; 返回后状态文件已写入
-run() { rm -f "$D"/*.state "$D"/connected; SBH_DIR=$D SBH_TEST_CLOCK=1 awk -f "$AWKF"; }
+run() { rm -f "$D"/*.state "$D"/connected "$D"/confirm.*; SBH_DIR=$D SBH_TEST_CLOCK=1 awk -f "$AWKF"; }
 runkeep() { SBH_DIR=$D SBH_TEST_CLOCK=1 awk -f "$AWKF"; }
 st() { kv_get "$D/apm-socks-$1.state" "${2:-state}"; }
 # 读取 kv (不依赖整个产品库)
@@ -165,6 +165,60 @@ assert_eq "只有响应头没有事件: 不产生状态文件" "" "$(ls "$D" | g
 n=0
 { printf "$HDR"; while [ $n -lt 6000 ]; do att $((200000 + n)) Q; n=$((n + 1)); done; fin 200000 Q; fin 205999 Q; } | run
 assert_eq "6000 个未结束连接后最新的完成事件仍被识别" healthy "$(last Q)"
+
+# ---- 恢复确认 (方案 B) 的触发规则: 只有 recovering 且出现新的真实拨号, 同一个 Profile 同一时间最多一组, 有冷却 ----
+CONF_LOG=$T_TMP/confirm.log
+cat > "$T_TMP/confirm-stub.sh" <<'EOS'
+#!/bin/sh
+echo "$1" >> "$CONF_LOG"
+cp "$SBH_DIR/confirm.$1.req" "$CONF_LOG.req" 2>/dev/null
+EOS
+chmod +x "$T_TMP/confirm-stub.sh"
+runc() { rm -f "$D"/*.state "$D"/connected "$D"/confirm.*; : > "$CONF_LOG"; rm -f "$CONF_LOG.req"; CONF_LOG=$CONF_LOG SBH_CONFIRM="$T_TMP/confirm-stub.sh" SBH_DIR=$D SBH_TEST_CLOCK=1 awk -f "$AWKF"; sleep 0.3; }
+src() { ev info "$1" "inbound/socks[in-A]: inbound connection from $2"; }
+nconf() { local n; n=$(grep -c . "$CONF_LOG" 2>/dev/null); echo "${n:-0}"; }
+S() { printf '@S %s\n' "$1"; }
+REF="dial tcp 192.0.2.1:1080: connect: connection refused"
+AUTH="socks5: incorrect user name or password"
+# 触发: unhealthy 后第一个新的拨号 -> 一组
+{ printf "$HDR"; T 100; src 1 127.0.0.1:50001; att 1 A; fail 1 A "$AUTH"; src 2 127.0.0.1:50002; att 2 A; } | runc
+assert_eq "recovering 的新拨号触发一组确认" 1 "$(nconf)"
+assert_eq "确认的是 A" apm-socks-A "$(head -n 1 "$CONF_LOG")"
+assert_eq "请求里是新连接的来源和时间" "127.0.0.1:50002 100" "$(cat "$CONF_LOG.req")"
+# 同时只有一组, 后到的拨号只更新请求文件
+{ printf "$HDR"; T 100; src 1 127.0.0.1:50001; att 1 A; fail 1 A "$AUTH"; src 2 127.0.0.1:50002; att 2 A; T 101; src 3 127.0.0.1:50003; att 3 A; src 4 [2001:db8::5]:50004; att 4 A; } | runc
+assert_eq "高并发的新拨号不会启动更多组" 1 "$(nconf)"
+assert_eq "请求文件包含所有待确认连接" "[2001:db8::5]:50004 101
+127.0.0.1:50003 101
+127.0.0.1:50002 100" "$(sort -r "$D/confirm.apm-socks-A.req")"
+# healthy degraded 的 Profile 不触发
+{ printf "$HDR"; T 100; src 1 127.0.0.1:50001; att 1 B; fin 1 B; src 2 127.0.0.1:50002; att 2 B; fail 2 B "$REF"; src 3 127.0.0.1:50003; att 3 B; } | runc
+assert_eq "healthy 和 degraded 的新拨号不触发确认" 0 "$(nconf)"
+# 没有来源的拨号 (入站行缺失) 不触发
+{ printf "$HDR"; T 100; att 1 C; fail 1 C "$AUTH"; att 2 C; } | runc
+assert_eq "没有来源记录的拨号不触发确认" 0 "$(nconf)"
+# 回报 ok: recovering 才接受
+{ printf "$HDR"; T 100; src 1 127.0.0.1:50001; att 1 D; fail 1 D "$AUTH"; src 2 127.0.0.1:50002; att 2 D; S a; printf '@C ok apm-socks-D\n'; S b; } | runc
+assert_eq "recovering 时收到 ok 回报" recovering "$(snap D a)"
+assert_eq "确认回报后变为 healthy" healthy "$(snap D b)"
+{ printf "$HDR"; T 100; src 1 127.0.0.1:50001; att 1 E; fin 1 E; printf '@C ok apm-socks-E\n'; S a; } | runc
+assert_eq "非 recovering 时的 ok 回报被忽略 (仍是 healthy 且不改时间)" healthy "$(snap E a)"
+{ printf "$HDR"; T 100; src 1 127.0.0.1:50001; att 1 F; fail 1 F "$AUTH"; printf '@C ok apm-socks-F\n'; S a; } | runc
+assert_eq "unhealthy (没有新拨号) 时 ok 回报被忽略" unhealthy "$(snap F a)"
+{ printf "$HDR"; T 100; printf '@C ok apm-socks-Zzz\n@C ok ../x\n@C bogus apm-socks-A\n'; } | runc
+assert_eq "未知 Profile 与非法标签的回报被忽略 不产生状态文件" "" "$(ls "$D" | grep '\.state$')"
+# end 回报后冷却 20 秒, 之后新的拨号再触发; 新的故障周期清除冷却
+{ printf "$HDR"; T 100; src 1 127.0.0.1:50001; att 1 G; fail 1 G "$AUTH"; src 2 127.0.0.1:50002; att 2 G; printf '@C end apm-socks-G\n'; T 105; src 3 127.0.0.1:50003; att 3 G; T 125; src 4 127.0.0.1:50004; att 4 G; } | runc
+assert_eq "end 之后冷却内不再触发 冷却过后再触发 (共 2 组)" 2 "$(nconf)"
+{ printf "$HDR"; T 100; src 1 127.0.0.1:50001; att 1 H; fail 1 H "$AUTH"; src 2 127.0.0.1:50002; att 2 H; printf '@C end apm-socks-H\n'; T 101; fail 2 H "$AUTH"; src 3 127.0.0.1:50003; att 3 H; } | runc
+assert_eq "新的故障周期不受上一周期冷却影响 (共 2 组)" 2 "$(nconf)"
+# 只保留最新的 16 个
+{ printf "$HDR"; T 100; src 1 127.0.0.1:50001; att 1 I; fail 1 I "$AUTH"; n=2; while [ $n -le 30 ]; do src $n 127.0.0.1:$((50000 + n)); att $n I; n=$((n + 1)); done; } | runc
+assert_eq "请求文件最多 16 个待确认连接" 16 "$(grep -c . "$D/confirm.apm-socks-I.req")"
+assert_not_contains "保留的是最新的" "$(cat "$D/confirm.apm-socks-I.req")" "127.0.0.1:50002 "
+# 没有设置确认脚本时完全不启用 B
+{ printf "$HDR"; T 100; src 1 127.0.0.1:50001; att 1 J; fail 1 J "$AUTH"; src 2 127.0.0.1:50002; att 2 J; } | run
+assert_eq "没有 SBH_CONFIRM 时不产生请求文件" "" "$(ls "$D" | grep '^confirm\.')"
 
 # ---- 源码检查: 状态机不含任何主动探测 ----
 SRC=$(cat "$AWKF")

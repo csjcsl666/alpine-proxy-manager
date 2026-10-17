@@ -17,6 +17,15 @@ BEGIN {
     pcount = 0; seq = 0
     prefix = "apm-socks-"
     tclock = ENVIRON["SBH_TEST_CLOCK"]
+    confirm = ENVIRON["SBH_CONFIRM"]   # 恢复确认脚本路径, 为空表示不启用 B
+    inflight_ttl = 60
+    cooldown = 20   # 一组查询结束后到下一组之间的最短间隔, 持续有新连接时也不会形成连续轮询
+    # 上一个监控进程可能被强制结束而没有执行 END, 它留下的状态已经没有事件支撑, 一律回到 unknown (保留时间戳)
+    cmd = "ls '" dir "' 2>/dev/null"
+    while ((cmd | getline lf) > 0) {
+        if (lf ~ /^apm-socks-[A-Za-z0-9._-]+\.state$/) { tg0 = substr(lf, 1, length(lf) - 6); load(tg0); reason[tg0] = "monitor-down"; save(tg0) }
+    }
+    close(cmd)
 }
 
 function now() { return (tclock != "") ? fake : systime() }
@@ -45,15 +54,24 @@ function save(tag,    f) {
 }
 
 function setst(tag, s, r) {
+    # 新的故障周期从头开始: 冷却只用于同一个恢复周期内, 进入 unhealthy 或回到 healthy 都清除
+    if (s == "unhealthy" || s == "healthy") delete cooled[tag]
     if (st[tag] != s) since[tag] = now()
     st[tag] = s; reason[tag] = r
     save(tag)
+}
+
+# 入站日志里的来源地址, 用来把日志里的连接编号和 Clash API 的 /connections 条目精确对应 (入站日志先于出站日志)
+function note_src(id, s,    p) {
+    if (!(id in srcof)) { scount++; if (scount > 8192) { delete srcof; scount = 0 } }
+    srcof[id] = s
 }
 
 function addpending(id, tag) {
     if (!(id in ptag)) {
         pcount++
         pseq[id] = ++seq
+        ptime[id] = now()
     }
     ptag[id] = tag
     # 长连接可能一直不结束 限制记录数, 超出就丢弃最旧的一半
@@ -63,12 +81,12 @@ function addpending(id, tag) {
 function trim(    id, cut, n) {
     cut = seq - 2048
     for (id in ptag) {
-        if (pseq[id] <= cut) { delete ptag[id]; delete pseq[id]; pcount-- }
+        if (pseq[id] <= cut) { delete ptag[id]; delete pseq[id]; delete ptime[id]; pcount-- }
     }
 }
 
 function dropid(id) {
-    if (id in ptag) { delete ptag[id]; delete pseq[id]; pcount-- }
+    if (id in ptag) { delete ptag[id]; delete pseq[id]; delete ptime[id]; pcount-- }
 }
 
 # 尝试: 只有 unhealthy 才进入 recovering, degraded 是单次失败 不显示为恢复中
@@ -76,6 +94,28 @@ function on_attempt(id, tag) {
     load(tag)
     addpending(id, tag)
     if (st[tag] == "unhealthy") setst(tag, "recovering", reason[tag])
+    if (st[tag] == "recovering") maybe_confirm(tag)
+}
+
+# 恢复确认 (方案 B): 只有 Profile 处于 recovering 且出现了新的真实拨号, 才启动一组有界的本机 /connections 查询
+# 同一个 Profile 同一时间最多一组 (inflight), 待确认的是该 Profile 最近的未结束连接的来源地址 最多 16 个
+function maybe_confirm(tag,    id, n, f, i, k, cnt, order, ids, rank) {
+    if (confirm == "") return
+    if ((tag in cooled) && now() - cooled[tag] < cooldown) return
+    f = dir "/confirm." tag ".req"
+    cnt = 0
+    for (id in ptag) if (ptag[id] == tag && (id in srcof)) { cnt++; order[cnt] = pseq[id]; ids[cnt] = id }
+    if (cnt == 0) return
+    # 取最新的 16 个
+    n = 0
+    for (k = 1; k <= cnt; k++) { n = 0; for (i = 1; i <= cnt; i++) if (order[i] > order[k]) n++; rank[k] = n }
+    printf "" > f
+    for (k = 1; k <= cnt; k++) if (rank[k] < 16) print srcof[ids[k]] " " ptime[ids[k]] >> f
+    close(f)
+    # 请求文件每次都更新 (正在进行的那一组会在下一轮读到新的待确认连接), 但同一个 Profile 同一时间只启动一组
+    if ((tag in inflight) && now() - inflight[tag] < inflight_ttl) return
+    inflight[tag] = now()
+    system("sh '" confirm "' '" tag "' >/dev/null 2>&1 &")
 }
 
 # 成功证据: 拨号与 SOCKS5 握手完成 (连接已建立) 或上游自己回复了目标侧错误 (上游在线并通过认证)
@@ -127,6 +167,12 @@ function handle(line,    pl, id, tag, rest, p, q, txt, c, ty) {
     q = index(pl, "] ")
     if (q == 0) return
     rest = substr(pl, q + 2)
+    if (rest ~ /^inbound\/[a-z0-9-]+\[[^]]*\]: inbound connection from /) {
+        p = index(rest, " connection from ")
+        note_src(id, substr(rest, p + 17))
+        sub(/"\}$/, "", srcof[id])
+        return
+    }
     if (rest ~ /^outbound\/socks\[/) {
         tag = substr(rest, 16)
         tag = substr(tag, 1, index(tag, "]") - 1)
@@ -165,6 +211,17 @@ NR == 1 {
 }
 
 tclock != "" && /^@T / { fake = $2 + 0; next }
+
+# 恢复确认脚本的回报 (经同一个 FIFO 写入): ok 找到了该 Profile 上已回传数据的连接, end 这一组查询结束
+/^@C (ok|end) / {
+    tg = $3
+    if (tg ~ /^apm-socks-[A-Za-z0-9._-]+$/ && (tg in known)) {
+        delete inflight[tg]; cooled[tg] = now()
+        if ($2 == "ok" && st[tg] == "recovering") on_ok(tg)
+    }
+    next
+}
+
 tclock != "" && /^@S / { for (tg in known) system("cp '" dir "/" tg ".state' '" dir "/" tg ".snap." $2 "'"); next }
 
 /^\{"type":"/ { handle($0) }

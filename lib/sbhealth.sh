@@ -153,68 +153,7 @@ sbh_purge() {
 }
 
 # ---- 常驻进程 ----
-
-_sbh_stop_children() {
-    local _p
-    for _p in $SBH_PIDS; do kill "$_p" 2>/dev/null; done
-    SBH_PIDS=
-    [ -z "${SBH_FIFO:-}" ] || rm -f -- "$SBH_FIFO"
-}
-
-# 订阅一次, 订阅断开 (sing-box 停止 重启 密钥错误) 时返回
-_sbh_stream() { # 端口 密钥
-    local _d _aw _nc
-    _d=$(env_path "$SBH_RUN")
-    SBH_FIFO=$_d/stream.$$
-    rm -f -- "$SBH_FIFO"
-    mkfifo -m 600 -- "$SBH_FIFO" || return 1
-    SBH_DIR=$_d awk -f "$APM_HOME/lib/sbhealth.awk" < "$SBH_FIFO" &
-    _aw=$!
-    printf 'GET /logs?level=debug HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\nConnection: close\r\n\r\n' "$SBH_API_HOST" "$2" | nc "$SBH_API_HOST" "$1" > "$SBH_FIFO" 2>/dev/null &
-    _nc=$!
-    SBH_PIDS="$_aw $_nc"
-    wait "$_aw"
-    SBH_RC=$?
-    _sbh_stop_children
-    return 0
-}
-
-# 常驻主循环 由 OpenRC 服务调用: proxy-manager sing-box health run
-sbh_run() {
-    local _d _cfg _port _sec _bo _t0 _t1
-    _d=$(env_path "$SBH_RUN")
-    mkdir -p -- "$_d" 2>/dev/null
-    SBH_PIDS=
-    SBH_FIFO=
-    trap '_sbh_stop_children; rm -f -- "$_d/daemon.pid"; exit 0' TERM INT
-    trap '_sbh_stop_children' EXIT
-    printf '%s\n' "$$" > "$_d/daemon.pid" || { apm_err "无法写入 $_d"; return 1; }
-    _bo=1
-    while :; do
-        _cfg=$(env_path "$SB_CONF")
-        _port=$(sed -n 's/.*"external_controller": *"127\.0\.0\.1:\([0-9][0-9]*\)".*/\1/p' "$_cfg" 2>/dev/null | head -n 1)
-        _sec=$(sed -n 's/.*"secret": *"\([0-9a-f]*\)".*/\1/p' "$_cfg" 2>/dev/null | head -n 1)
-        if [ -n "$_port" ] && [ -n "$_sec" ]; then
-            _t0=$(date +%s)
-            _sbh_stream "$_port" "$_sec"
-            _t1=$(date +%s)
-            if [ "${SBH_RC:-0}" -eq 3 ]; then
-                printf '%s 订阅被拒绝 (密钥不匹配), sing-box 配置需要重新应用\n' "$(date '+%F %T')" >&2
-                _bo=$SBH_BACKOFF_MAX
-            elif [ $((_t1 - _t0)) -ge 10 ]; then
-                printf '%s 事件流已断开 (sing-box 停止或重启), 等待重新订阅\n' "$(date '+%F %T')" >&2
-                _bo=1
-            fi
-        else
-            printf '%s sing-box 配置里没有健康监控的 API, 等待配置\n' "$(date '+%F %T')" >&2
-            _bo=$SBH_BACKOFF_MAX
-        fi
-        sleep "$_bo" &
-        wait $!
-        [ "$_bo" -ge "$SBH_BACKOFF_MAX" ] || _bo=$((_bo * 2))
-        [ "$_bo" -le "$SBH_BACKOFF_MAX" ] || _bo=$SBH_BACKOFF_MAX
-    done
-}
+# 订阅与状态机的主循环在独立的最小脚本 lib/sbhealth-daemon.sh 里 (不加载 Manager 模块 常驻内存最小), bin/proxy-manager 对 sing-box health run 直接转交给它
 
 # ---- 读取状态 (TUI 与 CLI 共用, 只读) ----
 
@@ -314,7 +253,7 @@ sbh_cli() {
     _sub=${1:-status}
     [ $# -eq 0 ] || shift
     case $_sub in
-        run) sbh_run ;;
+        run) exec sh "$APM_HOME/lib/sbhealth-daemon.sh" ;;
         status)
             if sbh_enabled; then printf '健康监控：启用\n'; else printf '健康监控：已关闭\n'; fi
             if sbh_monitor_up; then printf '监控进程：运行中，已订阅 sing-box 事件\n'; else printf '监控进程：未运行或未订阅\n'; fi
