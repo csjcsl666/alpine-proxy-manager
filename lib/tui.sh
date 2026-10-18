@@ -2054,6 +2054,61 @@ tui_health_menu() {
     done
 }
 
+# ---- 自动故障切换 ----
+
+# 列出每台 SOCKS5 服务器的开关, 选编号切换; 恢复验证地址在同一页里设置
+tui_failover_menu() {
+    local _f _items _n _on _u
+    while :; do
+        _tui_clear
+        _tui_header "SOCKS5 · 自动故障切换"
+        _tui_core_kind singbox
+        printf '! 开启后，这台服务器的 SOCKS5 上游确认故障时，新连接会临时通过 VPS 自己的 IP 直连，目标网站会看到 VPS 的出口 IP\n'
+        printf '  上游恢复后自动切回 SOCKS5，已建立的连接不迁移；默认关闭，需要健康监控开启才生效\n\n'
+        _items=
+        for _f in $(state_list_confs "$(state_socks_dir)"); do
+            _n=$(kv_get "$_f" name)
+            if sbh_failover_pref "$_n"; then _on='已开启'; else _on='已关闭'; fi
+            _u=
+            if sbh_failover_pref "$_n" && ! sbh_failover_effective "$_n"; then _u='（健康监控已关闭，暂不生效）'; fi
+            _items="${_items}profile:$_n|$_n    $_on$_u
+"
+        done
+        [ -n "$_items" ] || printf '还没有 SOCKS5 服务器\n\n'
+        printf '恢复验证地址 1：%s\n恢复验证地址 2：%s\n\n' "$(sbh_probe_url_get 1)" "$(sbh_probe_url_get 2)"
+        _items="${_items}urls|设置恢复验证地址"
+        tui_choose "$_items" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            urls) _tui_failover_urls ;;
+            profile:*)
+                _tui_need_root || continue
+                _tui_sb_managed || continue
+                _n=${TUI_KEY#profile:}
+                if sbh_failover_pref "$_n"; then
+                    _tui_quiet singbox_cli health failover "$_n" off
+                elif tui_confirm "开启后 $_n 的上游故障时，新连接会临时通过 VPS 自己的 IP 直连"; then
+                    _tui_quiet singbox_cli health failover "$_n" on
+                fi
+                ;;
+        esac
+        [ "${TUI_EOF:-0}" != 1 ] || return 0
+    done
+}
+
+# 两个独立的 https 地址, 任意一个经该 SOCKS5 请求成功就算恢复; 留空保持不变, 输入 default 恢复默认
+_tui_failover_urls() {
+    local _i
+    for _i in 1 2; do
+        tui_ask "恢复验证地址 $_i（留空不改，default 恢复默认）："
+        [ "${TUI_EOF:-0}" != 1 ] || return 0
+        [ -n "$TUI_IN" ] || continue
+        _tui_need_root || return 0
+        _tui_sb_managed || return 0
+        _tui_quiet singbox_cli health probe-url "$_i" "$TUI_IN"
+    done
+}
+
 # ---- 管理 SOCKS5 服务器 ----
 
 tui_socks_servers_menu() {
@@ -2104,12 +2159,14 @@ tui_socks_menu() {
         printf '\n'
         tui_choose "servers|管理 SOCKS5 服务器
 assign|分配实例出口
-health|健康监控开关" "返回"
+health|健康监控开关
+failover|自动故障切换" "返回"
         case $TUI_KEY in
             back) return 0 ;;
             servers) tui_socks_servers_menu ;;
             assign) tui_assign_menu ;;
             health) tui_health_menu ;;
+            failover) tui_failover_menu ;;
         esac
     done
 }

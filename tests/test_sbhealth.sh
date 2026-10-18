@@ -32,8 +32,8 @@ last() { kv_get "$D/apm-socks-$1.state" last_state; }
 { hdr; T 1000; att 11 A; fin 11 A; } | run
 assert_eq "成功连接后最后状态是 healthy" healthy "$(last A)"
 assert_eq "last_ok 记录事件时间" 1000 "$(st A last_ok)"
-assert_eq "流结束后回到 unknown" unknown "$(st A)"
-assert_eq "流结束后原因是 monitor-down" monitor-down "$(st A reason)"
+assert_eq "流结束后保留最近一次可靠判断" healthy "$(st A)"
+assert_eq "流结束后不编造原因" "" "$(st A reason)"
 assert_eq "流结束时 connected 标记被清除" no "$([ -e "$D/connected" ] && echo yes || echo no)"
 
 # ---- 失败分类 ----
@@ -140,7 +140,7 @@ assert_eq "并发: M 单次失败" degraded "$(last M)"
 assert_eq "状态文件不含目标域名" "" "$(grep -rl 'target.invalid' "$D" 2>/dev/null)"
 assert_eq "状态文件不含上游地址" "" "$(grep -rl '203.0.113.9' "$D" 2>/dev/null)"
 { hdr; att 141 N; fail 141 N "socks5: incorrect user name or password"; } | run
-assert_eq "状态文件内容只有固定字段" "version state reason since last_ok last_fail last_fail_reason streak updated last_state" "$(cut -d= -f1 "$D/apm-socks-N.state" | tr '\n' ' ' | sed 's/ $//')"
+assert_eq "状态文件内容只有固定字段" "version state reason since last_ok last_fail last_fail_reason streak updated failover exit last_state" "$(cut -d= -f1 "$D/apm-socks-N.state" | tr '\n' ' ' | sed 's/ $//')"
 
 # ---- 不相关的行 ----
 { hdr; T 5300; ev info 151 "inbound/socks[in-A]: inbound connection from 127.0.0.1:1"; ev info 151 "outbound/direct[direct]: outbound connection to x:1"; ev error 151 "connection: open connection to x:1 using outbound/direct[direct]: dial tcp: connection refused"; ev error 152 "connection: open connection to x:1 using outbound/socks[not-apm]: socks5: incorrect user name or password"; ev error 153 "connection: open connection to x:1 using outbound/socks[apm-socks-../../etc]: socks5: incorrect user name or password"; printf 'garbage line\n'; printf '{"type":"error"}\n'; } | run
@@ -153,7 +153,7 @@ assert_eq "401 以非零退出" 3 "$?"
 # ---- 流结束后的重连: 历史时间戳被保留, 状态从 unknown 开始 ----
 { hdr; T 6000; att 161 P; fin 161 P; } | run
 { hdr; T 6100; att 162 P; } | runkeep
-assert_eq "重连后第一个事件前没有证据: 流内保持 unknown" unknown "$(last P)"
+assert_eq "重连后第一个事件前没有新证据: 保留最近一次可靠判断" healthy "$(last P)"
 assert_eq "重连后保留旧的 last_ok" 6000 "$(st P last_ok)"
 
 # ---- 无事件 = 无变化, 也没有自行产生的任何输出 ----
@@ -255,6 +255,58 @@ printf 'version=1\nstate=healthy\nreason=\nsince=1\nlast_ok=1\nlast_fail=0\nlast
 printf 'J off 1\n' > "$D/profiles"
 hdr | SBH_DIR=$D SBH_TEST_CLOCK=1 awk -f "$AWKF"
 assert_eq "启动时被关闭的 Profile 的残留状态被删除" no "$([ -e "$D/apm-socks-J.state" ] && echo yes || echo no)"
+
+# ---- 自动故障切换: 状态机只在事件到来时调用脚本, 没有事件不调用 ----
+FOS=$D/fo-stub.sh
+printf '#!/bin/sh\necho "$1 $2" >> "%s/fo.log"\n' "$D" > "$FOS"
+runf() { rm -f "$D"/*.state "$D"/*.snap.* "$D"/connected "$D"/confirm.* "$D"/fo.log "$D"/*.hist; printf '%s' "$1" > "$D/profiles"; SBH_DIR=$D SBH_TEST_CLOCK=1 SBH_FAILOVER=$FOS SBH_HIST=$D awk -f "$AWKF"; sleep 0.2; }
+calls() { cat "$D/fo.log" 2>/dev/null | tr '\n' ';'; }
+rt() { ev debug "$1" "router: match[0] inbound=in-$2 => route(apm-sel-$2)"; }
+# 启动时先把已授权 Profile 的 selector 复位到 SOCKS5
+{ hdr; } | runf "A on 1 fo
+"
+assert_eq "监控启动复位已授权 Profile 的 selector" "reset apm-socks-A;" "$(calls)"
+# 认证失败是明确故障, 立即切到 DIRECT, 只切一次
+{ hdr; T 100; att 1 A; fail 1 A "$AUTH"; att 2 A; fail 2 A "$AUTH"; } | runf "A on 1 fo
+"
+assert_eq "确认故障后切到 DIRECT 且只切一次" "reset apm-socks-A;switch apm-socks-A;reset apm-socks-A;" "$(calls)"
+# 没有授权的 Profile 不切换
+{ hdr; T 100; att 1 B; fail 1 B "$AUTH"; } | runf "B on 1
+"
+assert_eq "未授权的 Profile 不切换" "" "$(calls)"
+# 探测只由真实请求触发, 且遵守首次延迟与退避
+{ hdr; T 100; att 1 A; fail 1 A "$AUTH"; rt 3 A; T 102; rt 4 A; T 106; rt 5 A; T 107; rt 6 A; } | runf "A on 1 fo
+"
+assert_eq "真实请求在首次延迟后触发一次探测, 其间的请求不触发" "reset apm-socks-A;switch apm-socks-A;probe apm-socks-A;reset apm-socks-A;" "$(calls)"
+# 探测失败只表示恢复验证未通过, 不新增故障证据, 继续 DIRECT; 退避后才会再次探测
+{ hdr; T 100; att 1 A; fail 1 A "$AUTH"; T 106; rt 3 A; printf '@F fail apm-socks-A\n'; T 107; rt 4 A; T 117; rt 5 A; S a; } | runf "A on 1 fo
+"
+assert_eq "探测失败后退避内不再探测, 退避过后再探测" "reset apm-socks-A;switch apm-socks-A;probe apm-socks-A;probe apm-socks-A;reset apm-socks-A;" "$(calls)"
+assert_eq "探测失败不改变故障状态" unhealthy "$(snap A a)"
+# 探测成功: 恢复为 healthy, 记录最近恢复时间, 此后再失败可以再次切换
+{ hdr; T 100; att 1 A; fail 1 A "$AUTH"; T 106; rt 3 A; printf '@F ok apm-socks-A\n'; S a; T 200; att 4 A; fail 4 A "$AUTH"; } | runf "A on 1 fo
+"
+assert_eq "探测成功后恢复为 healthy" healthy "$(snap A a)"
+assert_eq "恢复后再次故障可再次切换" "reset apm-socks-A;switch apm-socks-A;probe apm-socks-A;switch apm-socks-A;reset apm-socks-A;" "$(calls)"
+assert_contains "最近故障与最近恢复被记录" "$(cat "$D/A.hist" 2>/dev/null)" "last_recover=106"
+assert_contains "再次故障后最近故障时间更新而最近恢复时间保留" "$(cat "$D/A.hist" 2>/dev/null)" "last_fault=200"
+# DIRECT 期间 selector 标签的错误是直连侧的错误, 不能当作上游证据
+{ hdr; T 100; att 1 A; fail 1 A "$AUTH"; S a; T 101; ev error 9 "connection: open connection to target.invalid:443 using outbound/selector[apm-sel-A]: dial tcp: i/o timeout"; S b; } | runf "A on 1 fo
+"
+assert_eq "DIRECT 期间 selector 上的错误不改变上游状态" "$(snap A a streak)" "$(snap A b streak)"
+# 取消授权 (版本号变化且不再有 fo): 正在 DIRECT 的 Profile 立刻复位到 SOCKS5
+{ hdr; T 100; att 1 A; fail 1 A "$AUTH"; T 101; PC; P "A on 2"; att 2 A; } | runf "A on 1 fo
+"
+assert_eq "取消授权时复位正在 DIRECT 的 selector" "reset apm-socks-A;switch apm-socks-A;reset apm-socks-A;" "$(calls)"
+# 历史目录不存在或不可写: 只丢这次历史, 状态机继续工作
+rm -f "$D"/*.state "$D/profiles"
+{ hdr; T 100; att 1 H1; fail 1 H1 "$AUTH"; } | SBH_DIR=$D SBH_TEST_CLOCK=1 SBH_HIST=$D/no/such/dir awk -f "$AWKF"
+assert_eq "历史目录缺失时状态机仍然记录故障" unhealthy "$(kv_get "$D/apm-socks-H1.state" last_state)"
+# 一个 Profile 的故障不影响另一个
+{ hdr; T 100; att 1 A; fail 1 A "$AUTH"; att 2 C; fin 2 C; } | runf "A on 1 fo
+C on 1 fo
+"
+assert_eq "多 Profile 隔离: 只有故障的那个被切换" "reset apm-socks-A;reset apm-socks-A;reset apm-socks-C;switch apm-socks-A;" "$(calls | tr ';' '\n' | sort | tr '\n' ';')"
 
 # ---- 源码检查: 状态机不含任何主动探测 ----
 SRC=$(cat "$AWKF")

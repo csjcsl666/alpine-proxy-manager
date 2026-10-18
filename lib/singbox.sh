@@ -628,7 +628,10 @@ _sb_route_rules() { # INSTANCES_DIR
                 printf '\n      {\n        "inbound": ["%s"],\n        "action": "reject"\n      }' "$_tag"
                 continue
                 ;;
-            socks:*) _out=$SB_SOCKS_TAG_PREFIX${_eff#socks:} ;;
+            socks:*)
+                # 已授权自动故障切换且监控生效的 Profile 走 selector (默认 SOCKS5, 只有确认故障后才临时切到 direct), 其余保持直接走 SOCKS5 出站
+                if sbh_failover_effective "${_eff#socks:}"; then _out=apm-sel-${_eff#socks:}; else _out=$SB_SOCKS_TAG_PREFIX${_eff#socks:}; fi
+                ;;
             *) _out=direct ;;
         esac
         if [ "$_pol" = 1 ]; then
@@ -672,6 +675,9 @@ ${_eff#socks:}" ;; esac
             printf ',\n      "username": "%s",\n      "password": "%s"' "$(_sb_jesc "$_u")" "$(_sb_jesc "$(kv_get "$_pf" password)")"
         fi
         printf '\n    }'
+        if sbh_failover_effective "$_n"; then
+            printf ',\n    {\n      "type": "selector",\n      "tag": "apm-sel-%s",\n      "outbounds": ["%s%s", "direct"],\n      "default": "%s%s",\n      "interrupt_exist_connections": false\n    }' "$_n" "$SB_SOCKS_TAG_PREFIX" "$_n" "$SB_SOCKS_TAG_PREFIX" "$_n"
+        fi
     done
 }
 

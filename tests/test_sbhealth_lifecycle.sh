@@ -132,39 +132,40 @@ OUT=$("$PM" sing-box health status 2>&1)
 assert_contains "状态命令: 健康监控启用" "$OUT" "健康监控：启用"
 assert_contains "状态命令: 监控进程运行中" "$OUT" "监控进程：运行中"
 assert_contains "状态命令: 说明没有主动探测" "$OUT" "没有事件时不做任何主动探测"
-assert_contains "状态命令: 健康" "$OUT" "状态：● 健康"
-assert_contains "状态命令: 有最近成功时间" "$OUT" "最近成功：$(date -d "@$NOW" '+%H:%M:%S')"
-assert_contains "状态命令: 没有失败" "$OUT" "最近失败：无"
+assert_contains "状态命令: 正常" "$OUT" "健康状态：正常"
+assert_contains "状态命令: 没有故障记录" "$OUT" "最近故障：无记录"
+assert_contains "状态命令: 没有恢复记录" "$OUT" "最近恢复：无记录"
+assert_contains "状态命令: 首选出口" "$OUT" "首选出口：SOCKS5"
+assert_contains "状态命令: 默认关闭自动故障切换" "$OUT" "自动故障切换：已关闭"
 mkst SOCKS-01 unhealthy auth "$((NOW - 100))" "$((NOW - 5))"
 OUT=$("$PM" sing-box health status 2>&1)
-assert_contains "不可用" "$OUT" "状态：● 不可用"
+assert_contains "故障" "$OUT" "健康状态：故障"
 assert_contains "不可用原因" "$OUT" "原因：SOCKS5 认证失败"
 mkst SOCKS-01 recovering refused "$((NOW - 100))" "$((NOW - 5))"
 OUT=$("$PM" sing-box health status 2>&1)
-assert_contains "恢复中" "$OUT" "状态：● 恢复中"
+assert_contains "恢复中" "$OUT" "健康状态：恢复中"
 mkst SOCKS-01 degraded timeout "$NOW" "$NOW"
 OUT=$("$PM" sing-box health status 2>&1)
-assert_contains "异常" "$OUT" "状态：● 异常"
+assert_contains "异常" "$OUT" "健康状态：异常"
 assert_contains "异常原因" "$OUT" "连接上游超时"
 mkst SOCKS-01 healthy "" "$((NOW - 2000))" 0
 OUT=$("$PM" sing-box health status 2>&1)
-assert_contains "健康但太久没有证据: 显示未知" "$OUT" "状态：○ 未知"
-assert_contains "说明原因" "$OUT" "之后没有新连接可以证明"
+assert_contains "很久没有流量: 保留最近一次判断而不是过期" "$OUT" "健康状态：正常"
+assert_not_contains "不再有 15 分钟过期说明" "$OUT" "之后没有新连接可以证明"
 mkst SOCKS-01 healthy "" "$NOW" 0
 rm -f "$D/connected"
 OUT=$("$PM" sing-box health status 2>&1)
-assert_contains "监控未订阅: 不宣称健康" "$OUT" "状态：○ 未知"
-assert_contains "监控未订阅: 说明" "$OUT" "监控未运行"
+assert_contains "监控未订阅: 显示监控异常" "$OUT" "健康状态：监控异常"
 date +%s > "$D/connected"
 rm -rf "$A/proc/777"
 OUT=$("$PM" sing-box health status 2>&1)
-assert_contains "监控进程不在了: 不宣称健康" "$OUT" "监控未运行"
+assert_contains "监控进程不在了: 显示监控异常" "$OUT" "健康状态：监控异常"
 mkdir -p "$A/proc/777"
 "$PM" sing-box stop >/dev/null 2>&1
 mkdir -p "$D"; printf '777\n' > "$D/daemon.pid"; date +%s > "$D/connected"; mkst SOCKS-01 healthy "" "$NOW" 0
 OUT=$("$PM" sing-box health status 2>&1)
 assert_contains "sing-box 停止: 不显示上游健康" "$OUT" "sing-box 未运行"
-assert_not_contains "sing-box 停止: 不显示健康" "$OUT" "状态：● 健康"
+assert_not_contains "sing-box 停止: 不显示正常" "$OUT" "健康状态：正常"
 assert_not_contains "状态输出不含用户名" "$OUT" fictuser
 assert_not_contains "状态输出不含 SOCKS 密码" "$OUT" FictSocksPass
 assert_not_contains "状态输出不含密钥" "$OUT" "$SEC"
@@ -174,23 +175,23 @@ assert_not_contains "状态输出不含密钥" "$OUT" "$SEC"
 mkst SOCKS-01 unhealthy auth "$((NOW - 100))" "$((NOW - 5))"
 date +%s > "$D/connected"; mkdir -p "$A/proc/777"; printf '777\n' > "$D/daemon.pid"
 OUT=$("$PM" sing-box egress AnyTLS-01 show 2>&1)
-assert_contains "实例出口显示上游健康" "$OUT" "上游健康：● 不可用（SOCKS5 认证失败）"
+assert_contains "实例出口显示上游健康" "$OUT" "上游健康：● 故障（SOCKS5 认证失败）"
 assert_contains "实例出口仍显示 Profile 是否启用" "$OUT" "出口：SOCKS SOCKS-01 (已启用)"
 OUT=$("$PM" sing-box socks list 2>&1)
-assert_contains "Profile 列表显示上游健康" "$OUT" "上游健康：● 不可用"
+assert_contains "Profile 列表显示上游健康" "$OUT" "上游健康：● 故障"
 OUT=$("$PM" sing-box socks show SOCKS-01 2>&1)
-assert_contains "Profile 详情显示健康" "$OUT" "状态：● 不可用"
+assert_contains "Profile 详情显示健康" "$OUT" "健康状态：故障"
 assert_contains "Profile 详情显示原因" "$OUT" "原因：SOCKS5 认证失败"
-assert_contains "Profile 详情显示最近失败" "$OUT" "最近失败："
+assert_contains "Profile 详情显示最近故障" "$OUT" "最近故障："
 assert_not_contains "Profile 详情的健康块不含密码" "$OUT" FictSocksPass
 mkst SOCKS-01 healthy "" "$NOW" 0
 OUT=$("$PM" sing-box egress AnyTLS-01 show 2>&1)
-assert_contains "健康时实例出口显示" "$OUT" "上游健康：● 健康"
+assert_contains "正常时实例出口显示" "$OUT" "上游健康：● 正常"
 "$PM" sing-box egress AnyTLS-01 direct >/dev/null 2>&1
 OUT=$("$PM" sing-box socks list 2>&1)
 assert_not_contains "没有被引用的 Profile 不显示上游健康" "$OUT" "上游健康"
 OUT=$("$PM" sing-box socks show SOCKS-01 2>&1)
-assert_not_contains "没有被引用的 Profile 详情没有健康块" "$OUT" "状态：●"
+assert_not_contains "没有被引用的 Profile 详情没有健康块" "$OUT" "健康状态："
 "$PM" sing-box egress AnyTLS-01 socks SOCKS-01 >/dev/null 2>&1
 
 # ---- 监控范围: 全部监控 / 自定义监控 (v0.8.1) ----
@@ -237,7 +238,7 @@ assert_contains "另一台服务器仍然开启" "$(cat "$(RUND)/profiles")" "SO
 assert_eq "出口绑定没有变化" SOCKS-01 "$(kv_get "$(INST AnyTLS-01)" egress_socks)"
 assert_contains "SOCKS-01 的出站和路由仍在 (转发不受影响)" "$(CFG)" '"outbound": "apm-socks-SOCKS-01"'
 OUT=$("$PM" sing-box socks show SOCKS-01 2>&1)
-assert_contains "关闭后详情显示监控已关闭" "$OUT" "状态：- 监控已关闭"
+assert_contains "关闭后详情显示监控已关闭" "$OUT" "健康状态：监控已关闭"
 assert_contains "关闭后说明" "$OUT" "这台服务器没有开启监控"
 OUT=$("$PM" sing-box egress AnyTLS-01 show 2>&1)
 assert_contains "关闭后实例出口显示监控已关闭 (不是故障也不是未知)" "$OUT" "上游健康：- 监控已关闭"
@@ -245,9 +246,9 @@ mkdir -p "$A/proc/777"; printf '777\n' > "$(RUND)/daemon.pid"; date +%s > "$(RUN
 mkst SOCKS-02 healthy "" "$(date +%s)" 0
 mkst SOCKS-01 healthy "" "$(date +%s)" 0
 OUT=$("$PM" sing-box egress Hysteria2-01 show 2>&1)
-assert_contains "另一台服务器照常显示健康" "$OUT" "上游健康：● 健康"
+assert_contains "另一台服务器照常显示正常" "$OUT" "上游健康：● 正常"
 OUT=$("$PM" sing-box egress AnyTLS-01 show 2>&1)
-assert_not_contains "被排除的服务器不显示旧的健康" "$OUT" "● 健康"
+assert_not_contains "被排除的服务器不显示旧的正常" "$OUT" "● 正常"
 OUT=$("$PM" sing-box health profile SOCKS-01 off 2>&1)
 assert_contains "重复关闭没有改动" "$OUT" "已经是关闭"
 # 全部都关闭: 不需要 Clash API 也不需要常驻进程
@@ -269,7 +270,7 @@ assert_eq "切换为全部监控后自定义设置原样保留" SOCKS-01 "$(kv_g
 assert_contains "全部监控: SOCKS-01 也参与" "$(cat "$(RUND)/profiles")" "SOCKS-01 on "
 assert_not_contains "全部监控: 没有关闭项" "$(cat "$(RUND)/profiles")" " off "
 OUT=$("$PM" sing-box egress AnyTLS-01 show 2>&1)
-assert_contains "全部监控时被重新纳入的服务器从未知开始 (不是旧的健康)" "$OUT" "上游健康：○ 未知"
+assert_contains "监控没有订阅时如实显示监控异常 (不沿用旧的正常)" "$OUT" "上游健康：! 监控异常"
 OUT=$("$PM" sing-box health mode custom 2>&1)
 assert_eq "再次切换为自定义监控" custom "$(kv_get "$(CONF)" mode)"
 assert_eq "自定义设置完整恢复: SOCKS-01 关闭" SOCKS-01 "$(kv_get "$(CONF)" monitor_off)"

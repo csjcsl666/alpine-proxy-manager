@@ -11,7 +11,9 @@ R=${APM_SYSROOT:-}
 SBH_RUN=$R/run/apm-sbhealth
 SB_CONF=$R/etc/sing-box/config.json
 SBH_API_HOST=127.0.0.1
+SBH_HIST_DIR=$R/var/lib/sing-box/apm-health
 SBH_BACKOFF_MAX=30
+mkdir -p -- "$SBH_HIST_DIR" 2>/dev/null
 
 env_path() { printf '%s%s' "$R" "$1"; }
 
@@ -30,7 +32,7 @@ _sbh_reap_stale() {
 
 _sbh_stop_children() {
     local _p _i
-    # 先停 nc (订阅断开) 与检查进程, 让状态机读到 EOF 后自己执行 END (所有 Profile 回到未知并清除订阅标记), 最多等 3 秒再强制结束
+    # 先停 nc (订阅断开) 与检查进程, 让状态机读到 EOF 后自己执行 END (保留最近一次可靠判断, 仍在 DIRECT 的 selector 复位为 SOCKS5), 最多等 3 秒再强制结束
     _p=${SBH_PIDS#* }
     for _p in $_p; do kill "$_p" 2>/dev/null; done
     _i=0
@@ -50,7 +52,7 @@ _sbh_stream() { # 端口 密钥
     rm -f -- "$SBH_FIFO"
     mkfifo -m 600 -- "$SBH_FIFO" || return 1
     # 恢复确认脚本需要的参数经环境变量传递 (密钥不出现在命令行)
-    SBH_DIR=$_d SBH_API_PORT=$1 SBH_API_SECRET=$2 SBH_FIFO=$SBH_FIFO SBH_CONFIRM="$APM_HOME/lib/sbhealth-confirm.sh" awk -f "$APM_HOME/lib/sbhealth.awk" < "$SBH_FIFO" &
+    SBH_DIR=$_d SBH_API_PORT=$1 SBH_API_SECRET=$2 SBH_FIFO=$SBH_FIFO SBH_CONFIRM="$APM_HOME/lib/sbhealth-confirm.sh" SBH_FAILOVER="$APM_HOME/lib/sbhealth-failover.sh" SBH_HIST="$SBH_HIST_DIR" awk -f "$APM_HOME/lib/sbhealth.awk" < "$SBH_FIFO" &
     _aw=$!
     printf 'GET /logs?level=debug HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer %s\r\nConnection: close\r\n\r\n' "$SBH_API_HOST" "$2" | nc "$SBH_API_HOST" "$1" > "$SBH_FIFO" 2>/dev/null &
     _nc=$!

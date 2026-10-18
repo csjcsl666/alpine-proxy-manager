@@ -25,7 +25,9 @@ ROOT=$E2E_DIR/root
 APM_SYSROOT=$ROOT
 export APM_SYSROOT
 SBDIR=$ROOT/run/apm-sbhealth
-mkdir -p "$ROOT/etc/sing-box" "$ROOT/run"
+mkdir -p "$ROOT/etc/sing-box" "$ROOT/run" "$SBDIR"
+# 监控重启会保留上一次的判断, 所以重复运行前清掉残留的状态文件
+rm -f "$SBDIR"/*.state "$SBDIR"/profiles
 API_PORT=29191
 API_SECRET=0123456789abcdef0123456789abcdef
 UPPASS=UpPassNotSecret0123456789
@@ -291,7 +293,7 @@ section "场景 F 生命周期: 监控重启 sing-box 重启 事件流中断与�
 kill "$MON_PID" 2>/dev/null; wait "$MON_PID" 2>/dev/null
 sleep 0.5
 [ ! -f "$SBDIR/connected" ] && ok "监控退出后订阅标记被清除" || bad "订阅标记残留"
-[ "$(stat_of A)" = unknown ] && ok "监控退出后状态回到未知 不再宣称健康" || bad "监控退出后 A 是 $(stat_of A)"
+[ "$(stat_of A)" = healthy ] && ok "监控退出后保留最近一次可靠判断 (显示层按监控异常处理 不编造新状态)" || bad "监控退出后 A 是 $(stat_of A)"
 [ "$(stat_of A last_ok)" != 0 ] && ok "最近成功时间被保留" || bad "last_ok 丢失"
 start_mon && ok "监控重新启动并订阅" || bad "监控重启后没有订阅"
 MON_PID1=$MON_PID
@@ -301,7 +303,7 @@ expect_state "监控重启后新事件重新建立状态" A healthy
 # sing-box 重启: 事件流中断 监控自动重新订阅
 kill "$SB_PID" 2>/dev/null; wait "$SB_PID" 2>/dev/null
 sleep 1.5
-[ "$(stat_of A)" = unknown ] && ok "sing-box 停止后状态回到未知" || bad "sing-box 停止后 A 是 $(stat_of A)"
+[ "$(stat_of A)" = healthy ] && ok "sing-box 停止后保留最近一次可靠判断 (显示层显示 sing-box 未运行)" || bad "sing-box 停止后 A 是 $(stat_of A)"
 kill -0 "$MON_PID1" 2>/dev/null && ok "sing-box 停止期间监控进程仍在 (等待重新订阅)" || bad "监控进程退出了"
 start_sb || exit 1
 n=0; while [ $n -lt 80 ] && [ ! -f "$SBDIR/connected" ]; do sleep 0.25; n=$((n + 1)); done
@@ -332,7 +334,7 @@ sh "$APM_HOME/lib/sbhealth-daemon.sh" > "$E2E_DIR/mon2.out" 2>&1 &
 MON_PID=$!
 sleep 3
 [ ! -f "$SBDIR/connected" ] && ok "密钥不匹配: 没有订阅标记" || bad "密钥错误却有订阅标记"
-[ "$(stat_of A)" = unknown ] && ok "密钥不匹配: 状态保持未知" || bad "状态 $(stat_of A)"
+[ "$(stat_of A)" = healthy ] && ok "密钥不匹配: 没有新证据 状态保持最近一次可靠判断 (显示层按监控异常处理)" || bad "状态 $(stat_of A)"
 grep -q "密钥不匹配" "$E2E_DIR/mon2.out" && ok "监控给出明确提示" || bad "没有提示: $(cat "$E2E_DIR/mon2.out")"
 kill "$MON_PID" 2>/dev/null; wait "$MON_PID" 2>/dev/null
 cp "$E2E_DIR/cfg.good" "$ROOT/etc/sing-box/config.json"

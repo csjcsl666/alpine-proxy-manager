@@ -260,16 +260,21 @@ proxy-manager sing-box health disable
 proxy-manager sing-box health enable
 proxy-manager sing-box health mode all|custom
 proxy-manager sing-box health profile 名称 on|off
+proxy-manager sing-box health failover [名称 on|off]
+proxy-manager sing-box health probe-url [1|2 https地址|default]
 proxy-manager sing-box egress ID [show] | direct | socks 名称
 ```
 
 - 它与目标访问限制不是同一个功能 目标访问限制决定可以访问哪些目标 SOCKS 出口决定允许之后从哪里出去 两者可以同时使用 允许的目标会走该实例的出口 不会绕过 SOCKS
 - 一个 Profile 可以被多个实例共享 没有绑定就是 DIRECT 升级 Manager 不会改动现有实例
-- SOCKS5 上游健康监控 默认启用 监控范围有两种互斥的模式 全部监控是默认 所有被实例使用的 SOCKS5 服务器都监控 自定义监控可以逐台开关 每台服务器的设置独立保存 切换到全部监控不会抹掉它们 再切回自定义监控时原样恢复 全部监控模式下不能单独改某一台 先切换到自定义监控 sing-box health enable 和 disable 仍然是整体开关 只有实例绑定了 SOCKS Profile 时才生效 一个常驻的小进程订阅 sing-box 自己的事件流 根据真实连接的失败与完成更新每个 Profile 的状态 健康 异常 不可用 恢复中 未知 没有流量时不做任何探测 也不会连接你的 SOCKS5 服务器 上游恢复后下一次真实连接成功就自动变回健康 不需要重启 sing-box 也不需要重新绑定 监控只是观察 不改变出口绑定 不会回退 DIRECT 故障时连接照常被拒绝 状态显示在 SOCKS Profile 与实例出口页面 `sing-box health status` 可以查看全部 长期不结束的连接恢复后可能要等它结束或者有别的连接结束才会确认 常驻内存约 4 MiB 状态文件在内存盘 `/run/apm-sbhealth` 只含状态和时间 不含地址 凭据
+- SOCKS5 上游健康监控 默认启用 监控范围有两种互斥的模式 全部监控是默认 所有被实例使用的 SOCKS5 服务器都监控 自定义监控可以逐台开关 每台服务器的设置独立保存 切换到全部监控不会抹掉它们 再切回自定义监控时原样恢复 全部监控模式下不能单独改某一台 先切换到自定义监控 sing-box health enable 和 disable 仍然是整体开关 只有实例绑定了 SOCKS Profile 时才生效 一个常驻的小进程订阅 sing-box 自己的事件流 根据真实连接的失败与完成更新每个 Profile 的状态 正常 异常 故障 恢复中 监控已关闭 监控异常 没有流量时不做任何探测 也没有 15 分钟过期 没有发现故障就显示正常 可靠故障后显示故障 可靠恢复后显示正常 长时间没有流量保留最近一次判断 也不会连接你的 SOCKS5 服务器 上游恢复后下一次真实连接成功就自动变回正常 不需要重启 sing-box 也不需要重新绑定 监控本身只是观察 不改变出口绑定 默认不会回退 DIRECT 故障时连接照常被拒绝 只有你明确开启了下面的自动故障切换 才会临时直连 状态显示在 SOCKS Profile 与实例出口页面 `sing-box health status` 可以查看全部 长期不结束的连接恢复后可能要等它结束或者有别的连接结束才会确认 常驻内存约 4 MiB 状态文件在内存盘 `/run/apm-sbhealth` 只含状态和时间 不含地址 凭据
+- 自动故障切换 默认关闭 升级不会开启 逐台 Profile 单独授权 在 TUI 的 SOCKS5 出口管理里选 4. 自动故障切换 选编号开关 或使用 `sing-box health failover 名称 on|off` 开启后 这台服务器的 SOCKS5 上游被可靠判定为故障时 新连接临时通过 VPS 自己的出口 IP 直连 目标网站会看到 VPS 的 IP 已建立的连接不迁移 目标访问限制与路由限制仍然生效 上游恢复后自动切回 SOCKS5 不重启 sing-box 也不重新绑定 需要健康监控开启 才会生效 关闭授权会立刻恢复严格的 SOCKS5 监控异常或关闭时会回到严格的 SOCKS5 不会依据过期的故障状态继续 DIRECT
+- 恢复验证只由真实请求触发 没有定时探测 没有 cron 同一台服务器同一时间最多一组验证 按 5 10 20 秒到 300 秒退避 每次最多依次访问两个相互独立的 https 地址 默认 `https://cp.cloudflare.com/generate_204` 与 `https://www.gstatic.com/generate_204` 请求通过 sing-box 自己的出站走指定的 SOCKS5 任意一个通过即视为恢复 都失败则继续 DIRECT 验证失败不会被记录成新的上游故障 如果你的上游访问不了默认地址 请用 `sing-box health probe-url 1|2 https地址` 或在 TUI 的同一页面改成它能访问的地址 开启后请确认哪些服务器正处于 DIRECT
+- 每台服务器只保留最近一次故障时间和最近一次恢复时间 不保存历史列表 不含域名 用户名 密码 在 SOCKS5 服务器页面显示
 - 只支持 SOCKS5 SOCKS5 服务器可以在本机 内网或公网 地址可以是 IPv4 `[IPv6]` 或主机名 主机名以小写存储 由 sing-box 在连接 SOCKS 服务器时解析 解析失败连接就失败 不回落 DIRECT 访问目标的域名不在本机解析 原样交给 SOCKS 服务器由上游解析 认证只有无认证与用户名加密码 密码通过 `--password-stdin` 提供 不接受命令行明文
 - UDP 通过 SOCKS5 UDP ASSOCIATE 转发 如果上游不支持 UDP 则 UDP 失败 不会直连 已用真实 SOCKS5 服务器验证
 - sing-box 的协议实例通过 sing-box 自己的出站使用 SOCKS 出口 Snell 的 SOCKS5 出口是另一套机制 见上文 Snell 网络功能
-- Profile 被禁用 不存在 损坏 或 SOCKS 服务器不可达 认证失败 都不会回落 DIRECT 流量会失败 不自动切换 不负载均衡 不故障转移
+- Profile 被禁用 不存在 损坏 或 SOCKS 服务器不可达 认证失败 默认都不会回落 DIRECT 流量会失败 不负载均衡 不会切换到其他 SOCKS5 服务器 唯一的例外是你逐台明确开启的自动故障切换
 - 删除仍被实例引用的 Profile 会被拒绝并列出引用者 批量启用与禁用一次命令最多重启一次
 - 配置有效不代表 SOCKS 服务器可用 Manager 只报告配置已应用
 
@@ -330,7 +335,7 @@ AnyTLS Hysteria2 TUIC 使用 Manager 生成的自签名证书 客户端默认跳
 - 写操作 安装 更新 配置变更 开始后会忽略 Ctrl+C 断开 SSH 与 TERM 信号 避免留下半装的 Core 或与实例不一致的配置 所以中途关闭 SSH 窗口是安全的 命令会照常完成 只有下载阶段可以中断 如果某个写命令真的卡住 例如服务一直不响应 请在另一个终端用 `kill -9 进程号` 结束它 残留的锁会在下一次命令时自动清理
 - 公网可达性 NAT 与防火墙 Manager 不管理也没有验证
 - Hysteria2 的带宽 混淆 masquerade 等可选参数 TUIC 的可选调优参数 Shadowsocks 多用户 没有实现
-- 不包含 ACME 域名证书 Web 界面 自动 failover 负载均衡 域名形式的目标访问限制 Snell 的 SOCKS 出口
+- 不包含 ACME 域名证书 Web 界面 负载均衡 切换到其他 SOCKS5 服务器 域名形式的目标访问限制 Snell 的 SOCKS 出口
 
 ## 安全提醒
 

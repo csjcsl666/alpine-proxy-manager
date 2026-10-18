@@ -382,7 +382,7 @@ out=$(T '2\n3\n0\n0\n0\n')
 assert_contains "管理中心标题" "$out" "sing-box · SOCKS5 出口管理"
 assert_contains "管理中心直接显示健康监控状态" "$out" "健康监控：已开启（现在没有需要监控的服务器）"
 assert_contains "没有服务器时的提示" "$out" "还没有 SOCKS5 服务器"
-for item in "1. 管理 SOCKS5 服务器" "2. 分配实例出口" "3. 健康监控开关" "0. 返回"; do assert_contains "管理中心含 $item" "$out" "$item"; done
+for item in "1. 管理 SOCKS5 服务器" "2. 分配实例出口" "3. 健康监控开关" "4. 自动故障切换" "0. 返回"; do assert_contains "管理中心含 $item" "$out" "$item"; done
 for gone in "批量启用" "批量禁用" "批量修改"; do assert_not_contains "管理中心没有重复的批量菜单: $gone" "$out" "$gone"; done
 assert_contains "管理中心显示实例出口分配" "$out" "实例出口分配："
 assert_contains "实例默认是 DIRECT" "$out" "AnyTLS-01  → DIRECT"
@@ -494,21 +494,21 @@ mkst() { # 名称 状态 原因 last_ok last_fail
 }
 mkst SOCKS-01 healthy "" "$NOW" 0
 out=$(T '2\n0\n0\n')
-assert_contains "健康: 主页面" "$out" "SOCKS5 出口：SOCKS-01  上游健康：● 健康"
+assert_contains "健康: 主页面" "$out" "SOCKS5 出口：SOCKS-01  上游健康：● 正常"
 out=$(T '2\n3\n0\n0\n0\n')
-assert_contains "健康: 管理中心" "$out" "健康：● 健康"
+assert_contains "健康: 管理中心" "$out" "健康：● 正常"
 assert_contains "管理中心健康监控整体状态" "$out" "健康监控：已开启（事件驱动）"
 mkst SOCKS-01 unhealthy auth "$((NOW - 50))" "$((NOW - 5))"
 out=$(T '2\n0\n0\n')
-assert_contains "不可用: 主页面" "$out" "上游健康：● 不可用（SOCKS5 认证失败）"
+assert_contains "不可用: 主页面" "$out" "上游健康：● 故障（SOCKS5 认证失败）"
 out=$(inst 1 0)
-assert_contains "不可用: 实例页" "$out" "上游健康：● 不可用（SOCKS5 认证失败）"
+assert_contains "不可用: 实例页" "$out" "上游健康：● 故障（SOCKS5 认证失败）"
 assert_contains "不可用: 实例页原因" "$out" "原因：SOCKS5 认证失败"
-assert_contains "不可用: 实例页最近失败" "$out" "最近失败："
+assert_contains "不可用: 实例页最近失败" "$out" "最近故障："
 out=$(T '2\n3\n2\n1\n0\n0\n0\n0\n')
-assert_contains "不可用: 出口选择页" "$out" "1. SOCKS-01  ● 不可用（SOCKS5 认证失败）（当前）"
+assert_contains "不可用: 出口选择页" "$out" "1. SOCKS-01  ● 故障（SOCKS5 认证失败）（当前）"
 out=$(T '2\n3\n0\n0\n0\n')
-assert_contains "不可用: 管理中心" "$out" "健康：● 不可用（SOCKS5 认证失败）"
+assert_contains "不可用: 管理中心" "$out" "健康：● 故障（SOCKS5 认证失败）"
 mkst SOCKS-01 recovering refused "$((NOW - 50))" "$((NOW - 5))"
 out=$(T '2\n0\n0\n')
 assert_contains "恢复中: 主页面" "$out" "上游健康：● 恢复中"
@@ -517,18 +517,18 @@ out=$(T '2\n0\n0\n')
 assert_contains "异常: 主页面" "$out" "上游健康：● 异常（连接上游超时）"
 mkst SOCKS-01 healthy "" "$((NOW - 3000))" 0
 out=$(T '2\n0\n0\n')
-assert_contains "太久没有证据: 显示未知" "$out" "上游健康：○ 未知"
+assert_contains "很久没有流量: 保留最近一次判断" "$out" "上游健康：● 正常"
 mkst SOCKS-01 healthy "" "$NOW" 0
 rm -f "$RUN/connected"
 out=$(T '2\n3\n0\n0\n0\n')
 assert_contains "监控服务没有运行: 管理中心单独提示监控服务异常" "$out" "! 监控服务没有运行"
-assert_not_contains "监控服务没有运行: 不宣称健康" "$out" "● 健康"
-assert_contains "监控服务没有运行: 上游显示未知而不是故障" "$out" "健康：○ 未知"
+assert_not_contains "监控服务没有运行: 不宣称正常" "$out" "● 正常"
+assert_contains "监控服务没有运行: 显示监控异常而不是故障" "$out" "健康：! 监控异常"
 date +%s > "$RUN/connected"
 "$PM" sing-box stop >/dev/null 2>&1
 out=$(T '2\n0\n0\n')
 assert_contains "sing-box 停止: 实例状态" "$out" "○ sing-box 未运行"
-assert_not_contains "sing-box 停止: 不显示健康" "$out" "● 健康"
+assert_not_contains "sing-box 停止: 不显示正常" "$out" "● 正常"
 out=$(T '2\n3\n0\n0\n0\n')
 assert_contains "sing-box 停止: 管理中心说明" "$out" "健康监控：已开启（sing-box 未运行）"
 "$PM" sing-box start >/dev/null 2>&1

@@ -15,8 +15,8 @@ SBH_INIT=/etc/init.d/apm-sbhealth
 SBH_RUN=/run/apm-sbhealth
 SBH_LOG=/var/log/sing-box/apm-health.log
 SBH_API_HOST=127.0.0.1
-# 健康状态超过这个秒数没有新的连接证据就按 未知 显示 (只影响显示, 不产生任何探测)
-SBH_STALE_SECS=900
+SBH_SEL_PREFIX=apm-sel-
+SBH_HIST_DIR=/var/lib/sing-box/apm-health
 SBH_BACKOFF_MAX=30
 
 _sbh_conf() { printf '%s/sbhealth.conf' "$(state_etc)"; }
@@ -37,6 +37,17 @@ sbh_mode() {
     case $_m in custom) printf 'custom' ;; *) printf 'all' ;; esac
 }
 _sbh_off_list() { [ -f "$(_sbh_conf)" ] && kv_get "$(_sbh_conf)" monitor_off; return 0; }
+# 自动故障切换 (默认关闭, 逐台授权, sbhealth.conf 的 failover_on 记录开启的名称): 故障后新连接临时走 DIRECT, 恢复后自动切回
+# 只有 整体开关开启 并且 这台服务器在监控范围内 时才会生效, 否则回到严格的 SOCKS5 (不会静默依据旧的故障状态继续 DIRECT)
+_sbh_fo_list() { [ -f "$(_sbh_conf)" ] && kv_get "$(_sbh_conf)" failover_on; return 0; }
+sbh_failover_pref() { # NAME, 返回 0 表示已授权
+    case " $(_sbh_fo_list) " in *" $1 "*) return 0 ;; esac
+    return 1
+}
+sbh_failover_effective() { # NAME
+    sbh_failover_pref "$1" && sbh_enabled && sbh_profile_on "$1"
+}
+
 # 这台服务器是否在监控范围内 (只看监控范围, 不看整体开关)
 sbh_profile_on() { # NAME, 返回 0 表示在范围内
     [ "$(sbh_mode)" != custom ] && return 0
@@ -142,12 +153,26 @@ start_pre() {
     checkpath -f -m 0640 -o sing-box:sing-box /var/log/sing-box/apm-health.log
     # 监控范围: 运行目录是内存盘, 开机时从配置恢复 (守护进程是 sing-box 用户, 读不了 root 才可读的配置)
     # 全部监控模式没有任何关闭项; 自定义监控模式把被关闭的服务器写进去
+    checkpath -d -m 0755 -o sing-box:sing-box /var/lib/sing-box/apm-health
     : > /run/apm-sbhealth/profiles
-    if [ "$(sed -n 's/^mode=//p' /etc/alpine-proxy-manager/sbhealth.conf 2>/dev/null)" = custom ]; then
-        for _n in $(sed -n 's/^monitor_off=//p' /etc/alpine-proxy-manager/sbhealth.conf 2>/dev/null); do
-            printf '%s off 0\n' "$_n" >> /run/apm-sbhealth/profiles
+    _c=/etc/alpine-proxy-manager/sbhealth.conf
+    _custom=no
+    [ "$(sed -n 's/^mode=//p' $_c 2>/dev/null)" = custom ] && _custom=yes
+    _on=yes
+    [ "$(sed -n 's/^enabled=//p' $_c 2>/dev/null)" = false ] && _on=no
+    _off=
+    [ "$_custom" = yes ] && _off=$(sed -n 's/^monitor_off=//p' $_c 2>/dev/null)
+    for _n in $_off; do
+        printf '%s off 0\n' "$_n" >> /run/apm-sbhealth/profiles
+    done
+    # 已授权自动故障切换的服务器带 fo 标记 (整体关闭或被排除出监控范围的不带)
+    if [ "$_on" = yes ]; then
+        for _n in $(sed -n 's/^failover_on=//p' $_c 2>/dev/null); do
+            case " $_off " in *" $_n "*) continue ;; esac
+            printf '%s on 0 fo\n' "$_n" >> /run/apm-sbhealth/profiles
         done
     fi
+    { sed -n 's/^probe_url=//p' $_c 2>/dev/null | head -n 1; sed -n 's/^probe_url2=//p' $_c 2>/dev/null | head -n 1; } > /run/apm-sbhealth/probe_url
     chmod 644 /run/apm-sbhealth/profiles
 }
 EOF
@@ -195,6 +220,7 @@ sbh_purge() {
     local _f
     sbh_remove
     rm -f -- "$(_sbh_conf)" "$(env_path "$SBH_LOG")"
+    rm -rf -- "$(env_path "$SBH_HIST_DIR")"
     # 配置的事务备份里也含有密钥, 一并删除
     for _f in "$(state_backup_dir)"/sbhealth.conf.bak.*; do
         [ -e "$_f" ] && rm -f -- "$_f"
@@ -216,12 +242,22 @@ sbh_monitor_up() {
     [ -n "$_pid" ] && [ -d "$(env_path /proc)/$_pid" ]
 }
 
-# sbh_view 名称 -> SBH_V_STATE (healthy degraded unhealthy recovering unknown off) SBH_V_REASON SBH_V_OK SBH_V_FAIL SBH_V_NOTE
+# sbh_view 名称 -> SBH_V_STATE (healthy degraded unhealthy recovering off down stopped) SBH_V_REASON SBH_V_OK SBH_V_FAIL SBH_V_NOTE
+#   SBH_V_EXIT socks|direct (当前出口) SBH_V_FO on|off (自动故障切换是否生效) SBH_V_HFAULT SBH_V_HREC 最近一次故障与恢复 SBH_V_VERIFIED yes|no 是否有过真实连接证据
+# 界面语义: 没有发现故障就是 正常, 不因为一段时间没有流量而变成未知; 监控关闭显示 监控已关闭, 监控服务没有运行显示 监控异常
 sbh_view() {
-    local _f _now _ok _fail
-    SBH_V_STATE=unknown; SBH_V_REASON=; SBH_V_OK=0; SBH_V_FAIL=0; SBH_V_NOTE=
+    local _f _h
+    SBH_V_STATE=healthy; SBH_V_REASON=; SBH_V_OK=0; SBH_V_FAIL=0; SBH_V_NOTE=; SBH_V_EXIT=socks; SBH_V_FO=off; SBH_V_HFAULT=0; SBH_V_HREC=0; SBH_V_VERIFIED=no
+    _h=$(env_path "$SBH_HIST_DIR")/$1.hist
+    if [ -f "$_h" ]; then
+        SBH_V_HFAULT=$(kv_get "$_h" last_fault)
+        SBH_V_HREC=$(kv_get "$_h" last_recover)
+        SBH_V_HFAULT=${SBH_V_HFAULT:-0}
+        SBH_V_HREC=${SBH_V_HREC:-0}
+    fi
     sbh_enabled || { SBH_V_STATE=off; SBH_V_NOTE="健康监控已关闭"; return 0; }
     sbh_profile_on "$1" || { SBH_V_STATE=off; SBH_V_NOTE="这台服务器没有开启监控"; return 0; }
+    if sbh_failover_effective "$1"; then SBH_V_FO=on; fi
     _f=$(env_path "$SBH_RUN")/${SB_SOCKS_TAG_PREFIX}$1.state
     if [ -f "$_f" ]; then
         SBH_V_STATE=$(kv_get "$_f" state)
@@ -229,26 +265,21 @@ sbh_view() {
         SBH_V_OK=$(kv_get "$_f" last_ok)
         SBH_V_FAIL=$(kv_get "$_f" last_fail)
         [ -n "$SBH_V_REASON" ] || SBH_V_REASON=$(kv_get "$_f" last_fail_reason)
+        [ "$(kv_get "$_f" exit)" != direct ] || SBH_V_EXIT=direct
+        [ "${SBH_V_OK:-0}" = 0 ] || SBH_V_VERIFIED=yes
     fi
-    case $SBH_V_STATE in healthy|degraded|unhealthy|recovering|unknown) ;; *) SBH_V_STATE=unknown ;; esac
+    case $SBH_V_STATE in
+        healthy|degraded|unhealthy|recovering) ;;
+        *) SBH_V_STATE=healthy ;;
+    esac
     core_discover singbox
     if [ "$CF_STATE" != running ]; then
-        SBH_V_STATE=unknown; SBH_V_NOTE="sing-box 未运行"; return 0
+        SBH_V_STATE=stopped; SBH_V_NOTE="sing-box 未运行"; SBH_V_EXIT=socks; return 0
     fi
     if ! sbh_monitor_up; then
-        SBH_V_STATE=unknown; SBH_V_NOTE="监控未运行"; return 0
+        SBH_V_STATE=down; SBH_V_NOTE="监控服务没有运行，上游状态无法更新，sing-box 的转发不受影响"; SBH_V_EXIT=socks
+        return 0
     fi
-    _now=$(date +%s)
-    _ok=${SBH_V_OK:-0}
-    case $SBH_V_STATE in
-        healthy)
-            if [ $((_now - _ok)) -gt "$SBH_STALE_SECS" ]; then
-                SBH_V_STATE=unknown; SBH_V_NOTE="最近成功已超过 $((SBH_STALE_SECS / 60)) 分钟，之后没有新连接可以证明"
-            fi
-            ;;
-        unknown) SBH_V_NOTE="尚无真实连接证据" ;;
-    esac
-    _fail=${SBH_V_FAIL:-0}
     return 0
 }
 
@@ -268,33 +299,60 @@ _sbh_hms() { # 纪元秒 -> HH:MM:SS, 0 或空显示 无
     case ${1:-0} in 0|'') printf '无' ;; *) date -d "@$1" '+%H:%M:%S' 2>/dev/null || date -r "$1" '+%H:%M:%S' 2>/dev/null || printf '%s' "$1" ;; esac
 }
 
+# 今天 10:25 / 昨天 23:15 / 10-05 08:00, 没有记录显示 无记录
+_sbh_when() { # 纪元秒
+    local _e _d _t _today _yest
+    _e=${1:-0}
+    case $_e in 0|'') printf '无记录'; return 0 ;; esac
+    _d=$(date -d "@$_e" '+%Y%m%d' 2>/dev/null) || { printf '%s' "$_e"; return 0; }
+    _t=$(date -d "@$_e" '+%H:%M' 2>/dev/null)
+    _today=$(date '+%Y%m%d')
+    _yest=$(date -d "@$(( $(date +%s) - 86400 ))" '+%Y%m%d' 2>/dev/null)
+    if [ "$_d" = "$_today" ]; then printf '今天 %s' "$_t"
+    elif [ "$_d" = "$_yest" ]; then printf '昨天 %s' "$_t"
+    else printf '%s %s' "$(date -d "@$_e" '+%m-%d')" "$_t"; fi
+}
+
+# 一行摘要 (实例页 管理中心 出口选择共用)
+sbh_summary() { # 名称
+    sbh_view "$1"
+    case $SBH_V_STATE in
+        healthy) printf '● 正常' ;;
+        degraded) printf '● 异常（%s）' "$(_sbh_reason_text "$SBH_V_REASON")" ;;
+        unhealthy)
+            printf '● 故障（%s）' "$(_sbh_reason_text "$SBH_V_REASON")"
+            [ "$SBH_V_EXIT" != direct ] || printf '，当前出口 DIRECT'
+            ;;
+        recovering) printf '● 恢复中' ;;
+        off) printf '%s' '- 监控已关闭' ;;
+        down) printf '%s' '! 监控异常' ;;
+        stopped) printf '%s' '○ sing-box 未运行' ;;
+        *) printf '● 正常' ;;
+    esac
+}
+
 # 一个 Profile 的多行显示 (TUI 与 CLI 共用), 不含用户名密码
 sbh_print_profile() { # 名称
     sbh_view "$1"
     case $SBH_V_STATE in
-        healthy) printf '状态：● 健康\n' ;;
-        degraded) printf '状态：● 异常（单次失败）\n'; printf '原因：%s\n' "$(_sbh_reason_text "$SBH_V_REASON")" ;;
-        unhealthy) printf '状态：● 不可用\n'; printf '原因：%s\n' "$(_sbh_reason_text "$SBH_V_REASON")" ;;
-        recovering) printf '状态：● 恢复中（等待真实连接确认）\n'; printf '原因：%s\n' "$(_sbh_reason_text "$SBH_V_REASON")" ;;
-        off) printf '状态：- 监控已关闭\n' ;;
-        *) printf '状态：○ 未知\n' ;;
+        healthy) printf '健康状态：正常\n' ;;
+        degraded) printf '健康状态：异常（单次失败）\n原因：%s\n' "$(_sbh_reason_text "$SBH_V_REASON")" ;;
+        unhealthy) printf '健康状态：故障\n原因：%s\n' "$(_sbh_reason_text "$SBH_V_REASON")" ;;
+        recovering) printf '健康状态：恢复中\n原因：%s\n' "$(_sbh_reason_text "$SBH_V_REASON")" ;;
+        off) printf '健康状态：监控已关闭\n' ;;
+        down) printf '健康状态：监控异常\n' ;;
+        stopped) printf '健康状态：sing-box 未运行\n' ;;
     esac
     [ -z "$SBH_V_NOTE" ] || printf '说明：%s\n' "$SBH_V_NOTE"
-    printf '最近成功：%s\n' "$(_sbh_hms "$SBH_V_OK")"
-    if [ "${SBH_V_FAIL:-0}" = 0 ]; then printf '最近失败：无\n'; else printf '最近失败：%s\n' "$(_sbh_hms "$SBH_V_FAIL")"; fi
-}
-
-# 一行摘要, 用于实例出口绑定显示
-sbh_summary() { # 名称
-    sbh_view "$1"
-    case $SBH_V_STATE in
-        healthy) printf '● 健康' ;;
-        degraded) printf '● 异常（%s）' "$(_sbh_reason_text "$SBH_V_REASON")" ;;
-        unhealthy) printf '● 不可用（%s）' "$(_sbh_reason_text "$SBH_V_REASON")" ;;
-        recovering) printf '● 恢复中' ;;
-        off) printf '%s' '- 监控已关闭' ;;
-        *) printf '○ 未知' ;;
-    esac
+    printf '首选出口：SOCKS5\n'
+    if [ "$SBH_V_EXIT" = direct ]; then printf '当前出口：DIRECT\n'; else printf '当前出口：SOCKS5\n'; fi
+    if sbh_failover_pref "$1"; then
+        if [ "$SBH_V_FO" = on ]; then printf '自动故障切换：已开启\n'; else printf '自动故障切换：已开启（现在没有生效：需要整体监控和这台服务器的监控都开启）\n'; fi
+    else
+        printf '自动故障切换：已关闭\n'
+    fi
+    printf '最近故障：%s\n' "$(_sbh_when "$SBH_V_HFAULT")"
+    printf '最近恢复：%s\n' "$(_sbh_when "$SBH_V_HREC")"
 }
 
 # ---- 命令行 ----
@@ -307,6 +365,8 @@ sbh_cli() {
         run) exec sh "$APM_HOME/lib/sbhealth-daemon.sh" ;;
         profile) sbh_profile_cmd "$@" ;;
         mode) sbh_mode_cmd "$@" ;;
+        failover) sbh_failover_cmd "$@" ;;
+        probe-url) sbh_probe_cmd "$@" ;;
         status)
             if sbh_enabled; then printf '健康监控：启用\n'; else printf '健康监控：已关闭\n'; fi
             if [ "$(sbh_mode)" = custom ]; then printf '监控范围：自定义监控（各服务器按自己的设置）\n'; else printf '监控范围：全部监控\n'; fi
@@ -340,7 +400,7 @@ sbh_cli() {
             if [ "$_sub" = enable ]; then _sb_say "SOCKS5 上游健康监控已启用"; else _sb_say "SOCKS5 上游健康监控已关闭"; fi
             if [ "$SB_APPLY_RESTARTED" = yes ]; then _sb_say "sing-box 已重启并验证"; else _sb_say "运行配置没有变化，没有重启 sing-box"; fi
             ;;
-        *) apm_err "用法: sing-box health [status | enable | disable | mode all|custom | profile 名称 on|off]"; return 2 ;;
+        *) apm_err "用法: sing-box health [status | enable | disable | mode all|custom | profile 名称 on|off | failover [名称 on|off] | probe-url [1|2 地址]]"; return 2 ;;
     esac
 }
 
@@ -357,12 +417,12 @@ sbh_conf_set() { # 键 值
 sbh_detail_lines() { # 名称
     sbh_view "$1"
     case $SBH_V_STATE in
-        degraded|unhealthy|recovering)
-            printf '原因：%s\n' "$(_sbh_reason_text "$SBH_V_REASON")"
-            [ "${SBH_V_FAIL:-0}" = 0 ] || printf '最近失败：%s\n' "$(_sbh_hms "$SBH_V_FAIL")"
-            ;;
+        degraded|unhealthy|recovering) printf '原因：%s\n' "$(_sbh_reason_text "$SBH_V_REASON")" ;;
     esac
     [ -z "$SBH_V_NOTE" ] || printf '说明：%s\n' "$SBH_V_NOTE"
+    printf '首选出口：SOCKS5\n'
+    if [ "$SBH_V_EXIT" = direct ]; then printf '当前出口：DIRECT（故障期间临时直连，恢复后自动切回 SOCKS5）\n'; else printf '当前出口：SOCKS5\n'; fi
+    printf '最近故障：%s\n最近恢复：%s\n' "$(_sbh_when "$SBH_V_HFAULT")" "$(_sbh_when "$SBH_V_HREC")"
 }
 
 # ---- 每个 Profile 的监控开关 ----
@@ -384,11 +444,13 @@ _sbh_runfile_sync() {
         _line=$(printf '%s\n' "$_old" | awk -v n="$_n" '$1 == n { print $2, $3 }')
         if [ -n "$_line" ]; then _os=${_line%% *}; _or=${_line##* }; else _os=on; _or=0; fi
         if [ "$_os" = "$_s" ]; then _r=$_or; else _r=$((_or + 1)); fi
-        printf '%s %s %s\n' "$_n" "$_s" "$_r" >> "$_t"
+        if sbh_failover_effective "$_n"; then printf '%s %s %s fo\n' "$_n" "$_s" "$_r" >> "$_t"; else printf '%s %s %s\n' "$_n" "$_s" "$_r" >> "$_t"; fi
         [ "$_s" = on ] || rm -f -- "$_d/${SB_SOCKS_TAG_PREFIX}$_n.state"
     done
     chmod 644 -- "$_t"
     mv -f -- "$_t" "$_f"
+    { kv_get "$(_sbh_conf)" probe_url; kv_get "$(_sbh_conf)" probe_url2; } > "$_d/probe_url" 2>/dev/null
+    chmod 644 -- "$_d/probe_url" 2>/dev/null
 }
 
 # 清理: 不存在的 Profile 不再占用 monitor_off 与状态文件, 被关闭的 Profile 的状态文件也删除
@@ -400,6 +462,19 @@ _sbh_prune() {
     done
     _keep=${_keep# }
     [ "$_keep" = "$(_sbh_off_list)" ] || sbh_conf_set monitor_off "$_keep" >/dev/null 2>&1 || :
+    _keep=
+    for _n in $(_sbh_fo_list); do
+        [ -f "$(state_socks_dir)/$_n.conf" ] && _keep="$_keep $_n"
+    done
+    _keep=${_keep# }
+    [ "$_keep" = "$(_sbh_fo_list)" ] || sbh_conf_set failover_on "$_keep" >/dev/null 2>&1 || :
+    # 已删除的服务器不留下最近故障与恢复时间
+    for _f in "$(env_path "$SBH_HIST_DIR")"/*.hist; do
+        [ -e "$_f" ] || continue
+        _n=${_f##*/}
+        _n=${_n%.hist}
+        [ -f "$(state_socks_dir)/$_n.conf" ] || rm -f -- "$_f"
+    done
     for _f in "$(env_path "$SBH_RUN")"/apm-socks-*.state; do
         [ -e "$_f" ] || continue
         _n=${_f##*/apm-socks-}
@@ -428,9 +503,10 @@ _sbh_reapply() {
 # 修改监控范围相关的设置 (模式 或 自定义监控里单台服务器的设置), 校验或应用失败就完整恢复原设置
 # 参数: 键 新值 [键 新值]...
 _sbh_scope_commit() {
-    local _old_mode _old_off _k
+    local _old_mode _old_off _old_fo _k
     _old_mode=$(kv_get "$(_sbh_conf)" mode)
     _old_off=$(kv_get "$(_sbh_conf)" monitor_off)
+    _old_fo=$(kv_get "$(_sbh_conf)" failover_on)
     while [ $# -ge 2 ]; do
         sbh_conf_set "$1" "$2" || { apm_err "保存监控设置失败"; return 1; }
         shift 2
@@ -439,6 +515,7 @@ _sbh_scope_commit() {
     if ! _sbh_reapply; then
         sbh_conf_set mode "${_old_mode:-all}" >/dev/null 2>&1
         sbh_conf_set monitor_off "$_old_off" >/dev/null 2>&1
+        sbh_conf_set failover_on "$_old_fo" >/dev/null 2>&1
         _sbh_runfile_sync
         apm_err "监控设置没有改变"
         return 1
@@ -498,4 +575,81 @@ sbh_profile_cmd() { # NAME on|off
     _sbh_scope_commit monitor_off "$_list" || return 1
     if [ "$_a" = on ]; then _sb_say "已开启 $_n 的健康监控，从「未知」开始等待真实连接"; else _sb_say "已关闭 $_n 的健康监控，不影响它的转发"; fi
     sbh_enabled || _sb_say "注意：健康监控被整体关闭（health disable），重新执行 health enable 后才会生效"
+}
+
+# health failover [名称 on|off]: 自动故障切换 (默认关闭, 逐台授权). 开启后这台服务器故障时新连接临时走 VPS 自己的 IP (DIRECT), 恢复后自动切回
+# 关闭会立即取消授权并恢复严格的 SOCKS5 (重新生成运行配置, 即使上游仍然故障也不再 DIRECT)
+sbh_failover_cmd() { # [NAME on|off]
+    local _n _a _list _x _p
+    if [ $# -eq 0 ]; then
+        for _p in $(state_list_confs "$(state_socks_dir)"); do
+            _n=$(kv_get "$_p" name)
+            if sbh_failover_pref "$_n"; then printf '%s  已开启\n' "$_n"; else printf '%s  已关闭\n' "$_n"; fi
+        done
+        return 0
+    fi
+    _n=${1:-}
+    _a=${2:-}
+    { [ $# -eq 2 ] && is_ident "$_n"; } || { apm_err "用法: sing-box health failover [名称 on|off]"; return 2; }
+    case $_a in on|off) ;; *) apm_err "用法: sing-box health failover [名称 on|off]"; return 2 ;; esac
+    [ -f "$(state_socks_dir)/$_n.conf" ] || { apm_err "SOCKS Profile $_n 不存在"; return 1; }
+    _snell_need_root || return 4
+    _snell_lock || return 4
+    trap '_snell_cleanup' EXIT
+    _sb_require_managed no || return 4
+    sbh_conf_ensure || { apm_err "无法创建 sbhealth.conf"; return 1; }
+    _list=
+    for _x in $(_sbh_fo_list); do
+        [ "$_x" = "$_n" ] || _list="$_list $_x"
+    done
+    _list=${_list# }
+    if [ "$_a" = on ]; then _list=${_list:+$_list }$_n; fi
+    if [ "$_list" = "$(_sbh_fo_list)" ]; then
+        _sb_say "$_n 的自动故障切换已经是$([ "$_a" = on ] && echo 开启 || echo 关闭)，没有改动"
+        return 0
+    fi
+    _sbh_scope_commit failover_on "$_list" || return 1
+    if [ "$_a" = on ]; then
+        _sb_say "已开启 $_n 的自动故障切换：它的上游确认故障后，新连接会临时通过 VPS 自己的 IP 直连（DIRECT），上游恢复后自动切回 SOCKS5"
+        sbh_failover_effective "$_n" || _sb_say "注意：现在没有生效，需要整体健康监控和这台服务器的健康监控都开启"
+    else
+        _sb_say "已关闭 $_n 的自动故障切换，恢复严格的 SOCKS5 策略：上游故障时连接失败，不会 DIRECT"
+    fi
+}
+
+# 恢复验证地址 (自动故障切换用): 两个相互独立的 https 地址, 任意一个经该 SOCKS5 出站请求成功就算恢复验证通过
+# probe-url 显示; probe-url 1|2 地址 设置; probe-url 1|2 default 恢复默认. 只影响恢复验证, 不需要重启 sing-box
+SBH_PROBE_DEFAULT_1=https://cp.cloudflare.com/generate_204
+SBH_PROBE_DEFAULT_2=https://www.gstatic.com/generate_204
+sbh_probe_url_get() { # 1|2
+    local _v
+    if [ "$1" = 1 ]; then _v=$(kv_get "$(_sbh_conf)" probe_url); _v=${_v:-$SBH_PROBE_DEFAULT_1}
+    else _v=$(kv_get "$(_sbh_conf)" probe_url2); _v=${_v:-$SBH_PROBE_DEFAULT_2}; fi
+    printf '%s' "$_v"
+}
+sbh_probe_cmd() { # [1|2 URL|default]
+    local _k _v
+    if [ $# -eq 0 ]; then
+        printf '恢复验证地址 1：%s\n恢复验证地址 2：%s\n' "$(sbh_probe_url_get 1)" "$(sbh_probe_url_get 2)"
+        return 0
+    fi
+    { [ $# -eq 2 ] && { [ "$1" = 1 ] || [ "$1" = 2 ]; }; } || { apm_err "用法: sing-box health probe-url [1|2 https地址|default]"; return 2; }
+    _v=$2
+    if [ "$_v" = default ]; then _v=; else
+        case $_v in
+            https://*) ;;
+            *) apm_err "恢复验证地址必须以 https:// 开头（sing-box 的测试接口只接受 https）"; return 2 ;;
+        esac
+        case $_v in *[!A-Za-z0-9._~:/?\&=%@+,-]*) apm_err "恢复验证地址包含不支持的字符"; return 2 ;; esac
+        [ ${#_v} -le 200 ] || { apm_err "恢复验证地址太长"; return 2; }
+    fi
+    _snell_need_root || return 4
+    _snell_lock || return 4
+    trap '_snell_cleanup' EXIT
+    _sb_require_managed no || return 4
+    sbh_conf_ensure || { apm_err "无法创建 sbhealth.conf"; return 1; }
+    if [ "$1" = 1 ]; then _k=probe_url; else _k=probe_url2; fi
+    sbh_conf_set "$_k" "$_v" >/dev/null 2>&1 || { apm_err "无法写入 sbhealth.conf"; return 1; }
+    [ ! -d "$(env_path "$SBH_RUN")" ] || _sbh_runfile_sync
+    _sb_say "恢复验证地址 $1 已设置为 $(sbh_probe_url_get "$1")，下一次恢复验证起生效"
 }

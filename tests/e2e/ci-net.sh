@@ -74,6 +74,8 @@ echo "== uri_forward.sh"
 GW_BIN=$GW_BIN sh "$SRC/tests/e2e/uri_forward.sh" || rc=1
 echo "== sbhealth.sh"
 sh "$SRC/tests/e2e/sbhealth.sh" || rc=1
+echo "== failover.sh"
+sh "$SRC/tests/e2e/failover.sh" || rc=1
 for s in net_access.sh net_egress.sh; do
     echo "== $s"
     sh "$SRC/tests/e2e/$s" || rc=1
