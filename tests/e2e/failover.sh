@@ -49,14 +49,14 @@ sel_is() { [ "$(sel_now "$1")" = "$2" ]; }
 pid_of() {
     local _p
     for _p in /proc/[0-9]*; do
-        case "$(cat "$_p/cmdline" 2>/dev/null | tr '\0' ' ')" in *"$1"*) echo "${_p#/proc/}"; return 0 ;; esac
+        case "$(tr '\0' ' ' 2>/dev/null < "$_p/cmdline")" in *"$1"*) echo "${_p#/proc/}"; return 0 ;; esac
     done
     return 1
 }
 count_procs() {
     local _n=0 _p
     for _p in /proc/[0-9]*; do
-        case "$(cat "$_p/cmdline" 2>/dev/null | tr '\0' ' ')" in *"$1"*) _n=$((_n + 1)) ;; esac
+        case "$(tr '\0' ' ' 2>/dev/null < "$_p/cmdline")" in *"$1"*) _n=$((_n + 1)) ;; esac
     done
     echo "$_n"
 }
@@ -288,7 +288,7 @@ r=$(client 30001); case $r in OK:*) bad "取消授权且上游故障时连接竟
 section "场景 J 脱敏与监控进程"
 leak=
 for p in /proc/[0-9]*; do
-    case "$(cat "$p/cmdline" 2>/dev/null | tr '\0' ' ')" in *"$API_SECRET"*) leak="$leak ${p#/proc/}" ;; esac
+    case "$(tr '\0' ' ' 2>/dev/null < "$p/cmdline")" in *"$API_SECRET"*) leak="$leak ${p#/proc/}" ;; esac
 done
 [ -z "$leak" ] && ok "密钥没有出现在任何进程的命令行" || bad "密钥出现在命令行: $leak"
 grep -l "$UPPASS\|WrongPwNotSecret" "$SBDIR"/*.state "$SBDIR"/profiles "$SBDIR"/probe_url "$HISTDIR"/*.hist >/dev/null 2>&1 && bad "运行目录含密码" || ok "状态与历史文件不含密码"
@@ -300,12 +300,12 @@ rss_of() { awk '/VmRSS/ { print $2 }' "/proc/$1/status" 2>/dev/null; }
 tot=0
 for pat in "sbhealth-daemon.sh" "sbhealth.awk" "nc 127.0.0.1 $API_PORT"; do
     for p in /proc/[0-9]*; do
-        case "$(cat "$p/cmdline" 2>/dev/null | tr '\0' ' ')" in *"$pat"*) r=$(rss_of "${p#/proc/}"); tot=$((tot + ${r:-0})); say "  $pat pid ${p#/proc/} RSS ${r:-0} KiB" ;; esac
+        case "$(tr '\0' ' ' 2>/dev/null < "$p/cmdline")" in *"$pat"*) r=$(rss_of "${p#/proc/}"); tot=$((tot + ${r:-0})); say "  $pat pid ${p#/proc/} RSS ${r:-0} KiB" ;; esac
     done
 done
 [ "$tot" -lt 8192 ] && ok "监控相关常驻进程的 RSS 合计 $tot KiB (小于 8 MiB)" || bad "监控进程 RSS 合计 $tot KiB"
 for p in /proc/[0-9]*; do
-    case "$(cat "$p/cmdline" 2>/dev/null | tr '\0' ' ')" in "$SB_BIN run -c $ROOT/etc/sing-box/config.json"*) say "  sing-box (含 3 个 selector) RSS $(rss_of "${p#/proc/}") KiB" ;; esac
+    case "$(tr '\0' ' ' 2>/dev/null < "$p/cmdline")" in "$SB_BIN run -c $ROOT/etc/sing-box/config.json"*) say "  sing-box (含 3 个 selector) RSS $(rss_of "${p#/proc/}") KiB" ;; esac
 done
 hist_bytes=$(cat "$HISTDIR"/*.hist 2>/dev/null | wc -c)
 [ "$hist_bytes" -lt 512 ] && ok "最近故障与恢复历史文件合计 $hist_bytes 字节" || bad "历史文件 $hist_bytes 字节"
@@ -319,8 +319,9 @@ wait_for sel_is C direct && ok "C 再次处于 DIRECT" || bad "C selector $(sel_
 # 与 OpenRC 停止服务一致: 给守护进程主进程发 SIGTERM (带 cgroup 包装时 MON_PID0 是包装脚本, 所以按命令行找主进程)
 dpid=
 for p in /proc/[0-9]*; do
-    case "$(cat "$p/cmdline" 2>/dev/null | tr '\0' ' ')" in *cgwrap*) ;; *"lib/sbhealth-daemon.sh"*) dpid="$dpid ${p#/proc/}" ;; esac
+    case "$(tr '\0' ' ' 2>/dev/null < "$p/cmdline")" in *cgwrap*) ;; *"lib/sbhealth-daemon.sh"*) dpid="$dpid ${p#/proc/}" ;; esac
 done
+# shellcheck disable=SC2086
 dpid=$(printf '%s\n' $dpid | sort -n | head -n 1)
 [ -z "$dpid" ] || kill "$dpid" 2>/dev/null
 wait_for sel_is C socks && ok "监控停止后 selector 立即回到 SOCKS5" || bad "C selector $(sel_now C)"

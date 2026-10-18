@@ -260,7 +260,7 @@ assert_eq "启动时被关闭的 Profile 的残留状态被删除" no "$([ -e "$
 FOS=$D/fo-stub.sh
 printf '#!/bin/sh\necho "$1 $2" >> "%s/fo.log"\n' "$D" > "$FOS"
 runf() { rm -f "$D"/*.state "$D"/*.snap.* "$D"/connected "$D"/confirm.* "$D"/fo.log "$D"/*.hist; printf '%s' "$1" > "$D/profiles"; SBH_DIR=$D SBH_TEST_CLOCK=1 SBH_FAILOVER=$FOS SBH_HIST=$D awk -f "$AWKF"; sleep 0.2; }
-calls() { cat "$D/fo.log" 2>/dev/null | tr '\n' ';'; }
+calls() { tr '\n' ';' 2>/dev/null < "$D/fo.log"; }
 rt() { ev debug "$1" "router: match[0] inbound=in-$2 => route(apm-sel-$2)"; }
 # 启动时先把已授权 Profile 的 selector 复位到 SOCKS5
 { hdr; } | runf "A on 1 fo
