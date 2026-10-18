@@ -292,7 +292,7 @@ for p in /proc/[0-9]*; do
 done
 [ -z "$leak" ] && ok "密钥没有出现在任何进程的命令行" || bad "密钥出现在命令行: $leak"
 grep -l "$UPPASS\|WrongPwNotSecret" "$SBDIR"/*.state "$SBDIR"/profiles "$SBDIR"/probe_url "$HISTDIR"/*.hist >/dev/null 2>&1 && bad "运行目录含密码" || ok "状态与历史文件不含密码"
-[ "$(cat "$HISTDIR"/A.hist | grep -c .)" -le 3 ] && ok "历史文件很小 (只有版本 最近故障 最近恢复)" || bad "历史文件过大"
+[ "$(grep -c . "$HISTDIR/A.hist")" -le 3 ] && ok "历史文件很小 (只有版本 最近故障 最近恢复)" || bad "历史文件过大"
 kill -0 "$SB_PID0" 2>/dev/null && kill -0 "$MON_PID0" 2>/dev/null && ok "全程 sing-box 与监控进程 PID 不变" || bad "进程被重启"
 
 section "场景 K 资源: 监控与切换相关进程的常驻内存"
@@ -307,7 +307,7 @@ done
 for p in /proc/[0-9]*; do
     case "$(tr '\0' ' ' 2>/dev/null < "$p/cmdline")" in "$SB_BIN run -c $ROOT/etc/sing-box/config.json"*) say "  sing-box (含 3 个 selector) RSS $(rss_of "${p#/proc/}") KiB" ;; esac
 done
-hist_bytes=$(cat "$HISTDIR"/*.hist 2>/dev/null | wc -c)
+hist_bytes=$(wc -c "$HISTDIR"/*.hist 2>/dev/null | tail -n 1 | awk '{ print $1 }')
 [ "$hist_bytes" -lt 512 ] && ok "最近故障与恢复历史文件合计 $hist_bytes 字节" || bad "历史文件 $hist_bytes 字节"
 [ "$(count_procs sbhealth-failover)" = 0 ] && ok "结束时没有残留的切换或探测进程" || bad "残留进程"
 
