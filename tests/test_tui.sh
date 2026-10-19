@@ -34,6 +34,11 @@ leaks() {
     done
 }
 export APM_TUI_ANSI=0
+# 默认下载器: 总是失败的 mock, TUI 测试绝不访问真实网络 (需要成功结果的用例自己指定 APM_DOWNLOADER)
+printf '#!/bin/sh\nexit 1\n' > "$T_TMP/dl-fail"
+chmod +x "$T_TMP/dl-fail"
+APM_DOWNLOADER=$T_TMP/dl-fail
+export APM_DOWNLOADER
 LC_ALL=en_US.UTF-8
 export LC_ALL
 
@@ -711,15 +716,19 @@ assert_contains "已设置时导出页显示地址" "$out" "客户端连接地�
 assert_contains "已设置时才出现更改入口" "$out" "更改客户端连接地址"
 # 取消询问
 "$PM" sing-box endpoint Shadowsocks-01 clear >/dev/null 2>&1
-out=$(T '2\n1\n3\n4\n1\n\n0\n0\n0\n0\n')
-assert_eq "留空取消不保存地址" "" "$(kv_get "$(INST Shadowsocks-01)" public.host)"
+ESC=$(printf '\033')
+out=$(T "2\n1\n3\n4\n1\n${ESC}\n0\n0\n0\n0\n")
+assert_eq "Esc 取消不保存地址" "" "$(kv_get "$(INST Shadowsocks-01)" public.host)"
+assert_contains "Esc 取消有提示" "$out" "已取消"
 # 默认端口使用监听端口
 T '2\n1\n3\n4\n1\nss.example.com\n\n\n0\n0\n0\n0\n' >/dev/null
 assert_eq "留空端口使用监听端口" 20700 "$(kv_get "$(INST Shadowsocks-01)" public.port)"
 # 无效地址由业务层拒绝
 "$PM" sing-box endpoint Shadowsocks-01 clear >/dev/null 2>&1
 out=$(T '2\n1\n3\n4\n1\n0.0.0.0\n443\n\n0\n0\n0\n0\n')
-assert_contains "无效地址由业务层拒绝" "$out" "错误:"
+assert_contains "无效地址在输入时就被统一组件拒绝并说明原因" "$out" "输入无效："
+assert_contains "说明未指定地址不能使用" "$out" "未指定地址 0.0.0.0"
+assert_eq "无效地址没有被保存" "" "$(kv_get "$(INST Shadowsocks-01)" public.host)"
 assert_eq "无效地址没有保存" "" "$(kv_get "$(INST Shadowsocks-01)" public.host)"
 # 更改已设置的地址
 T '2\n1\n1\n5\n8\nchanged.example.com\n32002\n\n0\n0\n0\n0\n' >/dev/null

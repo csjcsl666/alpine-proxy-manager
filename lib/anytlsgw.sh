@@ -344,7 +344,7 @@ _agw_gen_cert() {
     local _d
     _d=$(env_path "$AGW_CONF_DIR")
     mkdir -p -- "$_d" || return 1
-    _agw_openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=anytls-gateway" \
+    _agw_openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=anytls-gateway" -addext "subjectAltName=DNS:anytls-gateway" \
         -keyout "$_d/.key.new" -out "$_d/.cert.new" >/dev/null 2>&1 || { rm -f -- "$_d/.key.new" "$_d/.cert.new"; apm_err "生成自签证书失败"; return 1; }
     chmod 640 -- "$_d/.key.new"
     chmod 644 -- "$_d/.cert.new"
@@ -628,6 +628,7 @@ agw_listener_delete() {
     grep -v "^listener\.$_id\." "$(_agw_state)" > "$_cand"
     _agw_save || return 1
     _agw_commit "$_cand" || return 1
+    rm -f -- "$(_cx_agw_ep_file "$_id")"
     _snell_say "已删除转发线路 $_id"
     _agw_apply
 }
@@ -845,6 +846,7 @@ agw_uninstall() {
     rm -f -- "$(env_path "$AGW_BIN")" "$(env_path "$AGW_BIN").old"
     if [ "$_purge" = 1 ]; then
         rm -rf -- "$(env_path "$AGW_CONF_DIR")" "$(env_path "$AGW_LOG_DIR")" "$(_agw_state)"
+        rm -f -- "$(state_etc)"/anytlsgw-endpoint-*.conf
         for _bk in "$(state_backup_dir)"/anytlsgw.conf.bak.*; do [ -e "$_bk" ] && rm -f -- "$_bk"; done
         [ "$_cu" != yes ] || ! _agw_user_exists || _snell_run deluser "$AGW_USER" >/dev/null 2>&1 || apm_warn "删除用户 $AGW_USER 失败, 已保留"
         [ "$_cg" != yes ] || ! _agw_group_exists || _snell_run delgroup "$AGW_GROUP" >/dev/null 2>&1 || apm_warn "删除用户组 $AGW_GROUP 失败, 已保留"
@@ -908,6 +910,8 @@ agw_cli() {
         uninstall) agw_uninstall "$@" ;;
         cert) agw_cert "$@" ;;
         export) agw_export "$@" ;;
+        client) agw_client "$@" ;;
+        endpoint) agw_endpoint "$@" ;;
         config) agw_listener_list ;;
         listener)
             case ${1:-list} in

@@ -72,6 +72,8 @@ echo "== gw_behavior.sh"
 GW_BIN=$GW_BIN sh "$SRC/tests/e2e/gw_behavior.sh" || rc=1
 echo "== uri_forward.sh"
 GW_BIN=$GW_BIN sh "$SRC/tests/e2e/uri_forward.sh" || rc=1
+echo "== agw_client.sh"
+GW_BIN=$GW_BIN sh "$SRC/tests/e2e/agw_client.sh" || rc=1
 echo "== sbhealth.sh"
 sh "$SRC/tests/e2e/sbhealth.sh" || rc=1
 echo "== failover.sh"

@@ -160,6 +160,8 @@ _cx_load_sb_creds() { # FILE
     CX_SNI=
     CX_TLSMODE=
     CX_CERT=
+    CX_TLSINS=yes
+    CX_SANOK=yes
     case $CX_TYPE in
         tuic) CX_UUID=$(kv_get "$_f" credential.uuid); CX_CC=$(kv_get "$_f" transport.congestion_control) ;;
         shadowsocks) CX_METHOD=$(kv_get "$_f" credential.method) ;;
@@ -210,7 +212,11 @@ _cx_r_show() {
     fi
     if [ -n "$CX_SNI" ]; then
         printf '  TLS Server Name：%s\n' "$CX_SNI"
-        printf '  证书：自签名 (客户端不能按公共 CA 校验, 需要 insecure 或嵌入证书, 这是当前自签名证书模式的限制)\n'
+        if [ "${CX_TLSINS:-yes}" = yes ]; then
+            printf '  证书：自签名 (客户端不能按公共 CA 校验, 需要 insecure 或嵌入证书, 这是当前自签名证书模式的限制)\n'
+        else
+            printf '  证书：由 CA 签发 (客户端按证书链与服务器名称校验, 连接地址需要是证书覆盖的域名)\n'
+        fi
     fi
     [ -z "$CX_UUID" ] || printf '  UUID：%s\n' "$CX_UUID"
     [ -z "$CX_METHOD" ] || printf '  method：%s\n' "$CX_METHOD"
@@ -261,8 +267,20 @@ _cx_r_singbox() { # REDACT EMBED
             ;;
     esac
     if [ -n "$CX_SNI" ]; then
-        printf '      "tls": {\n        "enabled": true,\n        "server_name": "%s",\n' "$CX_SNI"
+        if [ "${CX_TLSINS:-yes}" = no ] && [ "$2" != yes ]; then
+            printf '      "tls": {\n        "enabled": true,\n        "server_name": "%s"\n      }\n' "$CX_SNI"
+        else
+            printf '      "tls": {\n        "enabled": true,\n        "server_name": "%s",\n' "$CX_SNI"
+        fi
         if [ "$2" = yes ]; then
+            if [ "${CX_TLSINS:-yes}" = no ]; then
+                apm_err "$CX_ID: 证书由 CA 签发, 客户端按证书链校验, 不需要也不支持嵌入证书固定校验"
+                return 1
+            fi
+            if [ "${CX_SANOK:-yes}" != yes ]; then
+                apm_err "$CX_ID: 服务端证书没有覆盖 $CX_SNI 的 SAN (只有 CN), 客户端会拒绝这种证书, 不生成嵌入固定校验的配置; 请用 anytls-gateway cert generate 重新生成带 SAN 的证书, 或导入带 SAN 的证书"
+                return 1
+            fi
             _crt=$(env_path "$CX_CERT")
             if ! { [ -r "$_crt" ] && grep -q 'BEGIN CERTIFICATE' "$_crt"; }; then
                 apm_err "$CX_ID: 无法读取服务端证书, 无法嵌入"
@@ -272,7 +290,7 @@ _cx_r_singbox() { # REDACT EMBED
             awk '/BEGIN CERTIFICATE/ { on = 1 } on { a[++n] = $0 } /END CERTIFICATE/ { exit }
                 END { for (i = 1; i <= n; i++) printf "          \"%s\"%s\n", a[i], (i < n ? "," : "") }' "$_crt"
             printf '        ]\n      }\n'
-        else
+        elif [ "${CX_TLSINS:-yes}" = yes ]; then
             printf '        "insecure": true\n      }\n'
         fi
     fi
@@ -290,7 +308,11 @@ _cx_r_url() {
             # 官方格式 scheme://auth@host:port/?sni=..&insecure=1#name, 自签名证书需要 insecure=1
             _auth=$(_cx_pct "$CX_PASS") || return 1
             _sni=$(_cx_pct "$CX_SNI") || return 1
-            printf '%s://%s@%s:%s/?sni=%s&insecure=1#%s\n' "$CX_TYPE" "$_auth" "$_host" "$CX_PORT" "$_sni" "$_name"
+            if [ "${CX_TLSINS:-yes}" = yes ]; then
+                printf '%s://%s@%s:%s/?sni=%s&insecure=1#%s\n' "$CX_TYPE" "$_auth" "$_host" "$CX_PORT" "$_sni" "$_name"
+            else
+                printf '%s://%s@%s:%s/?sni=%s#%s\n' "$CX_TYPE" "$_auth" "$_host" "$CX_PORT" "$_sni" "$_name"
+            fi
             ;;
         shadowsocks)
             # SIP002: 传统 AEAD 的 userinfo 用 base64url (无填充), SIP022 (2022 方法) 必须不用 base64url, method 与密钥分别百分号编码
@@ -481,21 +503,51 @@ _client_timeout() { # 秒数 命令...
     if command -v timeout >/dev/null 2>&1; then timeout "$_s" "$@"; else "$@"; fi
 }
 
-# 输出公网 IPv4 并返回 0, 失败返回 1: 依次尝试每个服务, 每个有短超时, 响应只取前 64 字节的第一行, 经严格校验才接受
+CLIENT_IP6_URLS="https://api6.ipify.org https://ipv6.icanhazip.com"
+
+# 严格的公网 IPv6: 合法的 IPv6 文本, 且属于全局单播 2000::/3, 排除文档用途的 2001:db8::/32
+# 回环 ::1, 未指定 ::, 链路本地 fe80::/10, 唯一本地 fc00::/7, 组播 ff00::/8, IPv4 映射等都不在 2000::/3 内, 一律拒绝
+client_valid_public_ipv6() {
+    local _h _g
+    _h=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    case $_h in *:*) ;; *) return 1 ;; esac
+    _sb_valid_ipv6_dest "$_h" || return 1
+    _g=${_h%%:*}
+    case $_g in
+        2???|3???) ;;
+        *) return 1 ;;
+    esac
+    case $_h in 2001:db8:*|2001:0db8:*) return 1 ;; esac
+    return 0
+}
+
+# 依次尝试每个服务, 每个有短超时, 响应只取前 64 字节的第一行, 经校验函数严格验证才接受
 # 下载器沿用 APM_DOWNLOADER (默认 BusyBox wget), 测试用它替换成 mock, 不依赖第三方服务
-client_public_ip() {
+_client_fetch_ip() { # 校验函数 URL列表
     local _dl _u _t _r
     _dl=${APM_DOWNLOADER:-wget}
     command -v "$_dl" >/dev/null 2>&1 || return 1
     _t=${APM_IP_TIMEOUT:-4}
-    for _u in $CLIENT_IP_URLS; do
+    for _u in $2; do
         _r=$(_client_timeout "$_t" "$_dl" -q -T "$_t" -O - "$_u" 2>/dev/null | head -c 64 | head -n 1 | tr -d '\r \t')
-        if client_valid_public_ipv4 "$_r"; then
+        if "$1" "$_r"; then
             printf '%s' "$_r"
             return 0
         fi
     done
     return 1
+}
+
+# 输出公网 IPv4 并返回 0, 失败返回 1
+client_public_ip() {
+    _client_fetch_ip client_valid_public_ipv4 "$CLIENT_IP_URLS"
+}
+
+# 自动选择: 先 IPv4 (保持原有行为), 取不到再试 IPv6, 两者都失败返回 1
+# 只读查询: 不写任何配置, 不修改网卡 路由 防火墙. 结果只是服务器出口地址, 不保证等于客户端可达的地址 (NAT 与端口映射)
+client_public_ip_auto() {
+    client_public_ip && return 0
+    _client_fetch_ip client_valid_public_ipv6 "$CLIENT_IP6_URLS"
 }
 
 # ---- Snell: Core 级 Public Endpoint 与导出 ----
@@ -614,7 +666,7 @@ snell_export() { # show | secret | info
         info)
             # 不依赖 Public Endpoint: 公网 IP 按需查询, 端口与版本来自 Snell 现有配置与发现事实, 只读, 不写任何文件, 不重启
             _cx_load_snell_creds || return 1
-            _ip=$(client_public_ip) || _ip=
+            _ip=$(client_public_ip_auto) || _ip=
             printf 'Snell 连接信息\n'
             printf '公网 IP：%s\n' "${_ip:-获取失败}"
             printf '监听端口：%s\n' "$(_snell_ports_of "$CX_LISTEN" | sed 's/ /, /g')"
@@ -626,5 +678,192 @@ snell_export() { # show | secret | info
             return 3
             ;;
         *) apm_err "未知的 export 操作: $_act"; return 2 ;;
+    esac
+}
+
+# ---- AnyTLS Gateway: 每条转发线路是一个客户端入口 ----
+# 事实来源: 转发线路记录 (监听端口 AnyTLS 密码) 与网关当前使用的证书 (名称 自签名与否 SAN)
+# 绝不使用该线路的 SOCKS5 上游地址 与 sing-box 实例的任何数据
+# 客户端连接地址 (public.host public.port) 按线路单独保存在 anytlsgw-endpoint-线路ID.conf, 不进入网关配置与 config.json
+
+_cx_agw_ep_file() { printf '%s/anytlsgw-endpoint-%s.conf' "$(state_etc)" "$1"; }
+
+_cx_agw_cert_field() { # openssl x509 参数...
+    _agw_openssl x509 -in "$(env_path "$AGW_CERT")" -noout "$@" 2>/dev/null
+}
+
+# 读取并校验一条转发线路的客户端事实, 缺失或无效就失败, 不猜测不使用默认
+_cx_load_agw_creds() { # ID或端口
+    local _f _id _l _sub _iss _cn _san
+    _f=$(_agw_state)
+    [ -r "$_f" ] || { apm_err "无法读取转发线路记录 (需要 root)"; return 1; }
+    kv_check_syntax "$_f" || { apm_err "转发线路记录无效, 拒绝导出"; return 1; }
+    _id=$(_agw_find_id "$1") || { apm_err "没有这条转发线路: $1"; return 2; }
+    _l=$(_agw_get "$_f" "$_id" listen)
+    _agw_listen_ok "$_l" || { apm_err "转发线路 $_id 的监听地址无效, 拒绝导出"; return 1; }
+    CX_REF=$_id
+    CX_ID="AnyTLS-Gateway-$_id"
+    CX_TYPE=anytls
+    CX_ENABLED=true
+    CX_LISTEN=${_l%:*}
+    CX_LPORT=${_l##*:}
+    CX_PASS=$(_agw_get "$_f" "$_id" password)
+    _agw_pw_ok "$CX_PASS" || { apm_err "转发线路 $_id 的 AnyTLS 密码无效, 拒绝导出"; return 1; }
+    CX_UUID=; CX_METHOD=; CX_CC=; CX_MODE=
+    CX_POLICY=off
+    CX_EGRESS=socks
+    CX_TLSMODE=self-signed
+    CX_CERT=$AGW_CERT
+    CX_TLSINS=yes
+    CX_SANOK=yes
+    [ -r "$(env_path "$AGW_CERT")" ] || { apm_err "无法读取网关证书 $AGW_CERT (需要 root), 拒绝导出"; return 1; }
+    command -v openssl >/dev/null 2>&1 || [ -x "$(env_path /usr/bin/openssl)" ] || { apm_err "需要 openssl 读取网关证书 (apk add openssl), 拒绝导出"; return 1; }
+    _sub=$(_cx_agw_cert_field -subject | sed 's/^subject= *//')
+    _iss=$(_cx_agw_cert_field -issuer | sed 's/^issuer= *//')
+    [ -n "$_sub" ] || { apm_err "无法解析网关证书, 拒绝导出"; return 1; }
+    _cn=$(printf '%s' "$_sub" | sed -n 's/.*CN *= *\([^,\/]*\).*/\1/p' | head -n 1 | sed 's/[[:space:]]*$//')
+    _san=$(_cx_agw_cert_field -ext subjectAltName | sed -n 's/.*DNS:\([^, ]*\).*/\1/p' | head -n 1)
+    if [ -n "$_san" ]; then
+        CX_SNI=$_san
+    elif [ -n "$_cn" ]; then
+        CX_SNI=$_cn
+        CX_SANOK=no
+    else
+        apm_err "网关证书里没有可用的名称 (SAN 或 CN), 无法确定 TLS server name, 拒绝导出"
+        return 1
+    fi
+    printf '%s' "$CX_SNI" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' || { apm_err "网关证书的名称含有不支持的字符, 拒绝导出"; return 1; }
+    if [ "$_sub" != "$_iss" ]; then
+        CX_TLSINS=no
+        CX_TLSMODE=ca
+    fi
+    return 0
+}
+
+_cx_agw_need_endpoint() { # ID
+    local _e
+    _e=$(_cx_agw_ep_file "$1")
+    if [ ! -f "$_e" ]; then
+        apm_err "转发线路 $1 尚未配置客户端连接地址, 请先执行 anytls-gateway endpoint $1 set 主机 端口 (内部监听 ${CX_LISTEN:-?}:${CX_LPORT:-?} 不等于客户端连接地址, SOCKS5 上游也不是)"
+        return 1
+    fi
+    client_endpoint_check "$_e" || return 1
+    CX_HOST=$(kv_get "$_e" public.host)
+    CX_PORT=$(kv_get "$_e" public.port)
+    [ -n "$CX_HOST" ] || { apm_err "客户端连接地址文件无效"; return 1; }
+}
+
+agw_endpoint() { # ID或端口 [show | set HOST PORT | clear]
+    local _ref _id _act _e _h _p _msg _f
+    _ref=${1:-}
+    [ -n "$_ref" ] || { apm_err "用法: anytls-gateway endpoint ID或端口 [show|set 主机 端口|clear]"; return 2; }
+    shift
+    _act=${1:-show}
+    [ $# -eq 0 ] || shift
+    _f=$(_agw_state)
+    [ -r "$_f" ] || { apm_err "无法读取转发线路记录 (需要 root)"; return 1; }
+    _id=$(_agw_find_id "$_ref") || { apm_err "没有这条转发线路: $_ref"; return 2; }
+    _e=$(_cx_agw_ep_file "$_id")
+    case $_act in
+        show)
+            [ $# -eq 0 ] || { apm_err "show 不需要参数"; return 2; }
+            printf '转发线路 %s\n' "$_id"
+            printf '  内部监听：%s (不等于客户端连接地址)\n' "$(_agw_get "$_f" "$_id" listen)"
+            if [ ! -f "$_e" ]; then
+                printf '  客户端连接地址：未配置\n'
+            elif ! client_endpoint_check "$_e" >/dev/null 2>&1; then
+                printf '  客户端连接地址：配置无效\n'
+                return 1
+            else
+                printf '  客户端连接地址：%s:%s\n' "$(_cx_host_uri "$(kv_get "$_e" public.host)")" "$(kv_get "$_e" public.port)"
+            fi
+            printf '  说明：只记录客户端应该连接的地址, 不配置 NAT 与防火墙\n'
+            return 0
+            ;;
+        set)
+            [ $# -eq 2 ] || { apm_err "用法: anytls-gateway endpoint $_ref set 主机 端口"; return 2; }
+            _msg=$(client_host_norm "$1") || { apm_err "$_msg"; return 2; }
+            _h=$_msg
+            is_port "$2" || { apm_err "端口无效: $2 (需要 1 到 65535)"; return 2; }
+            _p=$2
+            ;;
+        clear) [ $# -eq 0 ] || { apm_err "clear 不需要参数"; return 2; } ;;
+        *) apm_err "未知的 endpoint 操作: $_act"; return 2 ;;
+    esac
+    _agw_begin no || return $?
+    state_ensure_dirs || return 1
+    if [ "$_act" = clear ]; then
+        if [ ! -f "$_e" ]; then
+            printf '转发线路 %s 没有客户端连接地址, 没有改动\n' "$_id"
+            return 0
+        fi
+        rm -f -- "$_e"
+        printf '已清除转发线路 %s 的客户端连接地址\n' "$_id"
+    else
+        _snell_ensure_staging || return 1
+        printf 'public.host=%s\npublic.port=%s\n' "$_h" "$_p" > "$SNELL_STAGING/ep" || return 1
+        atomic_install "$SNELL_STAGING/ep" "$_e" 600 || { apm_err "保存失败"; return 1; }
+        printf '已设置转发线路 %s 的客户端连接地址: %s:%s\n' "$_id" "$(_cx_host_uri "$_h")" "$_p"
+    fi
+    printf '没有修改网关配置, AnyTLS Gateway 没有重启 (客户端连接地址只用于导出)\n'
+}
+
+# anytls-gateway client ID或端口 show | secret | sing-box [--redacted] [--embed-cert] | url | qr
+agw_client() {
+    local _ref _act _red _emb _url _qr _rc
+    _ref=${1:-}
+    [ -n "$_ref" ] || { apm_err "用法: anytls-gateway client ID或端口 show|secret|sing-box [--redacted] [--embed-cert]|url|qr"; return 2; }
+    shift
+    _act=${1:-show}
+    [ $# -eq 0 ] || shift
+    _red=no
+    _emb=no
+    case $_act in
+        sing-box)
+            while [ $# -gt 0 ]; do
+                case $1 in
+                    --redacted) _red=yes ;;
+                    --embed-cert) _emb=yes ;;
+                    *) apm_err "未知参数: $1"; return 2 ;;
+                esac
+                shift
+            done
+            ;;
+        show|secret|url|qr) [ $# -eq 0 ] || { apm_err "$_act 不需要参数"; return 2; } ;;
+        *) apm_err "未知的 client 操作: $_act"; return 2 ;;
+    esac
+    _cx_load_agw_creds "$_ref" || return $?
+    case $_act in
+        secret)
+            _cx_warn_secret
+            _cx_r_secret
+            ;;
+        show)
+            _cx_agw_need_endpoint "$CX_REF" || return 1
+            _cx_r_show
+            ;;
+        sing-box)
+            _cx_agw_need_endpoint "$CX_REF" || return 1
+            _url=$(_cx_r_singbox "$_red" "$_emb") || return 1
+            [ "$_red" = yes ] || _cx_warn_secret
+            printf '%s\n' "$_url"
+            ;;
+        url|qr)
+            _cx_agw_need_endpoint "$CX_REF" || return 1
+            _url=$(_cx_r_url) || { apm_err "生成分享 URL 失败"; return 1; }
+            if [ "$_act" = url ]; then
+                _cx_warn_secret
+                printf '%s\n' "$_url"
+                return 0
+            fi
+            _qr=$(_snell_tool qrencode) || {
+                apm_err "二维码是可选功能, 需要 qrencode (apk add libqrencode-tools), Manager 不会自动安装; 分享链接仍可用: client $_ref url"
+                return 5
+            }
+            _cx_warn_secret
+            printf '%s' "$_url" | "$_qr" -t UTF8 -m 1
+            _rc=$?
+            return "$_rc"
+            ;;
     esac
 }

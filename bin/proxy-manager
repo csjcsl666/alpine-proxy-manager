@@ -48,6 +48,8 @@ usage() {
   anytls-gateway listener list | add 参数同 install | delete ID | set ID (--socks-server --socks-port --socks-username --socks-password-stdin | --new-password)
   anytls-gateway cert [show | generate | import --cert-file 文件 --key-file 文件]
   anytls-gateway export [info | secret ID或端口]
+  anytls-gateway endpoint 线路ID或端口 [show | set 主机 端口 | clear]
+  anytls-gateway client 线路ID或端口 show | secret | sing-box [--redacted] [--embed-cert] | url | qr
   sing-box status | info | log [N] | check            状态 事实 日志 配置检查
   sing-box install [--release 标签]    下载官方 musl release 安装并启动 默认 v1.13.14
   sing-box start | stop | restart

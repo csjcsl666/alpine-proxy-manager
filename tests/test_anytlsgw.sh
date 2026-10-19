@@ -321,7 +321,7 @@ new_g tui1
 gw install >/dev/null 2>&1
 out=$(TG '0\n')
 assert_contains "网关主菜单标题" "$out" "AnyTLS Gateway"
-for item in "1. 查看详细信息" "2. 启动" "3. 转发线路管理" "4. 证书管理" "5. 查看日志" "6. 更新" "7. 卸载" "0. 返回"; do
+for item in "1. 查看详细信息" "2. 启动" "3. 转发线路管理" "4. 证书管理" "5. 客户端配置" "6. 查看日志" "7. 更新" "8. 卸载" "0. 返回"; do
     assert_contains "网关主菜单项 $item" "$out" "$item"
 done
 assert_not_contains "网关主菜单不再出现 Listener" "$out" "Listener"

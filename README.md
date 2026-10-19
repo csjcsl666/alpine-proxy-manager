@@ -285,8 +285,12 @@ proxy-manager sing-box egress ID [show] | direct | socks 名称
 ```sh
 proxy-manager sing-box endpoint ID [show] | set 主机 端口 | clear
 proxy-manager snell endpoint [show] | set 主机 端口 | clear
+proxy-manager anytls-gateway endpoint 线路ID或端口 [show] | set 主机 端口 | clear
+proxy-manager anytls-gateway client 线路ID或端口 show | secret | sing-box [--redacted] [--embed-cert] | url | qr
 ```
 
+- 服务器地址选择 所有需要客户端连接地址的 TUI 入口 sing-box 实例与 AnyTLS Gateway 的客户端配置 共用同一个界面 直接按 Enter 自动获取公网 IP 输入 IPv4 IPv6 或域名使用自定义地址 输入 0 并按 Enter 或直接按 Esc 取消并返回 自动获取失败会说明原因 可以再按 Enter 重试 手动输入或返回 自动获取先试 IPv4 取不到再试 IPv6 结果必须是严格的公网地址 回环 私有 链路本地 文档保留地址都不会被接受 这只是服务器的出口地址 服务器在 NAT 后面或使用端口映射时请手动输入客户端实际连接的地址 自动获取是只读的 不修改服务器网络
+- AnyTLS Gateway 的客户端配置 在 AnyTLS Gateway 菜单的 客户端配置 里 每条转发线路是一个客户端入口 有自己的端口和 AnyTLS 密码 功能与 sing-box 实例一致 查看连接信息 查看凭据 导出 sing-box JSON 隐藏凭据 嵌入证书固定校验 分享 URL 二维码 内容来自该线路的记录和网关当前使用的证书 不使用 SOCKS5 上游 也不使用任何 sing-box 实例的数据 缺少必要信息时拒绝导出 证书固定校验只在网关证书带 SAN 的自签名证书上提供 v0.8.3 起新生成的证书带 SAN 旧证书只有 CN 时客户端会拒绝 此时固定校验被拒绝并说明原因 其他导出仍然可用 由 CA 签发的证书按证书链校验 不带 insecure 导出是只读的 不改网关配置 不重启
 - Snell 不需要设置 Public Endpoint 就能使用 TUI 的 `客户端信息` 里 `查看连接信息` 会在查看时通过 HTTPS 查询服务器的公网 IPv4 只用于显示 不保存 查询失败显示 `公网 IP：获取失败` 其余信息照常显示 `snell endpoint` 命令保留 已设置的值不受影响
 - 内部监听地址与端口不等于客户端实际连接的地址 例如 NAT VPS 的内部端口与服务商映射的公网端口往往不同 Public Endpoint 只记录客户端应该连哪里 支持 IPv4 IPv6 与主机名
 - Manager 不配置服务商的 NAT 与端口映射 不修改防火墙 不判断公网是否真的可达 显示的公网 IP 只是查询结果 在 NAT 环境里可能与客户端实际应连接的地址不同 这些需要你自己在服务商面板处理

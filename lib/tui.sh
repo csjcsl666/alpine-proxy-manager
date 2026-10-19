@@ -1044,6 +1044,39 @@ uninstall|卸载"
 
 # ---- AnyTLS Gateway ----
 
+# 客户端配置: 每条转发线路是一个客户端入口 (各有自己的端口与 AnyTLS 密码), 先选线路, 只有一条时直接进入
+tui_agw_client_menu() {
+    local _items _id _n _f
+    while :; do
+        _f=$(_agw_state)
+        _items=
+        _n=0
+        for _id in $(_agw_ids "$_f" 2>/dev/null); do
+            _n=$((_n + 1))
+            _items="${_items}line:$_id|转发线路 $_id（端口 $(_agw_get "$_f" "$_id" listen | sed 's/.*://')）
+"
+        done
+        if [ "$_n" = 0 ]; then
+            printf '当前没有转发线路，请先在 转发线路管理 里添加\n'
+            _tui_pause
+            return 0
+        fi
+        if [ "$_n" = 1 ]; then
+            _id=$(printf '%s' "$_items" | sed -n 's/^line:\([0-9]*\)|.*/\1/p' | head -n 1)
+            tui_export_menu "$_id" agw
+            return 0
+        fi
+        _tui_clear
+        _tui_header "AnyTLS Gateway · 客户端配置"
+        printf '选择要导出客户端配置的转发线路\n\n'
+        tui_choose "${_items%?}" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            line:*) tui_export_menu "${TUI_KEY#line:}" agw ;;
+        esac
+    done
+}
+
 tui_agw_listener_menu() {
     local _pw _srv _port _user _bind _lp
     while :; do
@@ -1206,6 +1239,7 @@ start|启动"
                 _items="$_items
 listener|转发线路管理
 cert|证书管理
+client|客户端配置
 log|查看日志
 update|更新
 uninstall|卸载"
@@ -1236,6 +1270,7 @@ uninstall|卸载"
             start|stop|restart) _tui_core_lifecycle anytlsgw "$TUI_KEY" ;;
             listener) tui_agw_listener_menu ;;
             cert) tui_agw_cert_menu ;;
+            client) tui_agw_client_menu ;;
             log) _tui_log anytlsgw ;;
             update)
                 _tui_need_root || continue
@@ -2173,35 +2208,186 @@ failover|自动故障切换" "返回"
 
 # ---- 客户端配置 ----
 
+# ---- 服务器公网地址输入 (Enter 自动获取 / 手动输入 / Esc 取消) ----
+
+# 读一个字节, 十六进制放 TUI_K, 超时或 EOF 为空
+_tui_getbyte() {
+    TUI_K=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+}
+
+# 读一行服务器地址. 结果在 TUI_IN, 取消 (Esc 或 EOF) 置 TUI_ESC=1
+# 交互终端: 逐键读取, Enter 提交, 单独的 Esc 立即取消; 方向键等转义序列被吞掉, 不会当成取消也不会混进输入
+# 非交互 (测试与管道): 按行读取, 行首的真实 ESC 字符视为取消, EOF 视为取消
+_tui_read_host_line() {
+    local _buf _k _n _nonascii
+    _nonascii=0
+    TUI_IN=
+    TUI_ESC=0
+    if _tui_in_tty && [ "${APM_TUI_NO_RAW:-0}" != 1 ]; then
+        TUI_STTY_SAVED=$(_snell_run stty -g 2>/dev/null) || TUI_STTY_SAVED=
+        if [ -n "$TUI_STTY_SAVED" ] && _snell_run stty -icanon -echo min 1 time 0 2>/dev/null; then
+            _buf=
+            while :; do
+                _tui_getbyte
+                if [ -z "$TUI_K" ]; then TUI_EOF=1; TUI_ESC=1; break; fi
+                case $TUI_K in
+                    0a|0d) break ;;
+                    1b)
+                        _snell_run stty min 0 time 1 2>/dev/null
+                        _tui_getbyte
+                        if [ -z "$TUI_K" ]; then
+                            TUI_ESC=1
+                            break
+                        fi
+                        while [ -n "$TUI_K" ]; do _tui_getbyte; done
+                        _snell_run stty min 1 time 0 2>/dev/null
+                        ;;
+                    7f|08)
+                        if [ -n "$_buf" ]; then
+                            _buf=${_buf%?}
+                            printf '\b \b'
+                        fi
+                        ;;
+                    04) if [ -z "$_buf" ]; then TUI_ESC=1; break; fi ;;
+                    *)
+                        _n=$((0x$TUI_K))
+                        # 非 ASCII (中文等) 不可能是合法的 IP 或域名: 记下来, Enter 时按无效输入处理, 而不是悄悄丢掉后变成"自动获取"
+                        if [ "$_n" -ge 128 ]; then _nonascii=1; fi
+                        if [ "$_n" -ge 32 ] && [ "$_n" -le 126 ] && [ "${#_buf}" -lt 253 ]; then
+                            _k=$(printf '%b' "$(printf '\\%03o' "$_n")")
+                            _buf=$_buf$_k
+                            printf '%s' "$_k"
+                        fi
+                        ;;
+                esac
+            done
+            _tui_restore
+            printf '\n'
+            [ "$TUI_ESC" = 1 ] || TUI_IN=$(printf '%s' "$_buf" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ "$_nonascii" = 0 ] || TUI_IN="含非 ASCII 字符的输入"
+            return 0
+        fi
+        _tui_restore
+    fi
+    if IFS= read -r TUI_IN; then
+        case $TUI_IN in
+            "$(printf '\033')"*) TUI_ESC=1; TUI_IN= ;;
+            *) TUI_IN=$(printf '%s' "$TUI_IN" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//') ;;
+        esac
+    else
+        TUI_EOF=1
+        TUI_ESC=1
+        TUI_IN=
+    fi
+    return 0
+}
+
+# 统一的服务器公网地址选择: 所有需要"客户端连接用的服务器 IP 或域名"的入口都走这里
+# Enter 自动获取公网 IP, 输入合法 IPv4 IPv6 域名则使用输入值, Esc 取消并返回上级
+# 成功返回 0, 规范化后的主机在 TUI_HOST; 取消返回 1. 自动获取只读查询, 不修改服务器的任何网络配置
+tui_ask_server_host() {
+    local _ip _msg _norm
+    TUI_HOST=
+    while :; do
+        printf '\n服务器公网 IP / 域名\n\n'
+        printf '直接按 Enter：自动获取公网 IP\n'
+        printf '输入 IP 或域名：使用自定义地址\n'
+        printf '输入 0 或按 Esc：取消并返回\n\n'
+        printf '请选择：'
+        _tui_read_host_line
+        # 0 必须在 Enter 提交后才生效; 它不是合法的主机, 所以不会与真实输入冲突
+        if [ "$TUI_ESC" = 1 ] || [ "$TUI_IN" = 0 ]; then
+            printf '已取消\n'
+            return 1
+        fi
+        if [ -z "$TUI_IN" ]; then
+            printf '正在查询服务器公网 IP（只读查询，不会修改服务器网络）...\n'
+            if _ip=$(client_public_ip_auto); then
+                printf '已自动获取服务器公网 IP：%s\n' "$_ip"
+                printf '提示：服务器在 NAT 后面或使用了端口映射时，这个地址客户端可能连不上，请改用手动输入\n'
+                TUI_HOST=$_ip
+                return 0
+            fi
+            printf '自动获取失败：无法从查询服务得到有效的公网 IP（网络不可用 查询超时 或返回的不是公网地址）\n'
+            printf '可以再按 Enter 重试，或手动输入 IP 或域名，或输入 0 / 按 Esc 返回\n'
+            continue
+        fi
+        if _norm=$(client_host_norm "$TUI_IN"); then
+            TUI_HOST=$_norm
+            return 0
+        fi
+        _msg=$_norm
+        printf '输入无效：%s\n请重新输入\n' "$_msg"
+    done
+}
+
 # 导出客户端配置需要客户端连接地址（服务器的公网 IP 或域名）, 没有保存过就在需要的这一刻询问并保存, 之后不再询问
 # 已保存的地址不会被改动; 它只用于生成客户端配置, 不配置 NAT 与防火墙
-_tui_need_endpoint() { # ID
-    local _f _h _p
-    _f=$(state_instances_dir)/$1.conf
-    [ -z "$(kv_get "$_f" public.host)" ] || return 0
+# sing-box 实例与 AnyTLS Gateway 的转发线路共用这一套界面与地址选择, 区别只在数据来源 (KIND sb | agw)
+
+_tui_cx_file() { # KIND ID -> 保存客户端连接地址的文件
+    if [ "$1" = agw ]; then _cx_agw_ep_file "$2"; else printf '%s/%s.conf' "$(state_instances_dir)" "$2"; fi
+}
+
+_tui_cx_lport() { # KIND ID -> 内部监听端口 (客户端连接端口的默认值)
+    if [ "$1" = agw ]; then
+        _agw_get "$(_agw_state)" "$2" listen | sed 's/.*://'
+    else
+        kv_get "$(state_instances_dir)/$2.conf" listen_port
+    fi
+}
+
+_tui_cx_cli() { # KIND ID 参数... -> 导出命令
+    local _k _i
+    _k=$1
+    _i=$2
+    shift 2
+    if [ "$_k" = agw ]; then agw_cli client "$_i" "$@"; else singbox_cli export "$_i" "$@"; fi
+}
+
+_tui_cx_endpoint_set() { # KIND ID 主机 端口
+    if [ "$1" = agw ]; then agw_cli endpoint "$2" set "$3" "$4"; else singbox_cli endpoint "$2" set "$3" "$4"; fi
+}
+
+_tui_need_endpoint() { # ID [KIND]
+    local _f _h _p _k
+    _k=${2:-sb}
+    _f=$(_tui_cx_file "$_k" "$1")
+    [ -z "$(kv_get "$_f" public.host 2>/dev/null)" ] || return 0
     _tui_need_root || return 1
     printf '生成客户端配置需要客户端连接的服务器地址，它只用于生成配置，不会修改服务器网络\n'
-    tui_ask "服务器的公网 IP 或域名（留空取消）："
-    [ -n "$TUI_IN" ] || return 1
-    _h=$TUI_IN
-    tui_ask "客户端连接端口（留空使用监听端口 $(kv_get "$_f" listen_port)）："
-    _p=${TUI_IN:-$(kv_get "$_f" listen_port)}
-    _tui_do singbox_cli endpoint "$1" set "$_h" "$_p"
+    tui_ask_server_host || return 1
+    _h=$TUI_HOST
+    tui_ask "客户端连接端口（留空使用监听端口 $(_tui_cx_lport "$_k" "$1")）："
+    _p=${TUI_IN:-$(_tui_cx_lport "$_k" "$1")}
+    _tui_do _tui_cx_endpoint_set "$_k" "$1" "$_h" "$_p"
     if [ "$TUI_RC" -ne 0 ]; then _tui_done; return 1; fi
     return 0
 }
 
-tui_export_menu() { # ID
-    local _f _t _items _ep
-    _f=$(state_instances_dir)/$1.conf
-    _t=$(kv_get "$_f" type)
-    while [ -f "$_f" ]; do
+tui_export_menu() { # ID [KIND]
+    local _f _t _items _ep _k _title
+    _k=${2:-sb}
+    _f=$(_tui_cx_file "$_k" "$1")
+    if [ "$_k" = agw ]; then
+        _t=anytls
+        _title="客户端配置 · AnyTLS Gateway 线路 $1（端口 $(_tui_cx_lport agw "$1")）"
+    else
+        _t=$(kv_get "$_f" type)
+        _title="客户端配置 · $1"
+    fi
+    while [ "$_k" = agw ] || [ -f "$_f" ]; do
+        if [ "$_k" = agw ] && ! _agw_find_id "$1" >/dev/null 2>&1; then return 0; fi
         _tui_clear
-        _tui_header "客户端配置 · $1"
-        _ep=$(kv_get "$_f" public.host)
+        _tui_header "$_title"
+        _ep=$(kv_get "$_f" public.host 2>/dev/null)
         [ -z "$_ep" ] || printf '客户端连接地址：%s:%s\n' "$_ep" "$(kv_get "$_f" public.port)"
         if _sb_type_tls "$_t"; then
-            printf '证书校验：跳过（自签名，免维护）\n'
+            if [ "$_k" = agw ] && _cx_load_agw_creds "$1" >/dev/null 2>&1 && [ "$CX_TLSINS" = no ]; then
+                printf '证书校验：由 CA 签发，客户端按证书链校验\n'
+            else
+                printf '证书校验：跳过（自签名，免维护）\n'
+            fi
         fi
         printf '\n'
         _items="show|查看连接信息
@@ -2221,42 +2407,43 @@ endpoint|更改客户端连接地址"
         tui_choose "$_items" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            secret) _tui_show_secret "$1" ;;
+            secret)
+                if [ "$_k" = agw ]; then _tui_do agw_cli client "$1" secret; _tui_done; else _tui_show_secret "$1"; fi
+                ;;
             endpoint)
                 _tui_need_root || continue
-                tui_ask "服务器的公网 IP 或域名（留空取消）："
-                [ -n "$TUI_IN" ] || continue
-                _ep=$TUI_IN
-                tui_ask "客户端连接端口（留空使用监听端口 $(kv_get "$_f" listen_port)）："
-                _tui_do singbox_cli endpoint "$1" set "$_ep" "${TUI_IN:-$(kv_get "$_f" listen_port)}"
+                tui_ask_server_host || continue
+                _ep=$TUI_HOST
+                tui_ask "客户端连接端口（留空使用监听端口 $(_tui_cx_lport "$_k" "$1")）："
+                _tui_do _tui_cx_endpoint_set "$_k" "$1" "$_ep" "${TUI_IN:-$(_tui_cx_lport "$_k" "$1")}"
                 _tui_done
                 ;;
             show|json-redacted)
-                _tui_need_endpoint "$1" || continue
-                if [ "$TUI_KEY" = show ]; then _tui_do singbox_cli export "$1" show; else _tui_do singbox_cli export "$1" sing-box --redacted; fi
+                _tui_need_endpoint "$1" "$_k" || continue
+                if [ "$TUI_KEY" = show ]; then _tui_do _tui_cx_cli "$_k" "$1" show; else _tui_do _tui_cx_cli "$_k" "$1" sing-box --redacted; fi
                 _tui_done
                 ;;
             json|json-pin|url|qr)
-                _tui_need_endpoint "$1" || continue
+                _tui_need_endpoint "$1" "$_k" || continue
                 tui_confirm "即将输出包含客户端凭据的内容。终端记录或截图可能包含 Secret。" || { _tui_pause; continue; }
                 case $TUI_KEY in
-                    json) _tui_do singbox_cli export "$1" sing-box ;;
-                    json-pin) _tui_do singbox_cli export "$1" sing-box --embed-cert ;;
-                    url) _tui_do singbox_cli export "$1" url ;;
+                    json) _tui_do _tui_cx_cli "$_k" "$1" sing-box ;;
+                    json-pin) _tui_do _tui_cx_cli "$_k" "$1" sing-box --embed-cert ;;
+                    url) _tui_do _tui_cx_cli "$_k" "$1" url ;;
                     qr)
                         if [ -z "$(_snell_tool qrencode 2>/dev/null)" ]; then
                             printf '当前未安装可选工具 qrencode。\nTUI 不会自动安装，如需使用请自行执行 apk add libqrencode-tools。\n分享链接仍可用：导出分享 URL\n'
                             TUI_RC=0
                         else
-                            _tui_do singbox_cli export "$1" qr
+                            _tui_do _tui_cx_cli "$_k" "$1" qr
                         fi
                         ;;
                 esac
-                [ "$TUI_KEY" != json ] || printf '\n提示：也可以在命令行用重定向保存：proxy-manager sing-box export %s sing-box > client.json\n' "$1"
+                [ "$TUI_KEY" != json ] || printf '\n提示：也可以在命令行用重定向保存：%s\n' "$([ "$_k" = agw ] && printf 'proxy-manager anytls-gateway client %s sing-box > client.json' "$1" || printf 'proxy-manager sing-box export %s sing-box > client.json' "$1")"
                 _tui_done
                 ;;
         esac
-        _f=$(state_instances_dir)/$1.conf
+        _f=$(_tui_cx_file "$_k" "$1")
     done
 }
 
