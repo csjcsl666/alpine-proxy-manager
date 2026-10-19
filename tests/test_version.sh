@@ -12,7 +12,8 @@ case $(printf '%s\n' "$out" | sed -n 2p) in
 esac
 
 assert_ok "VERSION 是 semver 形式" sh -c "grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?\$' '$T_ROOT/VERSION'"
-if grep -rn -F "$ver" "$T_ROOT/bin" "$T_ROOT/lib" "$T_ROOT/install.sh" >/dev/null 2>&1; then
+# 第三方组件 graftcp 的版本号 (v0.8.3-apm1) 恰好与 Manager 某个版本号相同, 它是另一个组件的版本, 不算重复写死
+if grep -rn -F "$ver" "$T_ROOT/bin" "$T_ROOT/lib" "$T_ROOT/install.sh" 2>/dev/null | grep -v -i graftcp | grep -q .; then
     t_fail "版本号不得在代码中重复写死"
 else
     t_pass "版本号不得在代码中重复写死"
