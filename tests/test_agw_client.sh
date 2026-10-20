@@ -184,7 +184,9 @@ CAU=$(gw client 2 url 2>/dev/null)
 assert_not_contains "CA 证书: URL 不带 insecure" "$CAU" "insecure"
 assert_contains "CA 证书: URL 带 sni" "$CAU" "sni=vpn.example.com"
 OUT=$(gw client 2 sing-box --embed-cert 2>&1); assert_eq "CA 证书不支持嵌入固定" 1 "$?"
-printf '%s' "$CAJ" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null && t_pass "CA 证书 JSON 语法有效" || t_fail "CA 证书 JSON 语法无效"
+if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$CAJ" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null && t_pass "CA 证书 JSON 语法有效" || t_fail "CA 证书 JSON 语法无效"
+fi
 # ---- TLS 服务名 (SNI): 默认不指定 用户指定优先 嵌入证书与 CA 证书按证书名称 不改证书与网关配置 ----
 put_agw_cert() { # CN [SAN]
     if [ -n "${2:-}" ]; then

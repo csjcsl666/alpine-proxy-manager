@@ -221,11 +221,15 @@ assert_contains "Shadowsocks JSON 密钥原样" "$j" "\"password\": \"$(kv_get "
 assert_not_contains "Shadowsocks JSON 没有 tls" "$j" '"tls"'
 assert_fail "未知参数" "$PM" sing-box export AnyTLS-01 sing-box --bogus
 # 嵌入证书
-j=$("$PM" sing-box export AnyTLS-01 sing-box --embed-cert 2>/dev/null)
-assert_contains "嵌入证书" "$j" '"certificate": ['
-assert_contains "嵌入证书包含证书头" "$j" "BEGIN CERTIFICATE"
-assert_not_contains "嵌入证书时没有 insecure" "$j" insecure
-assert_not_contains "嵌入证书没有私钥" "$j" "PRIVATE KEY"
+if [ -x /usr/bin/openssl ]; then
+    j=$("$PM" sing-box export AnyTLS-01 sing-box --embed-cert 2>/dev/null)
+    assert_contains "嵌入证书" "$j" '"certificate": ['
+    assert_contains "嵌入证书包含证书头" "$j" "BEGIN CERTIFICATE"
+    assert_not_contains "嵌入证书时没有 insecure" "$j" insecure
+    assert_not_contains "嵌入证书没有私钥" "$j" "PRIVATE KEY"
+else
+    t_skip "没有 openssl, 嵌入证书的真实证书解析断言跳过 (CI 会安装 openssl)"
+fi
 mv "$A/etc/sing-box/tls/AnyTLS-01.crt" "$T_TMP/crt.bak"
 assert_fail "证书缺失时嵌入失败" "$PM" sing-box export AnyTLS-01 sing-box --embed-cert
 assert_eq "证书缺失时没有半份输出" "" "$("$PM" sing-box export AnyTLS-01 sing-box --embed-cert 2>/dev/null)"

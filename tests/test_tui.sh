@@ -770,8 +770,12 @@ out=$(T '2\n1\n1\n5\n4\n\n0\n0\n0\n0\n')
 assert_contains "隐藏凭据版本" "$out" '"password": "REDACTED"'
 assert_not_contains "隐藏凭据版本不含密码" "$out" "$APW"
 out=$(T '2\n1\n1\n5\n5\ny\n\n0\n0\n0\n0\n')
-assert_contains "证书固定可选" "$out" '"certificate": ['
-assert_not_contains "证书固定版本没有 insecure" "$out" insecure
+if [ -x /usr/bin/openssl ]; then
+    assert_contains "证书固定可选" "$out" '"certificate": ['
+    assert_not_contains "证书固定版本没有 insecure" "$out" insecure
+else
+    t_skip "没有 openssl, 证书固定的真实证书解析断言跳过 (CI 会安装 openssl)"
+fi
 out=$(T '2\n1\n1\n5\n6\ny\n\n0\n0\n0\n0\n')
 assert_contains "URL" "$out" "anytls://"
 # 缺少 qrencode: 进入二维码功能时自动安装并显示, 不需要退出 APM

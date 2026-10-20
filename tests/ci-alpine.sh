@@ -6,7 +6,8 @@ cd /src
 
 # util-linux-misc 提供 script, 只用于测试里分配伪终端 (apm 的 TTY 行为)
 # tmux 是真实终端模拟器, 只用于测试主菜单内存刷新的光标行为, Manager 本身不依赖它
-apk add --no-cache shellcheck git util-linux-misc tmux >/dev/null
+# openssl 用来生成与解析真实证书 (客户端 TLS 服务名与嵌入证书固定校验的测试), Manager 在用户导出嵌入证书固定校验时才会按需安装它
+apk add --no-cache shellcheck git util-linux-misc tmux openssl >/dev/null
 printf 'Alpine %s, shellcheck %s\n' "$(cat /etc/alpine-release)" "$(shellcheck --version | sed -n 's/^version: //p')"
 
 echo '== sh -n'
