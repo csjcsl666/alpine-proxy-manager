@@ -45,6 +45,8 @@ else
 fi
 "$B" version | head -n 1 | grep -q "sing-box version $VER" || { echo "自报版本不符" >&2; exit 1; }
 
+# 嵌入证书固定校验要解析证书, 需要 openssl (Manager 不会自动安装它, 这里在测试环境里装好)
+command -v openssl >/dev/null 2>&1 || apk add --no-cache openssl >/dev/null 2>&1 || true
 "$B" generate tls-keypair apm.local -m 12 > "$W/kp.pem"
 awk '/BEGIN PRIVATE KEY/,/END PRIVATE KEY/' "$W/kp.pem" > "$W/key.pem"
 awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/' "$W/kp.pem" > "$W/cert.pem"
@@ -166,6 +168,9 @@ run_case() { # 名称 JSON ok|fail 说明
 export_json() { # ID 额外参数... > 输出文件
     local id
     id=$1; shift
+    # 默认不指定 SNI (D139) 嵌入证书固定校验时才从证书解析名称, 所以解析前要告诉它这次是不是嵌入
+    CX_PIN=no
+    [ "${1:-}" != embed ] || CX_PIN=yes
     _cx_load_sb "$W/inst/$id.conf" || return 1
     case ${1:-} in
         embed) _cx_r_singbox no yes ;;

@@ -16,7 +16,11 @@ fi
 INST() { printf '%s/etc/alpine-proxy-manager/instances/%s.conf' "$A" "$1"; }
 CFGSUM() { sha256sum "$A/etc/sing-box/config.json" | cut -c1-16; }
 sbpid() { core_discover singbox; printf '%s' "$CF_PID"; }
-ready() { new_s "$1"; "$PM" sing-box install >/dev/null 2>&1; }
+# 服务端证书用真实 openssl 生成 (CN 与 DNS SAN 与官方 sing-box generate tls-keypair 一致), 客户端导出按真实证书解析 TLS 服务名
+APM_FAKE_REAL_CERT=1
+export APM_FAKE_REAL_CERT
+mk_openssl() { [ -x /usr/bin/openssl ] || return 0; mkdir -p "$A/usr/bin"; printf '#!/bin/sh\nexec /usr/bin/openssl "$@"\n' > "$A/usr/bin/openssl"; chmod +x "$A/usr/bin/openssl"; }
+ready() { new_s "$1"; mk_openssl; "$PM" sing-box install >/dev/null 2>&1; }
 leaks() { # 秘密 允许的位置
     grep -rlF -- "$1" "$A" 2>/dev/null | while IFS= read -r f; do
         ok=0
@@ -138,7 +142,8 @@ assert_contains "show 协议" "$out" "协议：AnyTLS"
 assert_contains "show 服务器" "$out" "服务器：example.com"
 assert_contains "show 端口是 public 端口不是内部端口" "$out" "端口：32001"
 assert_not_contains "show 没有内部端口" "$out" "端口：20001"
-assert_contains "show 的 SNI 与 endpoint 独立" "$out" "TLS Server Name：apm.local"
+assert_contains "show 的 SNI 默认未指定 (与 endpoint 独立)" "$out" "TLS Server Name：未指定"
+assert_not_contains "show 不再显示内部占位名称" "$out" "apm.local"
 assert_contains "show 说明自签名" "$out" "自签名"
 assert_contains "show 说明不配置 NAT" "$out" "不配置 NAT"
 PW_A=$(kv_get "$(INST AnyTLS-01)" credential.password)
@@ -183,7 +188,8 @@ assert_contains "AnyTLS JSON type" "$j" '"type": "anytls"'
 assert_contains "AnyTLS JSON server" "$j" '"server": "example.com"'
 assert_contains "AnyTLS JSON 端口是数字" "$j" '"server_port": 32001,'
 assert_contains "AnyTLS JSON 密码" "$j" "\"password\": \"$PW_A\""
-assert_contains "AnyTLS JSON SNI" "$j" '"server_name": "apm.local"'
+assert_not_contains "AnyTLS JSON 默认不写 server_name" "$j" "server_name"
+assert_not_contains "AnyTLS JSON 不含内部占位名称" "$j" "apm.local"
 assert_contains "AnyTLS JSON insecure" "$j" '"insecure": true'
 assert_not_contains "AnyTLS JSON 没有内部端口" "$j" 20001
 assert_not_contains "AnyTLS JSON 没有私钥" "$j" "PRIVATE KEY"
@@ -226,8 +232,8 @@ assert_eq "证书缺失时没有半份输出" "" "$("$PM" sing-box export AnyTLS
 mv "$T_TMP/crt.bak" "$A/etc/sing-box/tls/AnyTLS-01.crt"
 
 # ---- 分享 URL ----
-assert_eq "AnyTLS URL" "anytls://$PW_A@example.com:32001/?sni=apm.local&insecure=1#AnyTLS-01" "$("$PM" sing-box export AnyTLS-01 url 2>/dev/null)"
-assert_eq "Hysteria2 URL" "hysteria2://$(kv_get "$(INST Hysteria2-01)" credential.password)@example.com:32002/?sni=apm.local&insecure=1#Hysteria2-01" "$("$PM" sing-box export Hysteria2-01 url 2>/dev/null)"
+assert_eq "AnyTLS URL" "anytls://$PW_A@example.com:32001/?insecure=1#AnyTLS-01" "$("$PM" sing-box export AnyTLS-01 url 2>/dev/null)"
+assert_eq "Hysteria2 URL" "hysteria2://$(kv_get "$(INST Hysteria2-01)" credential.password)@example.com:32002/?insecure=1#Hysteria2-01" "$("$PM" sing-box export Hysteria2-01 url 2>/dev/null)"
 assert_contains "URL 警告在 stderr" "$("$PM" sing-box export AnyTLS-01 url 2>&1 >/dev/null)" "警告：以下内容包含客户端凭据"
 "$PM" sing-box export TUIC-01 url >/dev/null 2>&1
 assert_eq "TUIC 没有 URL 返回 3" 3 $?
@@ -264,13 +270,79 @@ assert_contains "AnyTLS IPv6 URL 带方括号" "$("$PM" sing-box export AnyTLS-0
 assert_contains "AnyTLS IPv4 export show 的服务器" "$("$PM" sing-box export AnyTLS-01 show 2>&1)" "服务器：2001:db8::1"
 "$PM" sing-box endpoint AnyTLS-01 set example.com 32001 >/dev/null 2>&1
 
-# ---- 二维码: 可选, 不自动安装, 秘密走 stdin 不进 argv ----
+# ---- 二维码: 缺少 qrencode 时只在进入二维码功能时自动安装, 失败原因清楚且保留 URL 导出, 秘密走 stdin 不进 argv ----
+export QR_CAPTURE="$T_TMP/qr.auto.stdin"
+: > "$K/apk-calls"
+"$PM" sing-box export AnyTLS-01 url >/dev/null 2>&1
+"$PM" sing-box export AnyTLS-01 show >/dev/null 2>&1
+assert_eq "url 与 show 不安装 qrencode" 0 "$(grep -c qrencode "$K/apk-calls" 2>/dev/null || true)"
 out=$("$PM" sing-box export AnyTLS-01 qr 2>&1)
 rc=$?
-assert_eq "没有 qrencode 时返回 5" 5 $rc
-assert_contains "没有 qrencode 的提示" "$out" "libqrencode-tools"
-assert_contains "没有 qrencode 时指向 url" "$out" "export AnyTLS-01 url"
-assert_eq "没有自动安装 qrencode" 0 "$(grep -c qrencode "$A/.apk-installed" 2>/dev/null || true)"
+assert_eq "缺少 qrencode 时自动安装并生成, 返回 0" 0 $rc
+assert_contains "安装过程的提示" "$out" "未安装 qrencode，正在安装所需依赖 (libqrencode-tools)"
+assert_contains "安装成功提示" "$out" "二维码工具安装成功"
+assert_contains "二维码输出" "$out" "QR-OUTPUT"
+assert_eq "只安装了 libqrencode-tools 一次" 1 "$(grep -c 'apk add --no-cache libqrencode-tools' "$K/apk-calls")"
+assert_eq "二维码内容与 URL 一致" "$("$PM" sing-box export AnyTLS-01 url 2>/dev/null)" "$(cat "$QR_CAPTURE")"
+assert_not_contains "安装提示里没有密码" "$out" "$PW_A"
+assert_not_contains "安装提示里没有 URL" "$out" "anytls://"
+: > "$K/apk-calls"
+"$PM" sing-box export AnyTLS-01 qr >/dev/null 2>&1
+assert_eq "已安装时再次进入不重复安装" 0 "$(grep -c 'apk add' "$K/apk-calls")"
+# 失败分类: 每一类都给出原因, 返回 5, 指向 url, 不中断其他功能
+qr_fail() { # 名称 期望文本 [rc]
+    rm -f "$A/usr/bin/qrencode"
+    : > "$K/apk-calls"
+    out=$("$PM" sing-box export AnyTLS-01 qr 2>&1)
+    rc=$?
+    assert_eq "$1: 返回 5" 5 $rc
+    assert_contains "$1: 原因" "$out" "$2"
+    assert_contains "$1: 保留 URL 导出" "$out" "export AnyTLS-01 url"
+    assert_not_contains "$1: 没有 URL 与密码泄漏" "$out" "$PW_A"
+    assert_ok "$1: 其他功能仍可用" "$PM" sing-box export AnyTLS-01 show
+}
+printf 'ERROR: unable to select packages:\n  libqrencode-tools (no such package):\n' > "$K/apk_error"; printf 'fetch https://dl-cdn.alpinelinux.org/alpine/v3.23/main/x86_64/APKINDEX.tar.gz\nWARNING: updating and opening https://dl-cdn.alpinelinux.org/alpine/v3.23/main: temporary error (try again later)\n' > "$K/apk_error"
+qr_fail "网络或 DNS 不可用" "无法访问 Alpine 软件源"
+printf 'ERROR: Unable to lock database: Permission denied\nERROR: Failed to open apk database: Permission denied\n' > "$K/apk_error"
+qr_fail "没有数据库权限" "没有写入软件包数据库的权限"
+printf 'ERROR: Unable to lock database: Resource temporarily unavailable\n' > "$K/apk_error"
+qr_fail "apk 被占用" "apk 正被其他进程占用"
+printf 'ERROR: libqrencode-tools-4.1.1-r2: UNTRUSTED signature\n' > "$K/apk_error"
+qr_fail "签名失败" "软件源签名校验失败"
+printf 'something unexpected happened\n' > "$K/apk_error"
+qr_fail "未分类错误" "apk 返回了未分类的错误"
+assert_contains "未分类错误附带 apk 最后一行" "$out" "something unexpected happened"
+rm -f "$K/apk_error"
+# 软件源里没有 libqrencode-tools: 改按命令提供者安装
+echo libqrencode-tools > "$K/apk_nopkg"
+rm -f "$A/usr/bin/qrencode"; : > "$K/apk-calls"
+out=$("$PM" sing-box export AnyTLS-01 qr 2>&1)
+assert_eq "包名不存在时按 cmd:qrencode 重试成功" 0 $?
+assert_contains "重试按命令提供者" "$(cat "$K/apk-calls")" "apk add --no-cache cmd:qrencode"
+printf 'ERROR: unable to select packages:\n  libqrencode-tools (no such package):\n' > "$K/apk_error"; echo 1 > "$K/apk_rc"
+qr_fail "软件源没有该包" "当前软件源里没有找到 libqrencode-tools"
+rm -f "$K/apk_error" "$K/apk_rc" "$K/apk_nopkg"
+# 安装超时: 不无限等待
+echo 5 > "$K/apk_sleep"
+APM_QR_INSTALL_TIMEOUT=1 qr_fail "安装超时" "安装超过 1 秒没有完成"
+rm -f "$K/apk_sleep"
+# 安装成功但命令不可用
+touch "$K/apk_no_binary"
+qr_fail "安装后命令不可用" "找不到可以运行的 qrencode"
+rm -f "$K/apk_no_binary"
+# 没有 root 权限
+rm -f "$A/usr/bin/qrencode"; : > "$K/apk-calls"
+out=$(APM_EUID=1000 "$PM" sing-box export AnyTLS-01 qr 2>&1)
+assert_eq "没有 root 返回 5" 5 $?
+assert_contains "没有 root 的提示" "$out" "需要 root 权限"
+assert_eq "没有 root 时不调用 apk" 0 "$(grep -c 'apk add' "$K/apk-calls")"
+# 没有 apk
+mv "$A/sbin/apk" "$T_TMP/apk.bak"
+out=$("$PM" sing-box export AnyTLS-01 qr 2>&1)
+assert_eq "没有 apk 返回 5" 5 $?
+assert_contains "没有 apk 的提示" "$out" "没有找到 apk"
+mv "$T_TMP/apk.bak" "$A/sbin/apk"
+unset QR_CAPTURE
 mkdir -p "$A/usr/bin"
 cat > "$A/usr/bin/qrencode" <<EOF
 #!/bin/sh
@@ -282,7 +354,7 @@ EOF
 chmod +x "$A/usr/bin/qrencode"
 out=$("$PM" sing-box export AnyTLS-01 qr 2>/dev/null)
 assert_eq "qrencode 输出被透传" "QR-OUTPUT" "$out"
-assert_eq "stdin 收到完整 URL" "anytls://$PW_A@example.com:32001/?sni=apm.local&insecure=1#AnyTLS-01" "$(cat "$T_TMP/qr.stdin")"
+assert_eq "stdin 收到完整 URL" "anytls://$PW_A@example.com:32001/?insecure=1#AnyTLS-01" "$(cat "$T_TMP/qr.stdin")"
 assert_not_contains "argv 没有密码" "$(cat "$T_TMP/qr.argv")" "$PW_A"
 assert_not_contains "argv 没有 URL" "$(cat "$T_TMP/qr.argv")" "anytls://"
 assert_eq "argv 只有固定选项" "-t UTF8 -m 1 " "$(cat "$T_TMP/qr.argv")"

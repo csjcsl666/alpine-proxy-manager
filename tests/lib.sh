@@ -440,7 +440,38 @@ case $1 in
     add)
         [ ! -e "$K/fail_apk" ] || exit 1
         shift
-        for a; do case $a in -*) ;; *) echo "$a" >> "$R/.apk-installed" ;; esac; done
+        echo "apk add $*" >> "$K/apk-calls"
+        # 旋钮: apk_error 文件的内容写到 stderr 并以 apk_rc (默认 1) 退出; apk_nopkg 里写一个包名, 对它报 no such package; apk_sleep 模拟很慢的安装
+        if [ -s "$K/apk_error" ]; then cat "$K/apk_error" >&2; exit "$(cat "$K/apk_rc" 2>/dev/null || echo 1)"; fi
+        if [ -s "$K/apk_nopkg" ]; then
+            for a; do [ "$a" != "$(cat "$K/apk_nopkg")" ] || { printf 'ERROR: unable to select packages:\n  %s (no such package):\n' "$a" >&2; exit 1; }; done
+        fi
+        [ ! -e "$K/apk_sleep" ] || sleep "$(cat "$K/apk_sleep")"
+        for a; do
+            case $a in
+                -*) ;;
+                *)
+                    echo "$a" >> "$R/.apk-installed"
+                    case $a in
+                        openssl|cmd:openssl)
+                            # openssl 的桩转调宿主机的真实 openssl, 这样安装之后证书解析是真实的
+                            if [ ! -e "$K/apk_no_binary" ]; then
+                                mkdir -p "$R/usr/bin"
+                                printf '#!/bin/sh\nexec /usr/bin/openssl "$@"\n' > "$R/usr/bin/openssl"
+                                chmod +x "$R/usr/bin/openssl"
+                            fi
+                            ;;
+                        libqrencode-tools|cmd:qrencode)
+                            if [ ! -e "$K/apk_no_binary" ]; then
+                                mkdir -p "$R/usr/bin"
+                                printf '#!/bin/sh\n[ "$1" = -V ] && { echo "qrencode version 4.1.1"; exit 0; }\ncat > "${QR_CAPTURE:-/dev/null}"\nprintf QR-OUTPUT\\n\n' > "$R/usr/bin/qrencode"
+                                chmod +x "$R/usr/bin/qrencode"
+                            fi
+                            ;;
+                    esac
+                    ;;
+            esac
+        done
         ;;
     *) exit 99 ;;
 esac
@@ -550,6 +581,14 @@ case \$1 in
         ;;
     generate)
         [ ! -e "\$K/gen_fail" ] || exit 1
+        # APM_FAKE_REAL_CERT=1 且宿主机有 openssl 时生成真实证书 (CN 与 DNS SAN 都是该名称, 与官方 sing-box generate tls-keypair 一致), 用来测试证书解析与 SNI
+        if [ -n "\${APM_FAKE_REAL_CERT:-}" ] && command -v openssl >/dev/null 2>&1; then
+            d=\$(mktemp -d)
+            openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 -subj "/CN=\$3" -addext "subjectAltName=\${APM_FAKE_SAN:-DNS:\$3}" -keyout "\$d/k" -out "\$d/c" >/dev/null 2>&1
+            cat "\$d/k" "\$d/c"
+            rm -rf "\$d"
+            exit 0
+        fi
         printf -- '-----BEGIN PRIVATE KEY-----\\nFAKEPRIVATEKEYDATA\\n-----END PRIVATE KEY-----\\n-----BEGIN CERTIFICATE-----\\nFAKECERTFOR_%s\\n-----END CERTIFICATE-----\\n' "\$3"
         ;;
 esac

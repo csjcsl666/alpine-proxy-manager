@@ -94,7 +94,8 @@ OUT=$(gw client 1 show 2>&1)
 assert_contains "连接信息: 协议" "$OUT" "协议：AnyTLS"
 assert_contains "连接信息: 服务器" "$OUT" "服务器：203.0.113.10"
 assert_contains "连接信息: 使用映射端口而不是内部监听" "$OUT" "端口：31443"
-assert_contains "连接信息: server name 来自证书" "$OUT" "TLS Server Name：anytls-gateway"
+assert_contains "连接信息: 默认不指定 SNI" "$OUT" "TLS Server Name：未指定"
+assert_not_contains "连接信息: 不显示内部占位名称" "$OUT" "TLS Server Name：anytls-gateway"
 assert_not_contains "连接信息: 不含密码" "$OUT" "$PW1"
 assert_not_contains "连接信息: 不含 SOCKS5 上游地址" "$OUT" "192.0.2.10"
 
@@ -104,7 +105,8 @@ assert_contains "JSON: 类型" "$JSON" '"type": "anytls"'
 assert_contains "JSON: 服务器" "$JSON" '"server": "203.0.113.10"'
 assert_contains "JSON: 端口" "$JSON" '"server_port": 31443'
 assert_contains "JSON: 线路 1 的密码" "$JSON" "\"password\": \"$PW1\""
-assert_contains "JSON: server_name" "$JSON" '"server_name": "anytls-gateway"'
+assert_not_contains "JSON: 默认不写 server_name" "$JSON" "server_name"
+assert_not_contains "JSON: 不含内部占位名称" "$JSON" "anytls-gateway\""
 assert_contains "JSON: 自签名跳过校验" "$JSON" '"insecure": true'
 assert_not_contains "JSON: 不含线路 2 的密码" "$JSON" "$PW2"
 assert_not_contains "JSON: 不含 SOCKS5 上游" "$JSON" "192.0.2.10"
@@ -126,11 +128,11 @@ fi
 
 # ---- 分享 URL ----
 URL=$(gw client 1 url 2>/dev/null)
-assert_eq "URL 完全正确" "anytls://$PW1@203.0.113.10:31443/?sni=anytls-gateway&insecure=1#AnyTLS-Gateway-1" "$URL"
+assert_eq "URL 完全正确" "anytls://$PW1@203.0.113.10:31443/?insecure=1#AnyTLS-Gateway-1" "$URL"
 # IPv6: 方括号
 gw endpoint 2 set 2001:db8::20 443 >/dev/null 2>&1
 URL6=$(gw client 2 url 2>/dev/null)
-assert_eq "IPv6 URL" "anytls://$PW2@[2001:db8::20]:443/?sni=anytls-gateway&insecure=1#AnyTLS-Gateway-2" "$URL6"
+assert_eq "IPv6 URL" "anytls://$PW2@[2001:db8::20]:443/?insecure=1#AnyTLS-Gateway-2" "$URL6"
 J6=$(gw client 2 sing-box 2>/dev/null)
 assert_contains "IPv6 JSON 不带方括号" "$J6" '"server": "2001:db8::20"'
 assert_contains "线路 2 的 JSON 用线路 2 的密码" "$J6" "\"password\": \"$PW2\""
@@ -144,16 +146,30 @@ printf '#!/bin/sh\ncat\n' > "$A/usr/bin/qrencode"
 chmod +x "$A/usr/bin/qrencode"
 QR=$(gw client 1 qr 2>/dev/null)
 assert_eq "二维码内容与分享 URL 一致" "$URL" "$QR"
+# 缺少 qrencode: 进入二维码功能时自动安装 (与 sing-box 实例共用同一个实现), 失败给出原因并保留 URL
 rm -f "$A/usr/bin/qrencode"
-OUT=$(gw client 1 qr 2>&1); assert_eq "没有 qrencode 时返回 5" 5 "$?"
-assert_contains "沿用现有依赖提示" "$OUT" "qrencode"
+: > "$K/apk-calls"
+OUT=$(gw client 1 qr 2>&1); assert_eq "没有 qrencode 时自动安装并生成" 0 "$?"
+assert_contains "自动安装的提示" "$OUT" "未安装 qrencode，正在安装所需依赖 (libqrencode-tools)"
+assert_contains "安装成功" "$OUT" "二维码工具安装成功"
+assert_contains "二维码输出" "$OUT" "QR-OUTPUT"
+assert_eq "安装了 libqrencode-tools" 1 "$(grep -c 'apk add --no-cache libqrencode-tools' "$K/apk-calls")"
+gw client 1 qr >/dev/null 2>&1
+assert_eq "再次进入不重复安装" 1 "$(grep -c 'apk add' "$K/apk-calls")"
+rm -f "$A/usr/bin/qrencode"
+printf 'WARNING: updating and opening https://dl-cdn.alpinelinux.org/alpine/v3.23/main: temporary error (try again later)\n' > "$K/apk_error"
+OUT=$(gw client 1 qr 2>&1); assert_eq "安装失败返回 5" 5 "$?"
+assert_contains "网络原因" "$OUT" "无法访问 Alpine 软件源"
 assert_contains "分享链接仍可用的提示" "$OUT" "client 1 url"
+assert_not_contains "失败提示里没有密码" "$OUT" "$PW1"
+rm -f "$K/apk_error"
+gw client 1 url >/dev/null 2>&1 && t_pass "安装失败后 URL 导出仍可用" || t_fail "安装失败后 URL 导出不可用"
 
 # ---- 证书条件 ----
 # 旧证书 (只有 CN, 没有 SAN): 其他功能可用, 固定校验被拒绝并说明原因, 不生成会被客户端拒绝的配置
 openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=anytls-gateway" -keyout "$A/etc/anytls-socks-gateway/key.pem" -out "$CERT" >/dev/null 2>&1
 OUT=$(gw client 1 sing-box --embed-cert 2>&1); assert_eq "CN-only 证书拒绝固定校验" 1 "$?"
-assert_contains "说明没有 SAN" "$OUT" "没有覆盖"
+assert_contains "说明没有 SAN" "$OUT" "没有 SAN"
 assert_not_contains "拒绝时不输出 JSON" "$OUT" '"outbounds"'
 assert_contains "CN-only 证书的普通导出仍可用" "$(gw client 1 sing-box 2>/dev/null)" '"insecure": true'
 # CA 签发的证书: 按证书链校验, 不带 insecure, 不支持固定
@@ -169,6 +185,123 @@ assert_not_contains "CA 证书: URL 不带 insecure" "$CAU" "insecure"
 assert_contains "CA 证书: URL 带 sni" "$CAU" "sni=vpn.example.com"
 OUT=$(gw client 2 sing-box --embed-cert 2>&1); assert_eq "CA 证书不支持嵌入固定" 1 "$?"
 printf '%s' "$CAJ" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null && t_pass "CA 证书 JSON 语法有效" || t_fail "CA 证书 JSON 语法无效"
+# ---- TLS 服务名 (SNI): 默认不指定 用户指定优先 嵌入证书与 CA 证书按证书名称 不改证书与网关配置 ----
+put_agw_cert() { # CN [SAN]
+    if [ -n "${2:-}" ]; then
+        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 -subj "/CN=$1" -addext "subjectAltName=$2" -keyout "$A/etc/anytls-socks-gateway/key.pem" -out "$CERT" >/dev/null 2>&1
+    else
+        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 -subj "/CN=$1" -keyout "$A/etc/anytls-socks-gateway/key.pem" -out "$CERT" >/dev/null 2>&1
+    fi
+}
+gsni_url() { gw client "$1" url 2>/dev/null | sed -n 's/.*[?&]sni=\([^&#]*\).*/\1/p'; }
+gsni_json() { gw client "$1" sing-box 2>/dev/null | sed -n 's/.*"server_name": *"\([^"]*\)".*/\1/p'; }
+gpin_sni() { gw client "$1" sing-box --embed-cert 2>/dev/null | sed -n 's/.*"server_name": *"\([^"]*\)".*/\1/p'; }
+gsame() { assert_eq "$1: JSON 的 server_name 等于 URL 的 sni" "$(gsni_json "$2")" "$(gsni_url "$2")"; }
+gw endpoint 1 set 203.0.113.10 31443 >/dev/null 2>&1
+put_agw_cert gw-one.example.com "DNS:gw-one.example.com"
+assert_eq "默认: 证书里有名称 URL 也没有 sni" "" "$(gsni_url 1)"
+assert_eq "默认: JSON 没有 server_name" "" "$(gsni_json 1)"
+gsame "默认" 1
+assert_contains "show 说明未指定" "$(gw client 1 show 2>&1)" "TLS Server Name：未指定"
+assert_eq "嵌入证书: 名称来自证书 DNS SAN" gw-one.example.com "$(gpin_sni 1)"
+# 不需要 openssl 也能完成默认导出 (没有 openssl 时 Gateway 路径本来就拒绝, 这里只验证有 openssl 的行为)
+put_agw_cert gw-one.example.com "DNS:gw-one.example.com,DNS:gw-two.example.com"
+assert_ok "多个 DNS SAN: 默认 URL 可导出" gw client 1 url
+OUT=$(gw client 1 sing-box --embed-cert 2>&1); assert_eq "多个 DNS SAN 且无法确定: 嵌入被拒绝 (4)" 4 "$?"
+assert_contains "列出名称" "$OUT" "gw-one.example.com gw-two.example.com"
+assert_eq "拒绝时没有 JSON" "" "$(gw client 1 sing-box --embed-cert 2>/dev/null)"
+OUT=$(gw endpoint 1 sni set GW-Two.Example.com 2>&1)
+assert_contains "设置成功 (转小写)" "$OUT" "已设置转发线路 1 的客户端 TLS 服务名: gw-two.example.com"
+assert_contains "说明不是真实身份验证" "$OUT" "不会验证该名称对应网站的身份"
+assert_contains "说明不等于网站伪装" "$OUT" "不等于网站伪装"
+assert_contains "被网关证书覆盖" "$OUT" "被网关证书的 DNS SAN 覆盖"
+assert_contains "没有修改网关配置与证书" "$OUT" "没有修改网关配置与证书"
+assert_eq "指定名称进入 URL" gw-two.example.com "$(gsni_url 1)"
+assert_eq "指定名称进入 JSON" gw-two.example.com "$(gsni_json 1)"
+assert_eq "指定名称进入嵌入证书的 JSON" gw-two.example.com "$(gpin_sni 1)"
+gsame "多 SAN 选择后" 1
+assert_contains "被覆盖的名称可以嵌入证书固定校验" "$(gw client 1 sing-box --embed-cert 2>&1)" "BEGIN CERTIFICATE"
+assert_contains "endpoint show 显示指定名称" "$(gw endpoint 1 show 2>&1)" "gw-two.example.com"
+assert_fail "IP 不能作为 SNI" gw endpoint 1 sni set 203.0.113.9
+OUT=$(gw endpoint 1 sni set not-in-cert.example.org 2>&1)
+assert_contains "未被覆盖的提示" "$OUT" "没有被网关证书覆盖"
+assert_fail "未被覆盖的名称不能嵌入固定校验" gw client 1 sing-box --embed-cert
+assert_contains "跳过证书验证导出使用指定名称" "$(gw client 1 sing-box 2>/dev/null)" '"server_name": "not-in-cert.example.org"'
+gsame "自定义名称" 1
+gw endpoint 1 clear >/dev/null 2>&1
+assert_eq "clear 保留 TLS 服务名" "public.sni=not-in-cert.example.org" "$(cat "$(EPF 1)")"
+assert_contains "没有地址时 endpoint show" "$(gw endpoint 1 show 2>&1)" "客户端连接地址：未配置"
+OUT=$(gw client 1 url 2>&1); assert_eq "只有 TLS 服务名没有地址时拒绝" 1 "$?"
+assert_contains "说明先配置地址" "$OUT" "尚未配置客户端连接地址"
+OUT=$(gw endpoint 1 sni clear 2>&1)
+assert_contains "恢复默认的说明" "$OUT" "恢复默认 (不指定 SNI)"
+assert_eq "两者都空时删除文件" no "$([ -e "$(EPF 1)" ] && echo yes || echo no)"
+gw endpoint 1 set 203.0.113.10 31443 >/dev/null 2>&1
+assert_eq "恢复默认后 URL 没有 sni" "" "$(gsni_url 1)"
+# 只有 IP SAN: 嵌入时不发送 SNI
+put_agw_cert 203.0.113.10 "IP:203.0.113.10"
+assert_not_contains "IP SAN: URL 不带 sni" "$(gw client 1 url 2>/dev/null)" "sni="
+assert_not_contains "IP SAN: JSON 没有 server_name" "$(gw client 1 sing-box 2>/dev/null)" "server_name"
+PJ=$(gw client 1 sing-box --embed-cert 2>&1)
+assert_contains "IP SAN: 连接地址被覆盖时可以嵌入证书" "$PJ" "BEGIN CERTIFICATE"
+assert_not_contains "IP SAN: 嵌入时没有 server_name" "$PJ" "server_name"
+# 证书只有 CN (历史证书): 默认导出照常且没有 SNI 嵌入固定校验被拒绝
+put_agw_cert anytls-gateway ""
+assert_eq "CN-only: 默认没有 SNI" "" "$(gsni_url 1)"
+assert_ok "CN-only: 默认导出可用" gw client 1 sing-box
+assert_fail "CN-only: 固定校验被拒绝" gw client 1 sing-box --embed-cert
+# 线路之间互不影响: 线路 2 没有自己的设置, 不继承线路 1 的 TLS 服务名
+gw endpoint 1 sni set only-line-one.example.org >/dev/null 2>&1
+gw endpoint 2 set 203.0.113.20 31444 >/dev/null 2>&1
+assert_eq "线路 1 用自己的名称" only-line-one.example.org "$(gsni_url 1)"
+assert_eq "线路 2 没有继承线路 1 的名称" "" "$(gsni_url 2)"
+gw endpoint 2 clear >/dev/null 2>&1
+gw endpoint 1 sni clear >/dev/null 2>&1
+# 用户明确要求用自己的域名重新生成证书: CN 与 DNS SAN 都是它, 嵌入证书固定校验使用它, 默认客户端导出不变
+FP0=$(sha256sum "$CERT" | cut -c1-16)
+assert_fail "cert generate 拒绝 IP 作为 TLS 服务名" gw cert generate --server-name 203.0.113.9
+assert_fail "cert generate 拒绝未知参数" gw cert generate --bogus
+assert_fail "cert generate 的 --server-name 需要参数" gw cert generate --server-name
+assert_eq "被拒绝的 cert generate 没有改动证书" "$FP0" "$(sha256sum "$CERT" | cut -c1-16)"
+OUT=$(gw cert generate --server-name Vpn.Example.Org 2>&1)
+assert_contains "cert generate 说明 TLS 服务名" "$OUT" "TLS 服务名 vpn.example.org"
+assert_contains "说明旧配置需要重新导出" "$OUT" "重新导出"
+assert_eq "证书里的 CN" vpn.example.org "$(openssl x509 -in "$CERT" -noout -subject | sed -n 's/.*CN *= *//p')"
+assert_contains "证书里的 DNS SAN" "$(openssl x509 -in "$CERT" -noout -ext subjectAltName)" "DNS:vpn.example.org"
+assert_eq "默认客户端导出仍然不指定 SNI" "" "$(gsni_url 1)"
+assert_eq "嵌入证书固定校验使用新证书的名称" vpn.example.org "$(gpin_sni 1)"
+gsame "重新生成后" 1
+assert_contains "重新生成的证书可以嵌入固定校验" "$(gw client 1 sing-box --embed-cert 2>&1)" "BEGIN CERTIFICATE"
+# ---- openssl: Gateway 要读证书判断是自签名还是 CA 签发, 缺少时按需自动安装 (与二维码共用同一套安装流程) ----
+put_agw_cert gw-one.example.com "DNS:gw-one.example.com"
+rm -f "$A/usr/bin/openssl"
+: > "$K/apk-calls"
+OUT=$(gw client 1 url 2>&1); rc=$?
+assert_eq "缺少 openssl 时自动安装并继续导出 (URL)" 0 "$rc"
+assert_contains "安装提示" "$OUT" "未安装 openssl，正在安装所需依赖 (openssl)"
+assert_contains "安装成功提示" "$OUT" "openssl安装成功"
+assert_contains "导出的 URL" "$OUT" "anytls://"
+assert_eq "只安装了 openssl 一次" 1 "$(grep -c 'apk add --no-cache openssl' "$K/apk-calls")"
+gw client 1 sing-box --embed-cert >/dev/null 2>&1
+assert_eq "再次导出不重复安装" 1 "$(grep -c 'apk add' "$K/apk-calls")"
+assert_contains "嵌入证书固定校验在自动安装后可用" "$(gw client 1 sing-box --embed-cert 2>&1)" "BEGIN CERTIFICATE"
+rm -f "$A/usr/bin/openssl"
+printf 'WARNING: updating and opening https://dl-cdn.alpinelinux.org/alpine/v3.23/main: temporary error (try again later)\n' > "$K/apk_error"
+OUT=$(gw client 1 url 2>&1); rc=$?
+assert_eq "安装失败返回 5" 5 "$rc"
+assert_contains "网络原因" "$OUT" "无法访问 Alpine 软件源"
+assert_eq "安装失败时 stdout 没有任何配置" "" "$(gw client 1 sing-box 2>/dev/null)"
+assert_not_contains "失败提示里没有密码" "$OUT" "$PW1"
+rm -f "$K/apk_error"
+mk_gw_openssl() { printf '#!/bin/sh\nexec /usr/bin/openssl "$@"\n' > "$A/usr/bin/openssl"; chmod +x "$A/usr/bin/openssl"; }
+mk_gw_openssl
+# 证书格式错误: 不降级
+cp -p "$CERT" "$T_TMP/cert.bak"
+printf 'not a certificate\n' > "$CERT"
+OUT=$(gw client 1 url 2>&1); rc=$?
+assert_eq "证书格式错误: 拒绝" 1 "$rc"
+assert_contains "证书格式错误的说明" "$OUT" "无法解析网关证书"
+cp -p "$T_TMP/cert.bak" "$CERT"
 # 证书不可读: 拒绝而不是猜测
 rm -f "$CERT"
 OUT=$(gw client 1 sing-box 2>&1); assert_eq "没有证书时拒绝" 1 "$?"
@@ -208,7 +341,7 @@ out=$(tx '3\n0\n0\n')
 assert_contains "Gateway 菜单有客户端配置入口" "$out" "客户端配置"
 # 菜单序号: 查看详细信息 停止/启动 重启 转发线路 证书 客户端配置
 out=$(tx '3\n6\n0\n0\n0\n' ok)
-for item in "客户端配置 · AnyTLS Gateway 线路 1（端口 20443）" "查看连接信息" "查看凭据" "导出 sing-box JSON" "导出 sing-box JSON（隐藏凭据）" "可选：嵌入证书固定校验" "导出分享 URL" "显示 QR（需要 qrencode）" "证书校验：跳过（自签名，免维护）"; do
+for item in "客户端配置 · AnyTLS Gateway 线路 1（端口 20443）" "查看连接信息" "查看凭据" "导出 sing-box JSON" "导出 sing-box JSON（隐藏凭据）" "可选：嵌入证书固定校验" "导出分享 URL" "显示 QR（首次使用会自动安装 qrencode）" "设置客户端 TLS 服务名（SNI）" "证书校验：跳过（自签名，免维护）"; do
     assert_contains "Gateway 客户端配置含 $item" "$out" "$item"
 done
 assert_not_contains "只有一条线路时不再询问选哪条" "$out" "选择要导出客户端配置的转发线路"

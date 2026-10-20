@@ -19,7 +19,10 @@ PROF() { printf '%s/etc/alpine-proxy-manager/socks/%s.conf' "$A" "$1"; }
 CFGSUM() { sha256sum "$A/etc/sing-box/config.json" | cut -c1-16; }
 # 在子 shell 里运行 TUI, 避免它的 trap 覆盖测试框架的清理
 T() { printf '%b' "$1" | ( tui_run ) 2>&1; }
-ready() { new_s "$1"; "$PM" snell install --port 20000 --psk-stdin >/dev/null 2>&1 <<EOF
+# 服务端证书用真实 openssl 生成, 客户端导出按真实证书解析 TLS 服务名
+APM_FAKE_REAL_CERT=1
+export APM_FAKE_REAL_CERT
+ready() { new_s "$1"; if [ -x /usr/bin/openssl ]; then mkdir -p "$A/usr/bin"; printf '#!/bin/sh\nexec /usr/bin/openssl "$@"\n' > "$A/usr/bin/openssl"; chmod +x "$A/usr/bin/openssl"; fi; "$PM" snell install --port 20000 --psk-stdin >/dev/null 2>&1 <<EOF
 TuiSnellPskNotSecret0123456789ab
 EOF
     "$PM" sing-box install >/dev/null 2>&1; }
@@ -696,7 +699,7 @@ assert_contains "导出页含证书校验说明" "$out" "证书校验：跳过�
 assert_not_contains "导出页不显示内部监听" "$out" "内部监听"
 assert_not_contains "导出页没有未配置噪声" "$out" "未配置"
 assert_not_contains "导出页没有设置地址入口 (未设置时按需询问)" "$out" "客户端连接地址"
-for item in "查看连接信息" "查看凭据" "导出 sing-box JSON" "导出 sing-box JSON（隐藏凭据）" "可选：嵌入证书固定校验" "导出分享 URL" "显示 QR（需要 qrencode）"; do
+for item in "查看连接信息" "查看凭据" "导出 sing-box JSON" "导出 sing-box JSON（隐藏凭据）" "可选：嵌入证书固定校验" "导出分享 URL" "显示 QR（首次使用会自动安装 qrencode）" "客户端 TLS 服务名：未指定"; do
     assert_contains "AnyTLS 导出页含 $item" "$out" "$item"
 done
 assert_not_contains "不把嵌入证书说成推荐" "$out" "推荐"
@@ -771,10 +774,28 @@ assert_contains "证书固定可选" "$out" '"certificate": ['
 assert_not_contains "证书固定版本没有 insecure" "$out" insecure
 out=$(T '2\n1\n1\n5\n6\ny\n\n0\n0\n0\n0\n')
 assert_contains "URL" "$out" "anytls://"
+# 缺少 qrencode: 进入二维码功能时自动安装并显示, 不需要退出 APM
+: > "$K/apk-calls"
+QR_CAPTURE=$T_TMP/qr.tui.in
+export QR_CAPTURE
 out=$(T '2\n1\n1\n5\n7\ny\n\n0\n0\n0\n0\n')
-assert_contains "缺 qrencode 的提示" "$out" "当前未安装可选工具 qrencode"
-assert_contains "不自动安装" "$out" "TUI 不会自动安装"
-assert_eq "没有安装 qrencode" 0 "$(grep -c qrencode "$A/.apk-installed" 2>/dev/null || true)"
+assert_contains "自动安装提示" "$out" "未安装 qrencode，正在安装所需依赖 (libqrencode-tools)"
+assert_contains "安装成功" "$out" "二维码工具安装成功"
+assert_contains "安装后立即显示二维码" "$out" "QR-OUTPUT"
+assert_not_contains "不再要求用户手动安装" "$out" "请自行执行 apk add"
+assert_eq "安装了 libqrencode-tools" 1 "$(grep -c 'apk add --no-cache libqrencode-tools' "$K/apk-calls")"
+assert_contains "二维码内容是分享 URL" "$(cat "$QR_CAPTURE")" "anytls://"
+assert_not_contains "安装提示不含密码" "$out" "$APW"
+unset QR_CAPTURE
+# 安装失败: 说明原因并保留分享 URL, 不中断 TUI
+rm -f "$A/usr/bin/qrencode"
+printf 'WARNING: updating and opening https://dl-cdn.alpinelinux.org/alpine/v3.23/main: temporary error (try again later)\n' > "$K/apk_error"
+out=$(T '2\n1\n1\n5\n7\ny\n\n0\n0\n0\n0\n')
+assert_contains "安装失败的原因" "$out" "无法访问 Alpine 软件源"
+assert_contains "安装失败后保留分享 URL 入口" "$out" "export AnyTLS-01 url"
+assert_contains "安装失败后 TUI 仍可返回" "$out" "Alpine Proxy Manager"
+rm -f "$K/apk_error"
+rm -f "$A/usr/bin/qrencode"
 mkdir -p "$A/usr/bin"
 printf '#!/bin/sh\ncat > "%s/qr.in"\nprintf QRDONE\\n\n' "$T_TMP" > "$A/usr/bin/qrencode"
 chmod +x "$A/usr/bin/qrencode"
