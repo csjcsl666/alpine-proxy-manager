@@ -2349,6 +2349,10 @@ _tui_cx_endpoint_set() { # KIND ID 主机 端口
     if [ "$1" = agw ]; then agw_cli endpoint "$2" set "$3" "$4"; else singbox_cli endpoint "$2" set "$3" "$4"; fi
 }
 
+_tui_cx_sni() { # KIND ID set 名称 | clear
+    if [ "$1" = agw ]; then agw_cli endpoint "$2" sni "$3" ${4:+"$4"}; else singbox_cli endpoint "$2" sni "$3" ${4:+"$4"}; fi
+}
+
 _tui_need_endpoint() { # ID [KIND]
     local _f _h _p _k
     _k=${2:-sb}
@@ -2388,6 +2392,11 @@ tui_export_menu() { # ID [KIND]
             else
                 printf '证书校验：跳过（自签名，免维护）\n'
             fi
+            if [ -n "$(kv_get "$_f" public.sni 2>/dev/null)" ]; then
+                printf '客户端 TLS 服务名：%s（用户指定）\n' "$(kv_get "$_f" public.sni)"
+            else
+                printf '客户端 TLS 服务名：未指定（默认，不填写 SNI）\n'
+            fi
         fi
         printf '\n'
         _items="show|查看连接信息
@@ -2400,15 +2409,25 @@ json-pin|导出 sing-box JSON（可选：嵌入证书固定校验）"; fi
             tuic) printf '说明：TUIC 没有稳定的通用分享 URL，请使用 sing-box JSON\n\n' ;;
             *) _items="$_items
 url|导出分享 URL
-qr|显示 QR（需要 qrencode）" ;;
+qr|显示 QR（首次使用会自动安装 qrencode）" ;;
         esac
         [ -z "$_ep" ] || _items="$_items
 endpoint|更改客户端连接地址"
+        if _sb_type_tls "$_t"; then _items="$_items
+sni|设置客户端 TLS 服务名（SNI）"; fi
         tui_choose "$_items" "返回"
         case $TUI_KEY in
             back) return 0 ;;
             secret)
                 if [ "$_k" = agw ]; then _tui_do agw_cli client "$1" secret; _tui_done; else _tui_show_secret "$1"; fi
+                ;;
+            sni)
+                _tui_need_root || continue
+                printf 'TLS 服务名只影响客户端导出，不会修改证书、服务端配置，也不会重启服务。\n默认不填写 SNI。跳过证书验证时，客户端发送你指定的域名，不会验证该域名对应网站的身份，也不等于网站伪装。\n'
+                tui_ask "客户端 TLS 服务名（域名；留空恢复默认，即不指定）："
+                [ "${TUI_EOF:-0}" != 1 ] || return 0
+                if [ -n "$TUI_IN" ]; then _tui_do _tui_cx_sni "$_k" "$1" set "$TUI_IN"; else _tui_do _tui_cx_sni "$_k" "$1" clear; fi
+                _tui_done
                 ;;
             endpoint)
                 _tui_need_root || continue
@@ -2431,12 +2450,8 @@ endpoint|更改客户端连接地址"
                     json-pin) _tui_do _tui_cx_cli "$_k" "$1" sing-box --embed-cert ;;
                     url) _tui_do _tui_cx_cli "$_k" "$1" url ;;
                     qr)
-                        if [ -z "$(_snell_tool qrencode 2>/dev/null)" ]; then
-                            printf '当前未安装可选工具 qrencode。\nTUI 不会自动安装，如需使用请自行执行 apk add libqrencode-tools。\n分享链接仍可用：导出分享 URL\n'
-                            TUI_RC=0
-                        else
-                            _tui_do _tui_cx_cli "$_k" "$1" qr
-                        fi
+                        # 缺少 qrencode 时由 CLI 层统一自动安装 (只在这里进入二维码功能时), 失败会说明原因并保留分享 URL
+                        _tui_do _tui_cx_cli "$_k" "$1" qr
                         ;;
                 esac
                 [ "$TUI_KEY" != json ] || printf '\n提示：也可以在命令行用重定向保存：%s\n' "$([ "$_k" = agw ] && printf 'proxy-manager anytls-gateway client %s sing-box > client.json' "$1" || printf 'proxy-manager sing-box export %s sing-box > client.json' "$1")"

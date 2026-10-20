@@ -184,7 +184,7 @@ proxy-manager anytls-gateway uninstall [--purge]
 - 交互界面里所有 Yes/No 确认统一为 `[Y/n]` 直接按 Enter 就是 Yes 输入 n 取消 无效输入会重新询问 读取失败或输入结束不会被当成确认 包括卸载和彻底卸载 命令行和无人值守脚本不受影响
 - 交互界面里添加或修改 SOCKS5 出口时 可以直接粘贴完整的 `socks5://用户名:密码@主机:端口` 链接 自动识别主机 端口和认证 用户名密码可以百分号编码 IPv6 需要方括号 链接不完整时只补问缺少的字段 输入普通地址仍按原有方式逐项填写 链接像普通地址一样可见输入 回车前可以检查和修改 程序不会再次打印也不记录链接内容 解析失败不改动任何配置 sing-box 的 SOCKS Profile 和 Snell 的 SOCKS5 出口交互界面行为一致 命令行仍然只接受分项参数
 - 上游失败 认证错误 不可达都只会关闭连接 没有 DIRECT 路径 不处理 UDP 没有路由 DNS 日志文件的复杂功能 没有常驻管理进程
-- 默认自签证书 RSA 2048 有效期 10 年 客户端需要跳过证书校验或固定指纹 可以用 `cert import --cert-file 文件 --key-file 文件` 导入已有证书
+- 默认自签证书 RSA 2048 有效期 10 年 证书名称是占位名称 `anytls-gateway` 客户端需要跳过证书校验或固定指纹 可以用 `cert import --cert-file 文件 --key-file 文件` 导入已有证书 也可以用 `cert generate --server-name 名称` 明确重新生成带你自己域名的自签证书 CN 与 DNS SAN 都是它 重新生成会更换证书 已经导出的固定校验配置需要重新导出 只想改客户端看到的服务名而不动证书 用 `endpoint 线路 sni set 名称`
 - 以专用非 root 用户 anytlsgw 运行 服务脚本里设置 GOMEMLIMIT=16MiB 与 GOGC=50
 - 配置格式与现网部署的 `/etc/anytls-socks-gateway/config.json` 兼容 Manager 不自动接管已有的部署 现有部署只读识别
 - 二进制 anytls-socks-gateway 是本项目维护的 Go 程序 基于 sing 与 sing-anytls GPL-3.0-or-later 源码 构建脚本 许可证在 `third_party/anytls-gateway` 二进制与对应源码包发布在 https://github.com/csjcsl666/alpine-proxy-manager/releases/tag/anytls-gateway-v0.1.0 固定版本和 SHA256 当前只验证 x86_64
@@ -283,9 +283,9 @@ proxy-manager sing-box egress ID [show] | direct | socks 名称
 ### 客户端连接地址 Public Endpoint
 
 ```sh
-proxy-manager sing-box endpoint ID [show] | set 主机 端口 | clear
+proxy-manager sing-box endpoint ID [show] | set 主机 端口 | clear | sni set 名称 | sni clear
 proxy-manager snell endpoint [show] | set 主机 端口 | clear
-proxy-manager anytls-gateway endpoint 线路ID或端口 [show] | set 主机 端口 | clear
+proxy-manager anytls-gateway endpoint 线路ID或端口 [show] | set 主机 端口 | clear | sni set 名称 | sni clear
 proxy-manager anytls-gateway client 线路ID或端口 show | secret | sing-box [--redacted] [--embed-cert] | url | qr
 ```
 
@@ -310,7 +310,7 @@ proxy-manager snell export show | secret             # show 使用已设置的 P
 
 - `sing-box` 生成可直接运行的 sing-box 客户端配置 含一个本机 `127.0.0.1:2080` 的 mixed 入站 `--redacted` 把凭据替换为 REDACTED 用于展示
 - `url` 只提供有明确依据的分享链接 AnyTLS 与 Hysteria2 遵循各自官方的 URI Scheme Shadowsocks 遵循 SIP002 与 SIP022 TUIC 与 Snell 没有稳定的通用 URI 不提供链接 TUIC 请使用 sing-box 客户端配置
-- `qr` 在终端显示分享链接的二维码 需要可选的 `qrencode` 包 `apk add libqrencode-tools` Manager 不会自动安装 链接通过标准输入传给它 不出现在进程参数里
+- `qr` 在终端显示分享链接的二维码 需要 `qrencode` 命令 由 Alpine 软件包 `libqrencode-tools` 提供 只有在你进入二维码功能而且命令缺失时 Manager 才会用 apk 和系统已配置的软件源自动安装它 安装成功后继续生成二维码 已安装时不重复安装 其他任何功能都不会触发安装 安装失败 例如没有 root 网络或 DNS 不可用 软件源没有该包 超时 默认 120 秒 `APM_DEP_INSTALL_TIMEOUT` 可调 会说明原因 分享链接仍可用 链接通过标准输入传给 qrencode 不出现在进程参数里 也不写日志
 - 包含凭据的输出会在 stderr 打印警告 stdout 只有内容 不写临时文件 不写日志
 - 导出不包含 SOCKS 出口凭据 目标访问限制 TLS 私钥与其他实例的凭据 切换 SOCKS 出口与目标访问限制不改变导出的内容
 
@@ -320,6 +320,14 @@ AnyTLS Hysteria2 TUIC 使用 Manager 生成的自签名证书 客户端默认跳
 
 - 导出的 sing-box 配置默认写 `insecure` 并设置 server name
 - 需要时可以用 `--embed-cert` 把服务端证书嵌入客户端配置做证书固定校验 这是可选项
+- 客户端的 TLS 服务名 SNI 默认不填写 自签名证书加跳过证书验证 服务端不要求特定 SNI 所以导出的 sing-box JSON 不写 `server_name` 分享 URL 不带 `sni` 参数 二维码内容与 URL 相同 客户端按连接地址处理 不使用 `apm.local` `anytls-gateway` 这类内部占位名称 也不使用任何第三方网站域名
+  - 需要时用 `endpoint ... sni set 名称` 明确设置 设置后始终优先 同时进入连接信息 JSON 分享 URL 二维码 重新进入菜单 重新导出 升级 Manager 都不会丢 `sni clear` 恢复默认 就是清除 不是恢复成某个名称 TUI 的客户端配置页有对应的 设置客户端 TLS 服务名 SNI 入口 留空即恢复默认
+  - `sni set` 只改变导出内容 不修改证书 服务端 TLS 配置 运行配置 不重启服务 名称必须是域名 不接受 IP 地址与通配符
+  - 客户端发送的 SNI 不等于真实网站身份 跳过证书验证时不会验证该名称对应网站的身份 服务器也不一定持有该名称的证书 它不等于网站伪装
+  - 需要按名称校验证书的配置 嵌入证书固定校验 与 CA 签发的证书 不能不指定名称 这时从服务端真实证书解析 证书只有一个 DNS SAN 就用它 有多个时连接地址在其中就用连接地址 否则使用实例记录的 server-name 如果它在其中 都不满足就拒绝并列出证书里的名称 请用 `sni set` 选择 不会猜测 用户指定的名称必须被证书覆盖才能嵌入
+  - 只有 IP SAN 的证书 嵌入时不发送 SNI JSON 不写 server_name 连接地址在 IP SAN 里时按 IP 严格校验 只有 CN 没有 SAN 的历史证书 客户端会拒绝它的名称校验 所以不提供嵌入证书固定校验 跳过证书验证不受影响
+  - 解析证书需要 `openssl` 只在你明确导出嵌入证书固定校验时才需要 默认导出 查看连接信息 URL 二维码 设置与清除 SNI 都不需要 缺少 openssl 时 Manager 会在这一刻用 apk 和系统已配置的软件源自动安装它 显示安装结果 然后继续导出 已安装时直接复用 失败 例如没有 root 网络或 DNS 不可用 超时 会说明原因 返回 5 不会输出任何配置 也不会悄悄降级成跳过证书验证的配置 证书格式错误或不可读同样拒绝 AnyTLS Gateway 判断证书是自签名还是 CA 签发本来就要读证书 它的导出入口缺少 openssl 时同样按需安装 安装超时默认 120 秒 `APM_DEP_INSTALL_TIMEOUT` 可调
+  - 想换掉证书里的占位名称 可以明确重新生成证书 sing-box 用 `set ID server-name 名称` AnyTLS Gateway 用 `cert generate --server-name 名称` 这会更换证书 已经导出的固定校验配置需要重新导出 默认导出不受影响
 - 本版本不包含 ACME 与域名证书
 
 ## 更新 卸载 与保留的数据

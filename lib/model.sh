@@ -101,6 +101,7 @@ is_display_name() {
 #   transport.*    传输层参数
 #   relay_access.* 目标访问限制, 见 policy.sh
 #   public.host public.port  客户端连接地址 (Public Endpoint), 只用于客户端导出, 不进入运行配置, 见 client.sh
+#   public.sni               可选, 用户明确指定的客户端 TLS 服务名, 只用于客户端导出, 不改证书与服务端配置, 见 client.sh
 # 未列出的前缀一律拒绝, 避免拼写错误被静默忽略
 
 INSTANCE_TYPES="snell anytls hysteria2 tuic shadowsocks"
@@ -150,7 +151,7 @@ instance_validate() {
         case $_k in
             id|name|type|enabled|listen|listen_port|egress_socks) ;;
             credential.?*|tls.?*|transport.?*|relay_access.?*) ;;
-            public.host|public.port) ;;
+            public.host|public.port|public.sni) ;;
             *) apm_err "$_f: 未知的 key: $_k"; _rc=1 ;;
         esac
     done

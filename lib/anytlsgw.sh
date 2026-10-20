@@ -340,11 +340,13 @@ _agw_openssl() {
 }
 
 # 生成自签证书 RSA 2048 十年, 写入 AGW_CERT AGW_KEY (权限 644 与 640 root:组)
-_agw_gen_cert() {
-    local _d
+# 名称默认是占位名称 anytls-gateway (保持历史行为), 用户可以用 cert generate --server-name 指定自己的域名, CN 与 DNS SAN 都是它
+_agw_gen_cert() { # [NAME]
+    local _d _n
+    _n=${1:-anytls-gateway}
     _d=$(env_path "$AGW_CONF_DIR")
     mkdir -p -- "$_d" || return 1
-    _agw_openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=anytls-gateway" -addext "subjectAltName=DNS:anytls-gateway" \
+    _agw_openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=$_n" -addext "subjectAltName=DNS:$_n" \
         -keyout "$_d/.key.new" -out "$_d/.cert.new" >/dev/null 2>&1 || { rm -f -- "$_d/.key.new" "$_d/.cert.new"; apm_err "生成自签证书失败"; return 1; }
     chmod 640 -- "$_d/.key.new"
     chmod 644 -- "$_d/.cert.new"
@@ -699,7 +701,7 @@ agw_listener_list() {
 # ---- cert ----
 
 agw_cert() {
-    local _sub _c _k
+    local _sub _c _k _n
     _sub=${1:-show}
     [ $# -eq 0 ] || shift
     case $_sub in
@@ -710,10 +712,23 @@ agw_cert() {
             printf '  SHA256 指纹：%s\n' "$(_agw_cert_fp)"
             ;;
         generate)
+            _n=anytls-gateway
+            while [ $# -gt 0 ]; do
+                case $1 in
+                    --server-name)
+                        [ $# -ge 2 ] || { apm_err "--server-name 需要参数"; return 2; }
+                        _n=$(client_sni_norm "$2") || { apm_err "$_n"; return 2; }
+                        shift
+                        ;;
+                    *) apm_err "未知参数: $1"; return 2 ;;
+                esac
+                shift
+            done
             _agw_begin no || return $?
             _agw_need_openssl || return 1
-            _agw_gen_cert || return 1
-            _snell_say "已重新生成自签证书, 新指纹 $(_agw_cert_fp)"
+            _agw_gen_cert "$_n" || return 1
+            _snell_say "已重新生成自签证书 (TLS 服务名 $_n), 新指纹 $(_agw_cert_fp)"
+            _snell_say "客户端导出会按新证书的名称生成; 已经导出的旧配置里的指纹与证书需要重新导出"
             _snell_ensure_staging || return 1
             core_discover anytlsgw
             [ "$CF_STATE" != running ] || { _agw_rc restart >/dev/null 2>&1 && _agw_wait_healthy || { apm_err "重启失败"; return 1; }; _snell_say "已重启并验证"; }
@@ -735,7 +750,7 @@ agw_cert() {
             core_discover anytlsgw
             [ "$CF_STATE" != running ] || { _agw_rc restart >/dev/null 2>&1 && _agw_wait_healthy || { apm_err "重启失败, 请检查证书"; return 1; }; _snell_say "已重启并验证"; }
             ;;
-        *) apm_err "用法: anytls-gateway cert [show | generate | import --cert-file 文件 --key-file 文件]"; return 2 ;;
+        *) apm_err "用法: anytls-gateway cert [show | generate [--server-name 名称] | import --cert-file 文件 --key-file 文件]"; return 2 ;;
     esac
 }
 
