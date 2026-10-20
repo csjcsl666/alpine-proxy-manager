@@ -69,9 +69,9 @@ out=$("$PM" sing-box status)
 assert_contains "status: 运行中" "$out" "状态：运行中"
 assert_contains "status: 已接管" "$out" "Manager 部署, 已接管"
 out=$("$PM" sing-box info)
-assert_contains "info: 部署类型" "$out" "部署类型：managed"
-assert_contains "info: 精确发布" "$out" "精确发布：v1.13.14"
-assert_contains "info: 版本来源" "$out" "版本来源：manager-metadata"
+assert_contains "info: 部署类型" "$out" "部署：Manager 部署"
+assert_contains "info: 精确发布" "$out" "版本：1.13.14 (二进制自报)"
+assert_contains "info: 版本来源" "$out" "服务：sing-box (OpenRC"
 assert_contains "info: 配置路径" "$out" "配置：/etc/sing-box/config.json"
 out=$("$PM" core list)
 assert_contains "core list 含 sing-box 已接管" "$out" "管理状态：已接管"

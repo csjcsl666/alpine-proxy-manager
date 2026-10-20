@@ -457,7 +457,7 @@ out=$(printf '2\n3\n' | ( tui_agw_listener_menu ) 2>&1)
 assert_eq "确认处遇到 EOF 不删除" "$BEFORE_SUM" "$(sha256sum "$A$ST" "$A$CONF" | awk '{ print $1 }')"
 # 安装时同时创建第一条线路 (链接)
 new_g tui2
-out=$(TG '1\ny\nsocks5://ins-user:FictInsPw@192.0.2.40:1090\n\n0\n')
+out=$(TG '1\nsocks5://ins-user:FictInsPw@192.0.2.40:1090\n\n0\n')
 assert_contains "安装流程接受完整链接" "$out" "已识别：主机 192.0.2.40，端口 1090"
 assert_eq "安装流程写入出口" "192.0.2.40:1090" "$(kv_get "$A$ST" listener.1.socks_server)"
 assert_eq "安装流程写入密码" FictInsPw "$(kv_get "$A$ST" listener.1.socks_password)"
@@ -467,7 +467,7 @@ assert_contains "单条线路直接显示" "$out" "当前线路：1 条"
 assert_contains "单条线路密码" "$out" "AnyTLS 密码：$(kv_get "$A$ST" listener.1.password)"
 assert_not_contains "单条线路也不询问 ID" "$out" "ID 或端口"
 new_g tui3
-out=$(TG '1\ny\n\n\n0\n')
+out=$(TG '1\n\n\n0\n')
 assert_ok "安装流程留空只安装" test -x "$A/usr/local/bin/anytls-socks-gateway"
 assert_eq "留空只安装没有线路" "" "$(kv_get "$A$ST" listener.1.listen)"
 out=$(TR '5\n\n0\n')

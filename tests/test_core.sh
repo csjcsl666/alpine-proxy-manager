@@ -129,7 +129,7 @@ assert_contains "core list 说明未确认" "$out" "未确认"
 assert_contains "core list 解释原因" "$out" "不是已确认的 ELF"
 assert_fail "core list 没有执行脚本" test -e "$M/SHOULD_NOT_EXIST"
 out=$("$T_ROOT/bin/proxy-manager" doctor)
-assert_contains "doctor 报告未确认" "$out" "sing-box：Unverified"
+assert_contains "doctor 报告未确认" "$out" "sing-box：未确认"
 assert_fail "doctor 没有执行脚本" test -e "$M/SHOULD_NOT_EXIST"
 out=$("$T_ROOT/bin/proxy-manager" status)
 assert_contains "status 报告未确认" "$out" "未确认"

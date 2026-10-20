@@ -157,22 +157,22 @@ out=$("$PM" status)
 assert_contains "status: Core 行" "$out" "运行中 (现有部署, 未接管)"
 out=$("$PM" snell status)
 assert_contains "snell status: 运行中" "$out" "状态：运行中"
-assert_contains "snell status: OpenRC 来源" "$out" "服务 snell 状态 started (来源 rc-service)"
-assert_contains "snell status: 监听" "$out" "tcp 0.0.0.0:43817"
-assert_contains "snell status: 监听归属说明" "$out" "按进程 23755 的 socket 确认"
+assert_contains "snell status: OpenRC 来源" "$out" "服务：snell (OpenRC, 运行中"
+assert_contains "snell status: 监听" "$out" "43817 TCP  所有 IPv4 地址  Snell 服务"
+assert_contains "snell status: 监听归属说明" "$out" "已按进程 23755 的 socket 确认"
 assert_not_contains "snell status: 不含其他进程的 22 端口" "$out" "0.0.0.0:22"
-assert_contains "snell status: 提示不是公网映射" "$out" "不是公网映射端口"
+assert_contains "snell status: 提示不是公网映射" "$out" "不等于公网映射端口"
 out=$("$PM" snell info)
-assert_contains "info: 部署类型" "$out" "部署类型：external"
-assert_contains "info: 版本来源" "$out" "版本来源：binary"
-assert_contains "info: 精确发布" "$out" "精确发布：unknown"
-assert_contains "info: 二进制类型" "$out" "类型 elf"
-assert_contains "info: 监督进程" "$out" "监督进程 PID：23754"
-assert_contains "info: 服务进程" "$out" "服务进程 PID：23755"
-assert_contains "info: 配置权限" "$out" "配置权限：640"
-assert_contains "info: 字段名" "$out" "配置字段：listen psk mode"
-assert_contains "info: psk 状态" "$out" "psk：已配置"
-assert_contains "info: error 日志 metadata" "$out" "error 日志：/var/log/snell/error.log ("
+assert_contains "info: 部署类型" "$out" "部署：现有部署, 未接管"
+assert_contains "info: 版本来源" "$out" "版本：v6.0.0 (二进制自报"
+assert_contains "info: 精确发布" "$out" "版本：v6.0.0 (二进制自报)"
+assert_contains "info: 二进制类型" "$out" "二进制：/usr/local/bin/snell-server"
+assert_contains "info: 监督进程" "$out" "由 supervise-daemon 托管"
+assert_contains "info: 服务进程" "$out" "状态：运行中 (PID 23755"
+assert_contains "info: 配置权限" "$out" "权限 640"
+assert_contains "info: 字段名" "$out" "配置内容：监听地址 0.0.0.0:43817, 运行模式 default"
+assert_contains "info: psk 状态" "$out" "PSK 已配置"
+assert_contains "info: error 日志 metadata" "$out" "错误日志：/var/log/snell/error.log ("
 assert_not_contains "info: 不泄露 PSK 完整值" "$out" "$SECRET"
 assert_not_contains "info: 不泄露 PSK 片段" "$out" "FAKE-PSK"
 assert_not_contains "info: 不泄露 PSK 末尾" "$out" "abcdef"
@@ -204,7 +204,7 @@ assert_rc "log 文件不存在返回 1" 1 "$PM" snell log
 core_discover snell
 assert_eq "日志不存在: exists" no "$CF_LOG_ERR_EXISTS"
 out=$("$PM" snell info)
-assert_contains "日志不存在: info" "$out" "error 日志：/var/log/snell/error.log (不存在)"
+assert_contains "日志不存在: info" "$out" "错误日志：/var/log/snell/error.log (文件不存在)"
 
 # ---- External stopped / crashed ----
 printf 'stopped' > "$APM_FAKE_RC_DIR/snell"
@@ -234,7 +234,7 @@ mk_net "$A" tcp6 ""
 core_discover snell
 assert_eq "无监听" "" "$CF_LISTEN"
 out=$("$PM" snell status)
-assert_contains "无监听: 输出" "$out" "监听：未观察到"
+assert_contains "无监听: 输出" "$out" "监听：服务在运行, 但没有检测到监听端口"
 # UDP
 mk_net "$A" udp "   0: 00000000:AB29 00000000:0000 07 00000000:00000000 00:00000000 00000000   100        0 54321 2 0000000000000000 0"
 mk_net "$A" tcp ""

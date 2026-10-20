@@ -49,7 +49,7 @@ usage() {
   anytls-gateway cert [show | generate [--server-name 名称] | import --cert-file 文件 --key-file 文件]
   anytls-gateway export [info | secret ID或端口]
   anytls-gateway endpoint 线路ID或端口 [show | set 主机 端口 | clear | sni set 名称 | sni clear]
-  anytls-gateway client 线路ID或端口 show | secret | sing-box [--redacted] [--embed-cert] | url | qr
+  anytls-gateway client 线路ID或端口 show [--secret] | secret | sing-box [--redacted] [--embed-cert] | url | qr
   sing-box status | info | log [N] | check            状态 事实 日志 配置检查
   sing-box install [--release 标签]    下载官方 musl release 安装并启动 默认 v1.13.14
   sing-box start | stop | restart
@@ -69,9 +69,9 @@ usage() {
   sing-box egress ID [show] | direct | socks 名称   实例出口 (DIRECT 或 SOCKS Profile, 不自动切换)
   sing-box health [status | enable | disable | mode all|custom | profile 名称 on|off]   SOCKS5 上游健康监控 事件驱动 没有定时探测 不改变出口绑定 不回退 DIRECT enable disable 是整体开关 mode 选择监控范围 all 全部监控 custom 自定义监控 profile 在自定义监控里设置单台服务器 切换模式不改写各服务器的设置
   sing-box endpoint ID [show] | set 主机 端口 | clear | sni set 名称 | sni clear   客户端连接地址与 TLS 服务名 (只用于导出, 不配置 NAT, 不改证书, 不重启)
-  sing-box export ID show | secret | sing-box [--redacted] [--embed-cert] | url | qr   客户端导出 (secret url qr 包含凭据)
+  sing-box export ID show [--secret] | secret | sing-box [--redacted] [--embed-cert] | url | qr   客户端导出 (show --secret 连接信息加完整凭据 secret url qr 包含凭据)
   snell endpoint [show] | set 主机 端口 | clear   Snell 客户端连接地址
-  snell export info | show | secret   Snell 客户端信息 info 按需查询公网 IP 不需要先设置客户端连接地址 show 使用已设置的客户端连接地址 secret 显示 PSK
+  snell export info [--secret] | show [--secret] | secret   Snell 客户端信息 info 按需查询公网 IP 不需要先设置客户端连接地址 show 使用已设置的客户端连接地址 secret 显示 PSK --secret 在连接信息里直接给出 PSK
   manager check-update   检查 GitHub 最新正式 Release 只查询 不下载 非 root 也可以
   manager update         更新 Manager 本身 只用最新正式 Release 复用安装器 需要 root 不重启 Snell 与 sing-box
   tui           统一 TUI 管理界面 (交互式终端中直接运行 proxy-manager 也会进入)

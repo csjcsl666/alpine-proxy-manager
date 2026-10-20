@@ -162,6 +162,7 @@ CX_SNI_STORED=
 CX_SNI_OVR=
 CX_TLS_NOTE=
 CX_PIN=no
+CX_SHOW_SECRET=no
 
 # IPv4 原样, IPv6 展开为 8 组 4 位小写十六进制, 用来比较证书里的 IP SAN 与连接地址
 _cx_ip_canon() { # ADDR
@@ -352,7 +353,8 @@ _cx_sni_src_text() {
 
 # ---- 提醒 ----
 
-_cx_warn_secret() { printf '警告：以下内容包含客户端凭据\n' >&2; }
+# TUI 设置 APM_CX_NOWARN=1: 管理员在自己的终端上直接查看, 不重复警告; CLI 里警告写 stderr, 重定向到文件时 stdout 仍然是干净内容
+_cx_warn_secret() { [ "${APM_CX_NOWARN:-}" = 1 ] || printf '警告：以下内容包含客户端凭据\n' >&2; }
 
 # 读取 Public Endpoint, 缺失即失败并说明原因
 _cx_need_endpoint() { # FILE LABEL
@@ -460,7 +462,11 @@ _cx_r_show() {
     [ -z "$CX_METHOD" ] || printf '  method：%s\n' "$CX_METHOD"
     [ "$CX_TYPE" != tuic ] || printf '  拥塞控制：%s\n' "${CX_CC:-未指定 (客户端默认)}"
     [ -z "$CX_MODE" ] || printf '  mode：%s\n' "$CX_MODE"
-    printf '  凭据：已配置 (用 export 的 secret 操作显式查看)\n'
+    if [ "${CX_SHOW_SECRET:-no}" = yes ]; then
+        if [ "$CX_TYPE" = snell ]; then printf '  psk：%s\n' "$CX_PASS"; else printf '  密码：%s\n' "$CX_PASS"; fi
+    else
+        printf '  凭据：已配置 (用 export 的 secret 操作显式查看, 或 show --secret 一次看全)\n'
+    fi
     if [ "$CX_ENABLED" = false ]; then
         printf '  实例状态：已禁用, 客户端暂时无法连接\n'
     fi
@@ -691,8 +697,8 @@ _cx_sni_cover_hint() { # 证书所属的实例文件 NAME
 
 # ---- 命令: sing-box export ----
 
-singbox_export() { # ID show | secret | sing-box [--redacted] [--embed-cert] | url | qr
-    local _id _act _f _red _emb _url _qr _rc
+singbox_export() { # ID show [--secret] | secret | sing-box [--redacted] [--embed-cert] | url | qr
+    local _id _act _f _red _emb _sec _url _qr _rc
     _id=${1:-}
     [ -n "$_id" ] || { apm_err "用法: sing-box export 实例ID show|secret|sing-box [--redacted] [--embed-cert]|url|qr"; return 2; }
     shift
@@ -700,6 +706,7 @@ singbox_export() { # ID show | secret | sing-box [--redacted] [--embed-cert] | u
     [ $# -eq 0 ] || shift
     _red=no
     _emb=no
+    _sec=no
     case $_act in
         sing-box)
             while [ $# -gt 0 ]; do
@@ -711,7 +718,16 @@ singbox_export() { # ID show | secret | sing-box [--redacted] [--embed-cert] | u
                 shift
             done
             ;;
-        show|secret|url|qr) [ $# -eq 0 ] || { apm_err "$_act 不需要参数"; return 2; } ;;
+        show)
+            while [ $# -gt 0 ]; do
+                case $1 in
+                    --secret) _sec=yes ;;
+                    *) apm_err "未知参数: $1"; return 2 ;;
+                esac
+                shift
+            done
+            ;;
+        secret|url|qr) [ $# -eq 0 ] || { apm_err "$_act 不需要参数"; return 2; } ;;
         *) apm_err "未知的 export 操作: $_act"; return 2 ;;
     esac
     _f=$(_cx_inst_file "$_id") || return 1
@@ -727,7 +743,10 @@ singbox_export() { # ID show | secret | sing-box [--redacted] [--embed-cert] | u
             if ! _cx_load_sb_creds "$_f"; then return 1; fi
             _cx_need_endpoint "$_f" "$_id" || return 1
             _cx_tls_resolve || return $?
+            CX_SHOW_SECRET=$_sec
+            [ "$_sec" != yes ] || _cx_warn_secret
             _cx_r_show
+            CX_SHOW_SECRET=no
             ;;
         sing-box)
             _cx_load_sb "$_f" || return $?
@@ -1019,10 +1038,14 @@ snell_endpoint() { # [show | set HOST PORT | clear]
     printf '没有修改 Snell 配置, Snell 没有重启 (客户端连接地址只用于导出)\n'
 }
 
-snell_export() { # show | secret | info
-    local _act _ip
+snell_export() { # show | secret | info [--secret]
+    local _act _ip _sec
     _act=${1:-show}
     [ $# -eq 0 ] || shift
+    _sec=no
+    case $_act:${1:-} in
+        info:--secret|show:--secret) _sec=yes; shift ;;
+    esac
     [ $# -eq 0 ] || { apm_err "$_act 不需要参数"; return 2; }
     case $_act in
         secret)
@@ -1033,7 +1056,10 @@ snell_export() { # show | secret | info
         show)
             _cx_load_snell_creds || return 1
             _cx_snell_need_endpoint || return 1
+            CX_SHOW_SECRET=$_sec
+            [ "$_sec" != yes ] || _cx_warn_secret
             _cx_r_show
+            CX_SHOW_SECRET=no
             printf '  Snell 客户端协议版本：由客户端按服务端版本选择 (没有确认的对应关系, 不在这里猜测)\n'
             ;;
         info)
@@ -1044,7 +1070,7 @@ snell_export() { # show | secret | info
             printf '公网 IP：%s\n' "${_ip:-获取失败}"
             printf '监听端口：%s\n' "$(_snell_ports_of "$CX_LISTEN" | sed 's/ /, /g')"
             printf 'Snell 版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
-            printf 'PSK：已配置\n'
+            if [ "$_sec" = yes ]; then _cx_warn_secret; printf 'PSK：%s\n' "$CX_PASS"; else printf 'PSK：已配置\n'; fi
             ;;
         sing-box|url|qr)
             apm_err "Snell 没有 sing-box 出站, 也没有稳定的通用分享 URI, 只提供 export info show secret"
@@ -1224,9 +1250,9 @@ agw_endpoint() { # ID或端口 [show | set HOST PORT | clear | sni set NAME | sn
     printf '没有修改网关配置与证书, AnyTLS Gateway 没有重启 (客户端连接地址与 TLS 服务名只用于导出)\n'
 }
 
-# anytls-gateway client ID或端口 show | secret | sing-box [--redacted] [--embed-cert] | url | qr
+# anytls-gateway client ID或端口 show [--secret] | secret | sing-box [--redacted] [--embed-cert] | url | qr
 agw_client() {
-    local _ref _act _red _emb _url _qr _rc
+    local _ref _act _red _emb _sec _url _qr _rc
     _ref=${1:-}
     [ -n "$_ref" ] || { apm_err "用法: anytls-gateway client ID或端口 show|secret|sing-box [--redacted] [--embed-cert]|url|qr"; return 2; }
     shift
@@ -1234,6 +1260,7 @@ agw_client() {
     [ $# -eq 0 ] || shift
     _red=no
     _emb=no
+    _sec=no
     case $_act in
         sing-box)
             while [ $# -gt 0 ]; do
@@ -1245,7 +1272,16 @@ agw_client() {
                 shift
             done
             ;;
-        show|secret|url|qr) [ $# -eq 0 ] || { apm_err "$_act 不需要参数"; return 2; } ;;
+        show)
+            while [ $# -gt 0 ]; do
+                case $1 in
+                    --secret) _sec=yes ;;
+                    *) apm_err "未知参数: $1"; return 2 ;;
+                esac
+                shift
+            done
+            ;;
+        secret|url|qr) [ $# -eq 0 ] || { apm_err "$_act 不需要参数"; return 2; } ;;
         *) apm_err "未知的 client 操作: $_act"; return 2 ;;
     esac
     CX_PIN=no
@@ -1258,7 +1294,10 @@ agw_client() {
             ;;
         show)
             _cx_agw_need_endpoint "$CX_REF" || return $?
+            CX_SHOW_SECRET=$_sec
+            [ "$_sec" != yes ] || _cx_warn_secret
             _cx_r_show
+            CX_SHOW_SECRET=no
             ;;
         sing-box)
             _cx_agw_need_endpoint "$CX_REF" || return $?
