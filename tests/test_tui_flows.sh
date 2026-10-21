@@ -129,15 +129,15 @@ exec sh $T_ROOT/bin/proxy-manager tui
 EOD
     ptyrun() { # 宽 高 按键...
         _w=$1; _h=$2; shift 2
-        tmux kill-session -t apmflow 2>/dev/null
-        tmux new-session -d -s apmflow -x "$_w" -y "$_h" "sh $DRV" || return 1
+        tmux kill-session -t apmflow$$ 2>/dev/null
+        tmux new-session -d -s apmflow$$ -x "$_w" -y "$_h" "sh $DRV" || return 1
         _i=0
-        while [ "$_i" -lt 50 ] && ! tmux capture-pane -p -t apmflow | grep -q '请选择：'; do sleep 0.1; _i=$((_i + 1)); done
+        while [ "$_i" -lt 50 ] && ! tmux capture-pane -p -t apmflow$$ | grep -q '请选择：'; do sleep 0.1; _i=$((_i + 1)); done
         sleep 0.5
-        for _k in "$@"; do tmux send-keys -t apmflow -- "$_k"; sleep 0.4; done
+        for _k in "$@"; do tmux send-keys -t apmflow$$ -- "$_k"; sleep 0.4; done
         sleep 1
-        tmux capture-pane -p -S -200 -t apmflow
-        tmux kill-session -t apmflow 2>/dev/null
+        tmux capture-pane -p -S -200 -t apmflow$$
+        tmux kill-session -t apmflow$$ 2>/dev/null
     }
     scr=$(ptyrun 100 40 2 1 Enter 5 1)
     assert_contains "真实终端 100 列: 选 2 再选 1 号实例 (等同 Enter) 后按 5 1 看到完整连接信息" "$scr" "密码：$APW"
@@ -148,6 +148,28 @@ EOD
     scr=$(ptyrun 100 40 2 2 1)
     assert_contains "真实终端: 三次按键禁用实例且没有任何确认" "$scr" "实例 Hysteria2-01 已禁用"
     "$PM" sing-box enable Hysteria2-01 >/dev/null 2>&1
+    # 单键可靠性: 一次性到达的多个字符只取第一个, 其余丢弃, 不会顺势变成下一个菜单的操作
+    ptyburst() { # 字面字符串 (一次写入)
+        tmux kill-session -t apmflow$$ 2>/dev/null
+        tmux new-session -d -s apmflow$$ -x 100 -y 40 "sh $DRV" || return 1
+        _i=0
+        while [ "$_i" -lt 50 ] && ! tmux capture-pane -p -t apmflow$$ | grep -q '请选择：'; do sleep 0.1; _i=$((_i + 1)); done
+        sleep 0.5
+        tmux send-keys -t apmflow$$ -l -- "$1"
+        sleep 1
+        tmux capture-pane -p -S -200 -t apmflow$$
+        tmux kill-session -t apmflow$$ 2>/dev/null
+    }
+    scr=$(ptyburst 21)
+    assert_contains "粘贴 21: 只进入 sing-box 页" "$scr" "管理 AnyTLS-01"
+    assert_not_contains "粘贴 21: 第二个字符没有变成下一页的操作" "$scr" "客户端连接信息"
+    assert_not_contains "粘贴 21: 丢弃的字符不产生无效输入提示" "$scr" "输入无效"
+    scr=$(ptyrun 100 40 Up Down 2 0)
+    assert_not_contains "方向键: 不产生无效输入提示" "$scr" "输入无效"
+    assert_contains "方向键: 之后的选择照常" "$scr" "管理 AnyTLS-01"
+    scr=$(ptyrun 100 40 2 Escape)
+    assert_eq "单独 Esc 等同返回: 回到主菜单, sing-box 页只出现一次" 1 "$(printf '%s\n' "$scr" | grep -c '管理 AnyTLS-01')"
+    assert_contains "单独 Esc 返回后仍在主菜单" "$scr" "状态与诊断"
 else
     t_skip "没有 tmux, 真实终端流程测试跳过 (apk add tmux)"
 fi

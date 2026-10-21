@@ -259,7 +259,7 @@ if command -v tmux >/dev/null 2>&1; then
         printf 'TUI_ANSI=0\n[ -z "${DRV_TRACE:-}" ] || { exec 2>>"$DRV_TRACE"; set -x; }\ntui_ask_server_host\nprintf "RESULT rc=%%s host=%%s\\n" "$?" "$TUI_HOST"\nstty -a | grep -o -e "-icanon" -e " icanon" | head -1 | sed "s/^/STTY:/"\nprintf "DONE\\n"\nsleep 30\n'
     } > "$DRV"
     tkrun() { # 会话名 按键...: 启动驱动并依次发送按键, 返回屏幕内容
-        _s=$1
+        _s=$1$$
         shift
         tmux kill-session -t "$_s" 2>/dev/null
         tmux new-session -d -s "$_s" -x 100 -y 40 "sh $DRV" || return 1

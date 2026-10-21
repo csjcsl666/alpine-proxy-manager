@@ -394,6 +394,14 @@ _tui_onekey_init() {
     TUI_ONEKEY=1
 }
 
+# 丢弃已经到达但还没读的输入: 粘贴的多位数字 方向键的后续字节 都不能顺势变成下一个菜单的操作, 终端必须已处于 min 0 time 0 之外的原始模式
+_tui_key_drain() {
+    # 不用 read -n: bash 的 read 会自己把终端设成 min 1, 空缓冲会一直阻塞; dd 在 min 0 time 0 下立即返回
+    _snell_run stty min 0 time 0 2>/dev/null
+    dd bs=256 count=1 >/dev/null 2>&1
+    _snell_run stty min 1 time 0 2>/dev/null
+}
+
 # 读一个键: 空 Enter 静默忽略 (习惯性补按 Enter 不会报无效), Ctrl-D 视为 EOF, 终端模式在每次读取后立即恢复
 _tui_read_key() {
     local _st _k _k2 _rc _t0
@@ -419,6 +427,13 @@ _tui_read_key() {
             _rc=$?
         fi
         [ "$_rc" -eq 0 ] || break
+        # 单独的 Esc 等同返回, 方向键等 Esc 序列整体忽略 (等 0.2 秒看后面有没有字节, 有就是序列)
+        if [ "$_k" = "$(printf '\033')" ]; then
+            _snell_run stty min 0 time 2 2>/dev/null
+            _tui_getbyte
+            if [ -n "$TUI_K" ]; then _tui_key_drain; _k=; else _k=0; fi
+            _snell_run stty min 1 time 0 2>/dev/null
+        fi
         [ -n "$_k" ] || continue
         break
     done
@@ -435,6 +450,7 @@ _tui_read_key() {
                 ;;
         esac
     fi
+    [ "$_rc" -ne 0 ] || _tui_key_drain
     _snell_run stty "$_st" 2>/dev/null
     TUI_STTY_SAVED=
     [ "$_rc" -eq 0 ] || return 1

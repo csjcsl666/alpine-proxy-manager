@@ -179,6 +179,11 @@ OUT=$(gw info)
 assert_contains "info 显示转发线路" "$OUT" "30001 → 192.0.2.10:1080"
 assert_not_contains "info 不含密码" "$OUT" "$PW1"
 assert_not_contains "info 不含 SOCKS5 密码" "$OUT" "$SOCKSPW"
+assert_contains "info 分组线路" "$OUT" "转发线路 (配置"
+assert_contains "info 监听范围中文" "$OUT" "监听 (服务器内部"
+assert_contains "info 归属说明" "$OUT" "归属："
+assert_not_contains "info 不再有原始 tcp [::] 行" "$OUT" "tcp [::]"
+assert_not_contains "info 无旧字段 部署类型" "$OUT" "部署类型"
 OUT=$(gw export info)
 assert_not_contains "export info 不含密码" "$OUT" "$PW1"
 OUT=$(gw export secret 30001)
@@ -492,6 +497,6 @@ assert_eq "现有部署拒绝 install" 4 "$?"
 OUT=$(printf '%s\n' "$SOCKSPW" | gw listener add --socks-server 192.0.2.1 --socks-port 1080 --socks-username u --socks-password-stdin 2>&1)
 assert_eq "现有部署拒绝 listener add" 4 "$?"
 assert_eq "现有部署没有任何改动" "$BEFORE" "$(snap)"
-assert_contains "info 只读显示" "$(gw info)" "管理状态：未接管"
+assert_contains "info 只读显示" "$(gw info)" "部署：现有部署, 未接管"
 
 t_done

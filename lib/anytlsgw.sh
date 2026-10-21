@@ -888,20 +888,29 @@ report_anytlsgw_status() {
 }
 
 report_anytlsgw_info() {
+    local _fp
     core_discover anytlsgw
     printf 'AnyTLS Gateway\n'
-    printf '  已安装：%s\n' "$(_rpt_yn "$CF_INSTALLED")"
-    printf '  状态：%s\n' "$(core_state_label "$CF_STATE")"
-    printf '  部署类型：%s\n  管理状态：%s\n' "$CF_DEPLOYMENT" "$(core_managed_label)"
-    [ -z "$CF_BINARY" ] || printf '  二进制：%s\n' "$CF_BINARY"
-    if [ "$CF_INSTALLED" = yes ]; then
-        printf '  自报版本：%s\n  精确发布：%s\n' "${CF_VERSION_REPORTED:-未知}" "$CF_VERSION_EXACT"
-        [ -z "$CF_PID" ] || printf '  服务进程 PID：%s\n' "$CF_PID"
-        printf '  服务用户：%s\n' "${CF_SERVICE_USER:-未声明}"
-        [ -z "$CF_CONFIG" ] || printf '  配置：%s (存在 %s)\n' "$CF_CONFIG" "$(_rpt_yn "$CF_CONFIG_EXISTS")"
-        [ "$CF_DEPLOYMENT" != managed ] || agw_listener_list
+    _rpt_state_line
+    if [ "$CF_INSTALLED" != yes ]; then
+        [ -z "$CF_BINARY" ] || printf '  二进制：%s\n' "$CF_BINARY"
+        _rpt_notes
+        return 0
+    fi
+    _rpt_version_line
+    printf '  部署：%s, %s\n' "$(core_deployment_label "$CF_DEPLOYMENT")" "$(core_managed_label)"
+    _rpt_service_line
+    if [ "$CF_DEPLOYMENT" = managed ]; then
+        agw_listener_list | sed -e '1s/^当前线路/  转发线路 (配置，各自转发到 SOCKS5 出口)/' -e '2,$s/^/  /'
+        if [ -f "$(env_path "$AGW_CERT")" ]; then
+            _fp=$(_agw_cert_fp 2>/dev/null)
+            printf '  TLS 证书：%s%s\n' "$AGW_CERT" "${_fp:+ (SHA256 指纹 $_fp)}"
+        else
+            printf '  TLS 证书：未找到\n'
+        fi
     fi
     _rpt_listeners
+    _rpt_files_block
     _rpt_notes
 }
 
