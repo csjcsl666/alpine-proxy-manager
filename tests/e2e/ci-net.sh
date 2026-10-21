@@ -15,6 +15,7 @@ W=/tmp/apm-ci-net
 mkdir -p "$W/out" "$W/dl" /srv/dl
 
 apk add --no-cache openssl openrc python3 gcompat libstdc++ libgcc unzip wget tinyproxy unbound git go gcc musl-dev make linux-headers patch >/dev/null
+cp "$(command -v tinyproxy)" /usr/local/bin/tinyproxy
 
 echo '== 构建补丁版 graftcp'
 sh "$SRC/third_party/graftcp/build-inner.sh" "$W/out"
