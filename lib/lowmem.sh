@@ -14,6 +14,12 @@
 #   forensics  轻量 OOM 取证  常驻一个只用 sh 内建的小进程, oom_kill 计数变化时记录内存组成 (anon file kernel sock slab) 与进程表
 #                           需要 cgroup v2 的 memory.events
 #
+# 可选 (不在默认一键启用里, 需要 --snell-sacrifice 明确选择)
+#   snell_sac  让 OOM 先终止 Snell: 只把 Snell 服务的 supervise-daemon 的后代进程的 oom_score_adj 提高到 +300 (提高总是被允许)
+#              隔离实验 (见 V090_LOWMEM_PROTECTION.md) 中, 默认情况下 OOM 先杀 RSS 最大的 sshd 样进程再杀 Snell 样进程, 提高后只杀 Snell 样进程一次, 管理入口样进程存活
+#              不触碰 supervise-daemon sshd sing-box AnyTLS Gateway 与其他进程, 不使用 +1000
+#              memory.oom.group 为 1 时整个 cgroup 一起终止, 任何分数都无效, 此时该模式与 SSH 保护都报告不适用
+#
 # 修改范围  /proc/sys/net/ipv4/tcp_rmem tcp_wmem (当前网络命名空间)  sshd 进程的 oom_score_adj  一个 OpenRC 服务 apm-lowmem
 #           不修改 /etc/sysctl.conf 与 /etc/sysctl.d, 管理员已在那里设置同名参数时跳过该参数
 # 持久化   服务 apm-lowmem (default 运行级别, 排在 snell sing-box anytls-socks-gateway sshd 之前) 开机时重新应用 tcp 设置
@@ -27,6 +33,7 @@ LM_KD_RMEM="4096 131072 6291456"
 LM_KD_WMEM="4096 16384 4194304"
 LM_RISK_DIV=4
 LM_SSH_ADJ=-500
+LM_SNELL_ADJ=300
 LM_SCHEMA=1
 
 _lm_conf() { printf '%s/lowmem.conf' "$(state_etc)"; }
@@ -175,6 +182,46 @@ _lm_ssh_procs() {
     done
 }
 
+# Snell 服务的 supervise-daemon 的后代进程 (不含 supervise-daemon 自己): 每行 "pid adj comm"
+# 只认 OpenRC 的 /run/snell.pid 指向的、名字是 supervise-daemon 的进程，找不到就什么也不输出
+_lm_snell_procs() {
+    local _sup _c _p _l _rest _pl _set _i _e _pid _pp _a
+    _sup=
+    IFS= read -r _sup < "$(env_path /run/snell.pid)" 2>/dev/null || return 0
+    case $_sup in ''|*[!0-9]*) return 0 ;; esac
+    _c=
+    IFS= read -r _c < "$(env_path "/proc/$_sup/comm")" 2>/dev/null || return 0
+    case $_c in supervise-daemo*) ;; *) return 0 ;; esac
+    _pl=
+    for _p in "$(env_path /proc)"/[0-9]*; do
+        _l=
+        IFS= read -r _l < "$_p/stat" 2>/dev/null || continue
+        _rest=${_l##*) }
+        # shellcheck disable=SC2086
+        set -- $_rest
+        _pl="$_pl ${_p##*/}:${2:-}"
+    done
+    _set=" $_sup "
+    _i=0
+    while [ "$_i" -lt 4 ]; do
+        for _e in $_pl; do
+            _pid=${_e%%:*}
+            _pp=${_e#*:}
+            case $_set in *" $_pp "*) case $_set in *" $_pid "*) ;; *) _set="$_set$_pid " ;; esac ;; esac
+        done
+        _i=$((_i + 1))
+    done
+    for _pid in $_set; do
+        [ "$_pid" != "$_sup" ] || continue
+        _c=
+        IFS= read -r _c < "$(env_path "/proc/$_pid/comm")" 2>/dev/null || continue
+        case $_c in sshd|sshd-session|sshd-auth|supervise-daemo*) continue ;; esac
+        _a=
+        IFS= read -r _a < "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null || continue
+        printf '%s %s %s\n' "$_pid" "$_a" "$_c"
+    done
+}
+
 # 填充 LM_* 全局变量
 lm_probe() {
     local _ev _k _v
@@ -198,6 +245,8 @@ lm_probe() {
     LM_WMEM=
     [ ! -r "$(_lm_tcp_path rmem)" ] || LM_RMEM=$(_lm_norm "$(cat "$(_lm_tcp_path rmem)" 2>/dev/null)")
     [ ! -r "$(_lm_tcp_path wmem)" ] || LM_WMEM=$(_lm_norm "$(cat "$(_lm_tcp_path wmem)" 2>/dev/null)")
+    LM_OOM_GROUP=
+    [ -z "$LM_CG_DIR" ] || [ ! -r "$LM_CG_DIR/memory.oom.group" ] || LM_OOM_GROUP=$(cat "$LM_CG_DIR/memory.oom.group" 2>/dev/null)
     _lm_probe_ns
     return 0
 }
@@ -325,6 +374,11 @@ lm_plan_ssh() {
     local _n _need _pid _adj _c
     LM_P_SSH=
     LM_P_SSH_NOTE=
+    if [ "$LM_OOM_GROUP" = 1 ]; then
+        LM_P_SSH=na
+        LM_P_SSH_NOTE="所在 cgroup 的 memory.oom.group 为 1，OOM 时整个 cgroup 一起终止，调整 oom_score_adj 不起作用"
+        return 0
+    fi
     if ! _lm_adj_lower_ok; then
         LM_P_SSH=na
         LM_P_SSH_NOTE="当前环境不允许降低 oom_score_adj（内核要求初始用户命名空间的 CAP_SYS_RESOURCE，无特权容器通常没有）"
@@ -349,6 +403,59 @@ EOF
         LM_P_SSH=plan
         LM_P_SSH_NOTE="$_need/$_n 个 sshd 进程需要把 oom_score_adj 降到 $LM_SSH_ADJ"
     fi
+    return 0
+}
+
+# LM_P_SAC  na | plan | fine
+lm_plan_sac() {
+    local _n _need _pid _adj _c
+    LM_P_SAC=
+    LM_P_SAC_NOTE=
+    if [ "$LM_OOM_GROUP" = 1 ]; then
+        LM_P_SAC=na
+        LM_P_SAC_NOTE="所在 cgroup 的 memory.oom.group 为 1，OOM 时整个 cgroup 一起终止，调整 oom_score_adj 不起作用"
+        return 0
+    fi
+    if [ ! -f "$(env_path /etc/init.d/snell)" ]; then
+        LM_P_SAC=na
+        LM_P_SAC_NOTE="没有检测到 Snell 服务"
+        return 0
+    fi
+    _n=0
+    _need=0
+    while read -r _pid _adj _c; do
+        [ -n "$_pid" ] || continue
+        _n=$((_n + 1))
+        [ "$_adj" -ge "$LM_SNELL_ADJ" ] 2>/dev/null || _need=$((_need + 1))
+    done <<EOF
+$(_lm_snell_procs)
+EOF
+    if [ "$_n" -eq 0 ]; then
+        LM_P_SAC=plan
+        LM_P_SAC_NOTE="Snell 当前没有运行，启动后由常驻进程在数秒内设置，不重启 Snell"
+    elif [ "$_need" -eq 0 ]; then
+        LM_P_SAC=fine
+        LM_P_SAC_NOTE="$_n 个 Snell 进程的 oom_score_adj 已不低于 $LM_SNELL_ADJ，无需修改"
+    else
+        LM_P_SAC=plan
+        LM_P_SAC_NOTE="$_need/$_n 个 Snell 进程把 oom_score_adj 提高到 $LM_SNELL_ADJ，OOM 时先终止 Snell，sshd 与其他进程不受影响（不重启 Snell）"
+    fi
+    return 0
+}
+
+# 立即提高 Snell 进程的 oom_score_adj，登记 PID 与原值
+_lm_snell_apply_now() {
+    local _pid _adj _c
+    mkdir -p -- "$(env_path "$LM_RUN")" 2>/dev/null
+    while read -r _pid _adj _c; do
+        [ -n "$_pid" ] || continue
+        [ "$_adj" -lt "$LM_SNELL_ADJ" ] 2>/dev/null || continue
+        if printf '%s\n' "$LM_SNELL_ADJ" > "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null; then
+            printf '%s %s %s\n' "$_pid" "$_adj" "$_c" >> "$(env_path "$LM_RUN/snell.adj")"
+        fi
+    done <<EOF
+$(_lm_snell_procs)
+EOF
     return 0
 }
 
@@ -453,11 +560,13 @@ _lm_init_ours() { [ -f "$(env_path "$LM_INIT")" ] && grep -q '^# apm-managed: ap
 # ---- 启用 ----
 
 lowmem_enable() {
-    local _tcp _ssh _for _was _kept
+    local _tcp _ssh _for _was _kept _sac
     LM_ASSUME_NS=no
+    _sac=no
     while [ $# -gt 0 ]; do
         case $1 in
             --assume-own-netns) LM_ASSUME_NS=yes ;;
+            --snell-sacrifice) _sac=yes ;;
             *) apm_err "未知参数: $1"; return 2 ;;
         esac
         shift
@@ -467,8 +576,11 @@ lowmem_enable() {
     lm_plan_tcp
     lm_plan_ssh
     lm_plan_forensics
+    lm_plan_sac
     _was=false
     lm_enabled && _was=true
+    # 已经启用过可选的 Snell 优先牺牲时沿用，不因再次一键启用而悄悄关掉
+    [ "$_was" != true ] || [ "$(_lm_cget snell_sac)" != on ] || _sac=yes
     # 已经启用过且 tcp 在用: 沿用保存的目标，不依据已被调整后的值重新计算
     _kept=no
     if [ "$_was" = true ] && [ "$(_lm_cget tcp)" = on ]; then
@@ -486,11 +598,13 @@ lowmem_enable() {
     printf '  TCP 缓冲：%s\n' "$LM_P_TCP_NOTE"
     printf '  SSH 保护：%s\n' "$LM_P_SSH_NOTE"
     printf '  内存取证：%s\n' "$LM_P_FOR_NOTE"
+    [ "$_sac" != yes ] || printf '  Snell 优先牺牲（可选）：%s\n' "$LM_P_SAC_NOTE"
     _tcp=off; _ssh=off; _for=off
     [ "$LM_P_TCP" != plan ] || _tcp=on
     case $LM_P_SSH in plan|fine) _ssh=on ;; esac
     [ "$LM_P_FOR" != plan ] || _for=on
-    if [ "$_tcp$_ssh$_for" = offoffoff ]; then
+    case $LM_P_SAC in plan|fine) ;; *) _sac=no ;; esac
+    if [ "$_tcp$_ssh$_for$_sac" = offoffoffno ]; then
         printf '\n没有需要启用的项目，没有修改任何设置\n'
         return 0
     fi
@@ -501,17 +615,18 @@ lowmem_enable() {
     if [ "$_tcp" = on ]; then
         _lm_apply_tcp || { apm_err "TCP 缓冲没有完全生效，已恢复到修改前"; _tcp=off; }
     fi
-    if [ "$_tcp$_ssh$_for" = offoffoff ]; then
+    if [ "$_tcp$_ssh$_for$_sac" = offoffoffno ]; then
         [ "$_was" = true ] || _lm_drop_state
         printf '\n没有任何项目生效\n'
         return 1
     fi
-    if ! _lm_write_conf "$_tcp" "$_ssh" "$_for"; then
+    if ! _lm_write_conf "$_tcp" "$_ssh" "$_for" "$_sac"; then
         apm_err "无法写入设置文件"
         [ "$_tcp" != on ] || _lm_revert_tcp
         return 1
     fi
     [ "$_ssh" != on ] || _lm_ssh_apply_now
+    [ "$_sac" != yes ] || _lm_snell_apply_now
     _lm_install_service || apm_warn "无法安装或启动 OpenRC 服务：SSH 保护与内存取证不可用，TCP 缓冲重启后不会保留"
     printf '\n'
     lowmem_status
@@ -590,6 +705,7 @@ _lm_write_conf() { # tcp ssh forensics
             [ -z "$_wt" ] || printf 'tcp_wmem=%s\n' "$_wt"
         fi
         printf 'ssh=%s\nssh_adj=%s\nforensics=%s\ninterval=5\nheartbeat=300\n' "$2" "$LM_SSH_ADJ" "$3"
+        if [ "$4" = yes ]; then printf 'snell_sac=on\nsnell_adj=%s\n' "$LM_SNELL_ADJ"; else printf 'snell_sac=off\n'; fi
     } | _lm_write_kv "$(_lm_conf)" 600
 }
 
@@ -653,6 +769,22 @@ lowmem_disable() {
     else
         printf '  SSH 保护：没有需要恢复的进程\n'
     fi
+    # Snell 优先牺牲: 只恢复仍然等于 APM 设置值的进程；降低分数需要权限时可能失败，如实报告
+    if [ -f "$(env_path "$LM_RUN/snell.adj")" ]; then
+        _f=$(env_path "$LM_RUN/snell.adj")
+        _c=0
+        _k=0
+        while read -r _pid _adj _comm; do
+            [ -n "$_pid" ] || continue
+            _o=
+            IFS= read -r _o < "$(env_path "/proc/$_pid/comm")" 2>/dev/null || continue
+            [ "$_o" = "$_comm" ] || continue
+            IFS= read -r _t < "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null
+            [ "$_t" = "$(_lm_cget snell_adj)" ] || continue
+            if printf '%s\n' "$_adj" > "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null; then _c=$((_c + 1)); else _k=$((_k + 1)); fi
+        done < "$_f"
+        printf '  Snell 优先牺牲：已把 %s 个进程的 oom_score_adj 恢复为原值%s\n' "$_c" "$([ "$_k" -eq 0 ] || printf '，%s 个因权限无法降低，需在 Snell 下次重启后恢复' "$_k")"
+    fi
     # tcp: 只在当前值仍等于 APM 设置值时写回
     for _k in rmem wmem; do
         _t=$(kv_get "$(_lm_orig)" "tcp_${_k}_target" 2>/dev/null)
@@ -700,6 +832,7 @@ lowmem_status() {
     lm_plan_tcp
     lm_plan_ssh
     lm_plan_forensics
+    lm_plan_sac
     _en=no
     lm_enabled && _en=yes
     _tcp=$(_lm_cget tcp); _ssh=$(_lm_cget ssh); _for=$(_lm_cget forensics)
@@ -772,6 +905,30 @@ EOF
         fi
     else
         printf '  内存取证：%s\n' "$LM_P_FOR_NOTE"
+    fi
+    # Snell 优先牺牲 (可选)
+    if [ "$_en" = yes ] && [ "$(_lm_cget snell_sac)" = on ]; then
+        _total=$((_total + 1))
+        _n=0
+        _okn=0
+        while read -r _pid _adj _cm; do
+            [ -n "$_pid" ] || continue
+            _n=$((_n + 1))
+            [ "$_adj" -ge "$LM_SNELL_ADJ" ] 2>/dev/null && _okn=$((_okn + 1))
+        done <<EOF
+$(_lm_snell_procs)
+EOF
+        if [ "$_n" -eq 0 ]; then
+            if _lm_daemon_running; then _ok=$((_ok + 1)); printf '  Snell 优先牺牲（可选）：已启用，Snell 当前没有运行，启动后由常驻进程设置\n'
+            else printf '  Snell 优先牺牲（可选）：未生效（常驻进程没有运行）\n'; fi
+        elif [ "$_okn" -eq "$_n" ]; then
+            _ok=$((_ok + 1))
+            printf '  Snell 优先牺牲（可选）：已生效（%s 个 Snell 进程的 oom_score_adj 不低于 %s，OOM 时先终止 Snell）\n' "$_n" "$LM_SNELL_ADJ"
+        else
+            printf '  Snell 优先牺牲（可选）：部分生效（%s/%s 个进程，其余由常驻进程在数秒内设置）\n' "$_okn" "$_n"
+        fi
+    elif [ "$_en" = yes ]; then
+        printf '  Snell 优先牺牲（可选）：未启用（lowmem enable --snell-sacrifice）\n'
     fi
     # 持久化
     if [ "$_en" = yes ]; then

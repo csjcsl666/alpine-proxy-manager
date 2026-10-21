@@ -20,6 +20,8 @@ LOGMAX=${APM_LOWMEM_LOGMAX:-524288}
 
 SSH=off
 SSH_ADJ=-500
+SNELL_SAC=off
+SNELL_ADJ=300
 FORENSICS=on
 INTERVAL=5
 HEARTBEAT=300
@@ -31,6 +33,7 @@ _is_uint() { case $1 in ''|*[!0-9]*) return 1 ;; esac; }
 load_conf() {
     local _k _v
     SSH=off
+    SNELL_SAC=off
     FORENSICS=on
     INTERVAL=5
     HEARTBEAT=300
@@ -39,6 +42,8 @@ load_conf() {
         case $_k in
             ssh) SSH=$_v ;;
             ssh_adj) case $_v in -[0-9]*) SSH_ADJ=$_v ;; esac ;;
+            snell_sac) SNELL_SAC=$_v ;;
+            snell_adj) _is_uint "$_v" && [ "$_v" -le 1000 ] && SNELL_ADJ=$_v ;;
             forensics) FORENSICS=$_v ;;
             interval) _is_uint "$_v" && [ "$_v" -ge 2 ] && [ "$_v" -le 60 ] && INTERVAL=$_v ;;
             heartbeat) _is_uint "$_v" && [ "$_v" -ge 60 ] && [ "$_v" -le 3600 ] && HEARTBEAT=$_v ;;
@@ -181,6 +186,48 @@ ssh_protect() {
     done
 }
 
+# Snell 优先牺牲: 只处理 OpenRC 的 /run/snell.pid 所指 supervise-daemon 的后代进程 (不含它自己, 不含 sshd), 只升不降
+snell_sacrifice() {
+    local _sup _l _rest _p _e _pid _pp _set _i _c _a _pl
+    first_line "$R/run/snell.pid"
+    _sup=$V
+    _is_uint "$_sup" || return 0
+    first_line "$R/proc/$_sup/comm"
+    case $V in supervise-daemo*) ;; *) return 0 ;; esac
+    _pl=
+    for _p in "$R"/proc/[0-9]*; do
+        _l=
+        { IFS= read -r _l < "$_p/stat"; } 2>/dev/null || continue
+        _rest=${_l##*) }
+        # shellcheck disable=SC2086
+        set -- $_rest
+        _pl="$_pl ${_p##*/}:${2:-}"
+    done
+    _set=" $_sup "
+    _i=0
+    while [ "$_i" -lt 4 ]; do
+        for _e in $_pl; do
+            _pid=${_e%%:*}
+            _pp=${_e#*:}
+            case $_set in *" $_pp "*) case $_set in *" $_pid "*) ;; *) _set="$_set$_pid " ;; esac ;; esac
+        done
+        _i=$((_i + 1))
+    done
+    for _pid in $_set; do
+        [ "$_pid" != "$_sup" ] || continue
+        first_line "$R/proc/$_pid/comm"
+        _c=$V
+        case $_c in sshd|sshd-session|sshd-auth|supervise-daemo*|'') continue ;; esac
+        first_line "$R/proc/$_pid/oom_score_adj"
+        _a=$V
+        _is_uint "${_a#-}" || continue
+        [ "$_a" -lt "$SNELL_ADJ" ] || continue
+        if printf '%s\n' "$SNELL_ADJ" > "$R/proc/$_pid/oom_score_adj" 2>/dev/null; then
+            printf '%s %s %s\n' "$_pid" "$_a" "$_c" >> "$RUN/snell.adj"
+        fi
+    done
+}
+
 on_term() {
     [ -z "${FIFO:-}" ] || rm -f -- "$FIFO"
     exit 0
@@ -235,6 +282,7 @@ main() {
     while :; do
         load_conf
         [ "$SSH" != on ] || ssh_protect
+        [ "$SNELL_SAC" != on ] || snell_sacrifice
         if [ "$FORENSICS" = on ] && [ -n "$CG" ]; then
             if read_events; then
                 if [ -n "$_last" ] && [ "$EV_OOMKILL" -gt "$_last" ]; then

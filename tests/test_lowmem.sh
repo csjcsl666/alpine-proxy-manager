@@ -323,7 +323,7 @@ rm -f "$A/var/log/apm-lowmem.log" "$A/var/log/apm-lowmem.log.1"
 i=0
 while [ "$i" -lt 12 ]; do APM_SYSROOT="$A" APM_LOWMEM_ONCE=1 APM_LOWMEM_LOGMAX=700 sh "$DAEMON"; i=$((i + 1)); done
 assert_ok "产生旧日志" test -f "$A/var/log/apm-lowmem.log.1"
-size=$(wc -c < "$A/var/log/apm-lowmem.log" 2>/dev/null || echo 0)
+size=$({ wc -c < "$A/var/log/apm-lowmem.log"; } 2>/dev/null || echo 0)
 assert_ok "当前日志不超过上限加一条记录" test "$size" -le 1500
 
 printf '== SSH: 常驻进程维护新出现的 sshd\n'
@@ -424,5 +424,60 @@ out=$(lm detail)
 assert_contains "辅助信息含容器标记" "$out" "容器标记 lxc"
 assert_contains "辅助信息含命名空间标识" "$out" "net:[4026532711]"
 assert_contains "辅助信息说明不参与判断" "$out" "不参与判断"
+
+# ============ 7. 可选: Snell 优先牺牲 ============
+printf '== Snell 优先牺牲: 只处理 Snell 的 supervise-daemon 的后代\n'
+mk_pp() { mk_proc "$1" "$2" "$3" "$5" "$5"; printf '%s\n' "$4" > "$1/proc/$2/oom_score_adj"; }
+mk_snellsys() {
+    mk_lm "$1" $((64 * MIB)) "$HYT_R" "$HYT_W"
+    printf '#!/sbin/openrc-run\n' > "$1/etc/init.d/snell"
+    printf '800\n' > "$1/run/snell.pid"
+    mk_pp "$1" 800 1 0 supervise-daemo
+    mk_pp "$1" 801 800 0 ld-musl-x86_64.
+    mk_pp "$1" 802 801 0 snell-helper
+    mk_pp "$1" 850 1 0 supervise-daemo
+    mk_pp "$1" 851 850 0 sing-box
+    mk_pp "$1" 524 1 0 sshd
+    mk_pp "$1" 900 1 0 bash
+}
+A="$T_TMP/sac"; mk_snellsys "$A"
+out=$(lm enable)
+assert_eq "默认一键启用不动 Snell 进程" 0 "$(cat "$A/proc/801/oom_score_adj")"
+assert_contains "状态说明可选项未启用" "$(lm status)" "Snell 优先牺牲（可选）：未启用"
+assert_contains "默认设置文件里是关闭" "$(cat "$A/etc/alpine-proxy-manager/lowmem.conf")" "snell_sac=off"
+out=$(lm enable --snell-sacrifice)
+assert_eq "Snell 主进程提高到 300" 300 "$(cat "$A/proc/801/oom_score_adj")"
+assert_eq "Snell 的子进程提高到 300" 300 "$(cat "$A/proc/802/oom_score_adj")"
+assert_eq "Snell 的 supervise-daemon 不动" 0 "$(cat "$A/proc/800/oom_score_adj")"
+assert_eq "sing-box 的 supervise-daemon 不动" 0 "$(cat "$A/proc/850/oom_score_adj")"
+assert_eq "sing-box 进程不动" 0 "$(cat "$A/proc/851/oom_score_adj")"
+assert_eq "sshd 不被提高 (只被降低)" -500 "$(cat "$A/proc/524/oom_score_adj")"
+assert_eq "其他进程不动" 0 "$(cat "$A/proc/900/oom_score_adj")"
+assert_contains "状态已生效" "$out" "Snell 优先牺牲（可选）：已生效（2 个 Snell 进程"
+assert_contains "设置文件记录" "$(cat "$A/etc/alpine-proxy-manager/lowmem.conf")" "snell_sac=on"
+out=$(lm enable)
+assert_contains "再次一键启用沿用该选项" "$(cat "$A/etc/alpine-proxy-manager/lowmem.conf")" "snell_sac=on"
+printf '== Snell 优先牺牲: 常驻进程维护重启后的新进程\n'
+mk_pp "$A" 803 801 0 snell-helper
+APM_SYSROOT="$A" APM_LOWMEM_ONCE=1 sh "$DAEMON"
+assert_eq "新出现的 Snell 子进程被设置" 300 "$(cat "$A/proc/803/oom_score_adj")"
+assert_eq "常驻进程不碰 sing-box" 0 "$(cat "$A/proc/851/oom_score_adj")"
+printf '== Snell 优先牺牲: 关闭后恢复\n'
+out=$(lm disable)
+assert_eq "801 恢复" 0 "$(cat "$A/proc/801/oom_score_adj")"
+assert_eq "802 恢复" 0 "$(cat "$A/proc/802/oom_score_adj")"
+assert_eq "803 恢复" 0 "$(cat "$A/proc/803/oom_score_adj")"
+assert_contains "报告恢复个数" "$out" "Snell 优先牺牲：已把 3 个进程"
+printf '== Snell 优先牺牲: 不适用的环境\n'
+A="$T_TMP/sac_nosnell"; mk_lm "$A" $((64 * MIB)) "$HYT_R" "$HYT_W"
+out=$(lm enable --snell-sacrifice)
+assert_contains "没有 Snell 服务: 说明" "$out" "没有检测到 Snell 服务"
+A="$T_TMP/sac_group"; mk_snellsys "$A"
+printf '1\n' > "$A/sys/fs/cgroup/memory.oom.group"
+out=$(lm enable --snell-sacrifice)
+assert_contains "oom.group 为 1: 说明整组终止" "$out" "memory.oom.group 为 1"
+assert_eq "oom.group 为 1: 不修改 Snell" 0 "$(cat "$A/proc/801/oom_score_adj")"
+assert_eq "oom.group 为 1: 不修改 sshd" 0 "$(cat "$A/proc/524/oom_score_adj")"
+assert_not_contains "oom.group 为 1: 不显示 SSH 已生效" "$out" "SSH 保护：已生效"
 
 t_done
