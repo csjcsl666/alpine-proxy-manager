@@ -27,7 +27,17 @@ mk_lm() {
     printf '%s\n' "$3" > "$_d/proc/sys/net/ipv4/tcp_rmem"
     printf '%s\n' "$4" > "$_d/proc/sys/net/ipv4/tcp_wmem"
     printf 'MemTotal: %s kB\nMemFree: 1 kB\nMemAvailable: 1 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n' $(($2 / 1024)) > "$_d/proc/meminfo"
-    [ "${5:-own}" != host ] || printf '212992\n' > "$_d/proc/sys/net/core/rmem_default"
+    # 5: core 表示 /proc/sys/net/core/rmem_default 存在 (新内核容器里也有)  6: 用户命名空间映射 userns(默认) | identity | none
+    [ "${5:-}" != core ] || printf '212992\n' > "$_d/proc/sys/net/core/rmem_default"
+    case ${6:-userns} in
+        userns) printf '         0    1000000 1000000000\n' > "$_d/proc/self/uid_map" ;;
+        identity) printf '         0          0 4294967295\n' > "$_d/proc/self/uid_map" ;;
+        none) rm -f "$_d/proc/self/uid_map" ;;
+    esac
+    mkdir -p "$_d/proc/1"
+    printf 'HOME=/\0container=lxc\0' > "$_d/proc/1/environ"
+    mkdir -p "$_d/proc/self/ns"
+    printf 'net:[4026532711]\n' > "$_d/proc/self/ns/net.txt"
     mkdir -p "$_d/proc/net" "$_d/etc/alpine-proxy-manager"
     printf '1000.00 900.00\n' > "$_d/proc/uptime"
     printf '%s\n' $(($2 / 3)) > "$_d/sys/fs/cgroup/memory.peak"
@@ -152,7 +162,7 @@ assert_contains "目标记录 rmem" "$orig" "tcp_rmem_target=4096 131072 6291456
 assert_contains "依据记录" "$orig" "tcp_rmem_why="
 out=$(lm detail)
 assert_contains "详情: 原值目标当前" "$out" "tcp_rmem：原值 [4096 1048576 128516096]，目标 [4096 131072 6291456]，当前 [4096 131072 6291456]"
-assert_contains "详情: 网络命名空间说明" "$out" "容器自己的网络命名空间"
+assert_contains "详情: 网络命名空间说明" "$out" "是否与宿主机共享：不共享"
 assert_contains "详情: 不作承诺" "$out" "不承诺启用后 SSH 一定不被 OOM 杀死"
 assert_contains "OOM 计数范围" "$(lm status)" "累计"
 
@@ -338,7 +348,8 @@ out=$(APM_SYSROOT="$A" APM_EUID=0 APM_HOME="$T_ROOT" "$PM" status 2>&1)
 assert_contains "状态总览有低内存保护一行" "$out" "低内存保护：未启用"
 run_tui() { printf '%b' "$1" | ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; APM_TUI_ANSI=0; export APM_SYSROOT APM_EUID APM_HOME APM_TUI_ANSI; tui_run ) 2>&1; }
 out=$(run_tui '4\n3\n0\n0\n0\n')
-assert_contains "菜单入口在状态与诊断里" "$out" "3. 低内存环境保护"
+assert_contains "菜单入口在状态与诊断里 并标明针对 Snell" "$out" "3. 低内存环境保护（针对 Snell）"
+assert_contains "页面说明 TCP 缓冲影响整个网络命名空间" "$out" "同一命名空间里的所有服务"
 assert_contains "页面显示实时检测" "$out" "内存上限：128 MiB"
 assert_contains "页面显示启用项" "$out" "1. 启用低内存保护"
 assert_contains "页面显示详情项" "$out" "2. 查看保护详情"
@@ -353,5 +364,64 @@ out=$(run_tui '4\n3\n2\n0\n0\n0\n')
 assert_not_contains "恢复不需要确认" "$out" "继续？"
 assert_eq "TUI 恢复后 tcp 原值" "4096 1048576 128516096" "$(tcp rmem)"
 assert_contains "状态回到未启用" "$(lm status)" "保护状态：未启用"
+
+# ============ 6. 网络命名空间作用范围 ============
+printf '== 作用范围: 同一个 sysctl 文件存在与否不影响分类\n'
+# HK-IXP2 (Linux 6.8): 容器里没有 core/rmem_default  tw-home (Linux 7.0): 有  两者都在子用户命名空间里
+A="$T_TMP/ns_hk"; mk_lm "$A" $((128 * MIB)) "$HYT_R" "$HYT_W" "" userns
+out=$(lm status)
+assert_contains "HK-IXP2 类 (6.8 无 core/rmem_default, 用户命名空间): 不共享" "$out" "是否与宿主机共享：不共享"
+A="$T_TMP/ns_tw"; mk_lm "$A" $((128 * MIB)) "$HYT_R" "$HYT_W" core userns
+out=$(lm status)
+assert_contains "tw-home 类 (7.0 有 core/rmem_default, 用户命名空间): 同样不共享" "$out" "是否与宿主机共享：不共享"
+assert_not_contains "不再出现 整台机器 的说法" "$out" "整台机器"
+assert_not_contains "不再出现 整机 的说法" "$out" "整机"
+A="$T_TMP/ns_id1"; mk_lm "$A" $((128 * MIB)) "$HYT_R" "$HYT_W" "" identity
+A2="$T_TMP/ns_id2"; mk_lm "$A2" $((128 * MIB)) "$HYT_R" "$HYT_W" core identity
+o1=$(lm status | grep "作用范围"); A=$A2; o2=$(lm status | grep "作用范围")
+assert_eq "恒等映射下 core 文件有无不改变分类" "$o1" "$o2"
+assert_contains "恒等映射: 未确认" "$o1" "是否与宿主机共享：未确认"
+
+printf '== 作用范围: 未确认时不自动修改 TCP\n'
+A="$T_TMP/ns_unc"; mk_lm "$A" $((128 * MIB)) "$HYT_R" "$HYT_W" "" identity
+mk_sshd "$A" 524 0 sshd
+out=$(lm enable)
+assert_eq "未确认: tcp_rmem 不改" "4096 1048576 128516096" "$(tcp rmem)"
+assert_eq "未确认: tcp_wmem 不改" "4096 1048576 128516096" "$(tcp wmem)"
+assert_contains "未确认: 仍给出只读诊断" "$out" "偏大"
+assert_contains "未确认: 说明默认不自动修改" "$out" "默认不自动修改"
+assert_contains "未确认: 提示显式选项" "$out" "--assume-own-netns"
+assert_contains "未确认: 其他模块照常" "$out" "SSH 保护：已生效"
+assert_not_contains "未确认: 不显示 TCP 已生效" "$out" "TCP 缓冲：已生效"
+assert_not_contains "未确认: 原值文件不含 tcp" "$(cat "$A/var/lib/alpine-proxy-manager/lowmem.orig" 2>/dev/null)" "tcp_rmem_orig"
+lm disable >/dev/null
+printf '== 作用范围: 管理员显式指定后才修改, 并记录\n'
+out=$(lm enable --assume-own-netns)
+assert_eq "显式指定: tcp_rmem 调整" "4096 131072 6291456" "$(tcp rmem)"
+assert_contains "显式指定: 记录" "$(cat "$A/etc/alpine-proxy-manager/lowmem.conf")" "netns_assumed=yes"
+assert_contains "显式指定: 详情说明没有独立证据" "$(lm detail)" "没有独立证据"
+lm disable >/dev/null
+assert_eq "显式指定后恢复原值" "4096 1048576 128516096" "$(tcp rmem)"
+out=$(lm enable --bogus)
+assert_contains "未知参数" "$out" "未知参数"
+
+printf '== 作用范围: 无法判断 (没有 uid_map)\n'
+A="$T_TMP/ns_none"; mk_lm "$A" $((128 * MIB)) "$HYT_R" "$HYT_W" core none
+out=$(lm status)
+assert_contains "无 uid_map: 未确认" "$out" "是否与宿主机共享：未确认"
+lm enable >/dev/null
+assert_eq "无 uid_map: tcp 不改" "4096 1048576 128516096" "$(tcp rmem)"
+printf '== 作用范围: 子用户命名空间但 sysctl 不可写 -> 未确认且不支持\n'
+A="$T_TMP/ns_ro"; mk_lm "$A" $((128 * MIB)) "$HYT_R" "$HYT_W" "" userns
+: > "$A/.deny-sysctl-write"
+out=$(lm status)
+assert_contains "不可写: 未确认" "$out" "是否与宿主机共享：未确认"
+assert_contains "不可写: 不允许修改" "$out" "不允许修改"
+printf '== 作用范围: 详情里辅助信息不参与判断\n'
+A="$T_TMP/ns_aux"; mk_lm "$A" $((128 * MIB)) "$HYT_R" "$HYT_W" core identity
+out=$(lm detail)
+assert_contains "辅助信息含容器标记" "$out" "容器标记 lxc"
+assert_contains "辅助信息含命名空间标识" "$out" "net:[4026532711]"
+assert_contains "辅助信息说明不参与判断" "$out" "不参与判断"
 
 t_done

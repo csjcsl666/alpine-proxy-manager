@@ -74,11 +74,67 @@ _lm_sysctl_conflict() { # tcp_rmem
     return 1
 }
 
-# 当前网络命名空间: core 下的全局参数 (rmem_default 等) 只出现在初始网络命名空间, 容器自己的命名空间里看不到
-_lm_netns() {
-    if [ ! -d "$(env_path /proc/sys/net/core)" ]; then printf 'unknown'
-    elif [ -e "$(env_path /proc/sys/net/core/rmem_default)" ]; then printf 'host'
-    else printf 'own'; fi
+# ---- 网络命名空间作用范围 ----
+# tcp_rmem/tcp_wmem 是网络命名空间级参数，作用范围以 "当前网络命名空间" 描述。能不能确认它不与宿主机共享，只看直接证据:
+#   可靠证据  进程在非初始用户命名空间里 (uid_map 不是 "0 0 4294967295" 的恒等映射)，并且 sysctl 可以写
+#             内核对网络 sysctl 的写权限要求进程在该网络命名空间所属的用户命名空间里拥有 CAP_NET_ADMIN 或是它的 root；
+#             子用户命名空间里的进程对初始用户命名空间拥有的网络命名空间 (宿主机的) 没有这个权限，所以能写就说明这个命名空间归本容器所有
+#   不可靠    某个 /proc/sys/net/core 文件是否存在 (新内核把更多参数变成每个命名空间一份，容器里也有)  容器标记 (LXC/Docker 不保证独立的网络命名空间)
+#             PID 1 与本进程在同一网络命名空间 (容器的 PID 1 也在容器里，整机的 PID 1 也一样，两种情况都成立)
+# 这些不可靠的信息只作为辅助说明显示，不参与判断。证据不足时一律是 "未确认"，不自动修改
+_lm_uidmap_form() { # identity | userns | unknown
+    local _f _a _b _c _n
+    _f=$(env_path /proc/self/uid_map)
+    [ -r "$_f" ] || { printf 'unknown'; return 0; }
+    _n=0
+    while read -r _a _b _c; do
+        [ -n "$_a" ] || continue
+        _n=$((_n + 1))
+        if [ "$_n" -eq 1 ] && [ "$_a" = 0 ] && [ "$_b" = 0 ] && [ "$_c" = 4294967295 ]; then _n=identity; break; fi
+    done < "$_f"
+    case $_n in
+        identity) printf 'identity' ;;
+        0) printf 'unknown' ;;
+        *) printf 'userns' ;;
+    esac
+}
+
+# 容器标记 (只是辅助信息): PID 1 的 container= 环境变量，/.dockerenv，/run/.containerenv
+_lm_container_marker() {
+    local _v
+    _v=$(tr '\0' '\n' < "$(env_path /proc/1/environ)" 2>/dev/null | sed -n 's/^container=//p' | head -n 1)
+    if [ -n "$_v" ]; then printf '%s' "$_v"
+    elif [ -e "$(env_path /.dockerenv)" ]; then printf 'docker'
+    elif [ -e "$(env_path /run/.containerenv)" ]; then printf 'podman'
+    else printf 'none'; fi
+}
+
+_lm_netns_id() {
+    local _f
+    _f=$(env_path /proc/self/ns/net)
+    if [ -n "${APM_SYSROOT:-}" ]; then
+        cat "$_f.txt" 2>/dev/null
+        return 0
+    fi
+    readlink "$_f" 2>/dev/null
+}
+
+# 产出 LM_NS_SCOPE  own | unconfirmed   LM_NS_TEXT  展示用的一行说明   LM_NS_AUX  辅助信息
+# own 要求 uid_map 是用户命名空间映射并且 tcp_rmem 可写 (写权限是上面说的直接证据)
+_lm_probe_ns() {
+    local _uid _mk _id
+    _uid=$(_lm_uidmap_form)
+    _mk=$(_lm_container_marker)
+    _id=$(_lm_netns_id)
+    LM_NS_ID=$_id
+    LM_NS_AUX="容器标记 ${_mk}，uid_map ${_uid}，网络命名空间 ${_id:-不可读}"
+    if [ "$_uid" = userns ] && [ -w "$(_lm_tcp_path rmem)" ] && [ ! -e "$(env_path /.deny-sysctl-write)" ]; then
+        LM_NS_SCOPE=own
+        LM_NS_TEXT="当前网络命名空间；是否与宿主机共享：不共享（本进程在子用户命名空间里并且能写网络参数，说明该命名空间归本容器所有）"
+    else
+        LM_NS_SCOPE=unconfirmed
+        LM_NS_TEXT="当前网络命名空间；是否与宿主机共享：未确认（没有直接证据，不能因为容器标记或某个 /proc 文件存在与否来推断）"
+    fi
 }
 
 # 是否允许把进程的 oom_score_adj 降到负值: 用一个临时子进程试一次, 不影响任何现有进程
@@ -142,7 +198,7 @@ lm_probe() {
     LM_WMEM=
     [ ! -r "$(_lm_tcp_path rmem)" ] || LM_RMEM=$(_lm_norm "$(cat "$(_lm_tcp_path rmem)" 2>/dev/null)")
     [ ! -r "$(_lm_tcp_path wmem)" ] || LM_WMEM=$(_lm_norm "$(cat "$(_lm_tcp_path wmem)" 2>/dev/null)")
-    LM_NETNS=$(_lm_netns)
+    _lm_probe_ns
     return 0
 }
 
@@ -203,6 +259,9 @@ lm_plan_tcp() {
     if [ "$LM_LIMIT" -le 0 ] 2>/dev/null; then
         LM_P_TCP=unknown; LM_P_TCP_NOTE="无法可靠识别内存上限，不调整"; return 0
     fi
+    # 作用范围无法确认且可能波及宿主机时，不自动修改；仍然做只读诊断，管理员确认独占该网络命名空间后可以显式指定
+    LM_P_SCOPE_BLOCK=no
+    if [ "$LM_NS_SCOPE" != own ] && [ "${LM_ASSUME_NS:-no}" != yes ]; then LM_P_SCOPE_BLOCK=yes; fi
     # shellcheck disable=SC2086
     set -- $LM_RMEM
     _s=$3
@@ -212,6 +271,16 @@ lm_plan_tcp() {
     _thr=$((LM_LIMIT / LM_RISK_DIV))
     LM_P_TCP_S=$_s
     LM_P_TCP_THR=$_thr
+    if [ "$LM_P_SCOPE_BLOCK" = yes ]; then
+        if [ "$_s" -le "$_thr" ]; then
+            LM_P_TCP=fine
+            LM_P_TCP_NOTE="单个连接的缓冲上限之和 $(_lm_mib "$_s")，不超过内存上限 $(_lm_mib "$LM_LIMIT") 的四分之一，无需调整"
+        else
+            LM_P_TCP=unconfirmed
+            LM_P_TCP_NOTE="偏大：单个连接的缓冲上限之和 $(_lm_mib "$_s")，超过内存上限 $(_lm_mib "$LM_LIMIT") 的四分之一；但修改范围是当前网络命名空间，是否与宿主机共享未确认，默认不自动修改（独占该命名空间的管理员可用 lowmem enable --assume-own-netns 明确指定）"
+        fi
+        return 0
+    fi
     if [ "$_s" -le "$_thr" ]; then
         LM_P_TCP=fine
         LM_P_TCP_NOTE="单个连接的缓冲上限之和 $(_lm_mib "$_s")，不超过内存上限 $(_lm_mib "$LM_LIMIT") 的四分之一，无需调整"
@@ -385,6 +454,14 @@ _lm_init_ours() { [ -f "$(env_path "$LM_INIT")" ] && grep -q '^# apm-managed: ap
 
 lowmem_enable() {
     local _tcp _ssh _for _was _kept
+    LM_ASSUME_NS=no
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --assume-own-netns) LM_ASSUME_NS=yes ;;
+            *) apm_err "未知参数: $1"; return 2 ;;
+        esac
+        shift
+    done
     _lm_begin || return $?
     lm_probe
     lm_plan_tcp
@@ -396,6 +473,8 @@ lowmem_enable() {
     _kept=no
     if [ "$_was" = true ] && [ "$(_lm_cget tcp)" = on ]; then
         _kept=yes
+        LM_ASSUME_NS=$(_lm_cget netns_assumed)
+        LM_ASSUME_NS=${LM_ASSUME_NS:-no}
         LM_P_TCP=plan
         LM_P_RMEM_T=$(_lm_cget tcp_rmem)
         LM_P_WMEM_T=$(_lm_cget tcp_wmem)
@@ -403,6 +482,7 @@ lowmem_enable() {
     fi
     printf '低内存环境保护：检测结果\n'
     printf '  内存上限：%s（%s）\n' "$(_lm_mib "$LM_LIMIT")" "$(_lm_limit_src_text)"
+    printf '  作用范围：%s\n' "$LM_NS_TEXT"
     printf '  TCP 缓冲：%s\n' "$LM_P_TCP_NOTE"
     printf '  SSH 保护：%s\n' "$LM_P_SSH_NOTE"
     printf '  内存取证：%s\n' "$LM_P_FOR_NOTE"
@@ -455,7 +535,8 @@ _lm_write_orig() {
         printf 'apm_version=%s\n' "$(apm_version)"
         printf 'saved_at=%s\n' "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)"
         printf 'limit=%s\n' "$LM_LIMIT"
-        printf 'netns=%s\n' "$LM_NETNS"
+        printf 'netns=%s\nnetns_scope=%s\n' "$LM_NS_ID" "$LM_NS_SCOPE"
+        printf 'netns_assumed=%s\n' "${LM_ASSUME_NS:-no}"
         if [ -n "$LM_P_RMEM_T" ]; then
             printf 'tcp_rmem_orig=%s\ntcp_rmem_target=%s\ntcp_rmem_why=%s\n' "$LM_RMEM" "$LM_P_RMEM_T" "$LM_P_RMEM_WHY"
         fi
@@ -503,7 +584,7 @@ _lm_write_conf() { # tcp ssh forensics
         printf 'enabled=true\n'
         printf 'apm_version=%s\n' "$(apm_version)"
         printf 'enabled_at=%s\n' "$(date '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)"
-        printf 'tcp=%s\n' "$1"
+        printf 'tcp=%s\nnetns_assumed=%s\n' "$1" "${LM_ASSUME_NS:-no}"
         if [ "$1" = on ]; then
             [ -z "$_rt" ] || printf 'tcp_rmem=%s\n' "$_rt"
             [ -z "$_wt" ] || printf 'tcp_wmem=%s\n' "$_wt"
@@ -624,8 +705,10 @@ lowmem_status() {
     _tcp=$(_lm_cget tcp); _ssh=$(_lm_cget ssh); _for=$(_lm_cget forensics)
     _total=0
     _ok=0
-    printf '低内存环境保护\n'
+    printf '低内存环境保护（针对 Snell 的低内存故障）\n'
+    printf '  适用范围：针对 HK-Hytron2 上观察到的 Snell 内存故障设计；TCP 缓冲属于当前网络命名空间，同一命名空间里的所有服务（包括 sing-box 与 AnyTLS Gateway）都会受到影响，不只是 Snell；APM 不修改 sing-box 与 AnyTLS Gateway 进程的任何优先级\n'
     printf '  内存上限：%s（%s）\n' "$(_lm_mib "$LM_LIMIT")" "$(_lm_limit_src_text)"
+    printf '  作用范围：%s\n' "$LM_NS_TEXT"
     if [ -n "$LM_OOM_KILL" ]; then
         printf '  历史 OOM Kill：%s 次（所在 cgroup %s 自创建以来的累计，不是最近一次）\n' "$LM_OOM_KILL" "${LM_CG_DIR#"${APM_SYSROOT:-}"}"
     else
@@ -650,6 +733,7 @@ lowmem_status() {
     else
         case $LM_P_TCP in
             plan) printf '  TCP 缓冲：%s；启用后调整\n' "$LM_P_TCP_NOTE" ;;
+            unconfirmed) printf '  TCP 缓冲：%s\n' "$LM_P_TCP_NOTE" ;;
             *) printf '  TCP 缓冲：%s\n' "$LM_P_TCP_NOTE" ;;
         esac
     fi
@@ -714,12 +798,9 @@ lowmem_detail() {
     local _k _o _t _w _c
     lowmem_status
     printf '\n详情\n'
-    printf '  网络命名空间：'
-    case $LM_NETNS in
-        own) printf '容器自己的网络命名空间（core 全局参数不可见），tcp_rmem/tcp_wmem 的修改只影响本容器\n' ;;
-        host) printf '初始网络命名空间（整机），tcp_rmem/tcp_wmem 的修改对本机所有连接生效\n' ;;
-        *) printf '未确认\n' ;;
-    esac
+    printf '  网络命名空间：%s\n' "$LM_NS_TEXT"
+    printf '  辅助信息（不参与判断）：%s\n' "$LM_NS_AUX"
+    [ "$(_lm_cget netns_assumed)" != yes ] || printf '  管理员已用 --assume-own-netns 指定：该网络命名空间由本机独占，APM 没有独立证据\n'
     printf '  当前 tcp_rmem：%s\n  当前 tcp_wmem：%s\n' "${LM_RMEM:-不可用}" "${LM_WMEM:-不可用}"
     printf '  内核默认值（参照）：tcp_rmem %s，tcp_wmem %s\n' "$LM_KD_RMEM" "$LM_KD_WMEM"
     if [ -f "$(_lm_orig)" ]; then
@@ -756,7 +837,7 @@ lowmem_cli() {
     case $_sub in
         status) lowmem_status ;;
         detail) lowmem_detail ;;
-        enable) lowmem_enable ;;
+        enable) lowmem_enable "$@" ;;
         disable) lowmem_disable ;;
         boot) lowmem_boot ;;
         log) lowmem_log "$@" ;;

@@ -662,7 +662,7 @@ tui_status_menu() {
         _tui_header "状态与诊断"
         tui_choose "overview|状态总览（服务、功能、资源）
 doctor|doctor 环境检查
-lowmem|低内存环境保护" "返回"
+lowmem|低内存环境保护（针对 Snell）" "返回"
         case $TUI_KEY in
             back) return 0 ;;
             overview) _tui_do _tui_overview; _tui_done ;;
@@ -677,7 +677,7 @@ tui_lowmem_menu() {
     local _items
     while :; do
         _tui_clear
-        _tui_header "低内存环境保护"
+        _tui_header "低内存环境保护 · 针对 Snell"
         _tui_do lowmem_status
         printf '\n'
         if lm_enabled; then
