@@ -661,11 +661,38 @@ tui_status_menu() {
         _tui_clear
         _tui_header "状态与诊断"
         tui_choose "overview|状态总览（服务、功能、资源）
-doctor|doctor 环境检查" "返回"
+doctor|doctor 环境检查
+lowmem|低内存环境保护" "返回"
         case $TUI_KEY in
             back) return 0 ;;
             overview) _tui_do _tui_overview; _tui_done ;;
             doctor) _tui_do report_doctor; _tui_done ;;
+            lowmem) tui_lowmem_menu ;;
+        esac
+    done
+}
+
+# 低内存环境保护: 入口显示实时检测到的事实，启用与恢复直接执行（预检在启用时完成，不能处理的项目会明确说明）
+tui_lowmem_menu() {
+    local _items
+    while :; do
+        _tui_clear
+        _tui_header "低内存环境保护"
+        _tui_do lowmem_status
+        printf '\n'
+        if lm_enabled; then
+            _items="detail|查看保护详情
+disable|恢复原始设置"
+        else
+            _items="enable|启用低内存保护
+detail|查看保护详情"
+        fi
+        tui_choose "$_items" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            enable) _tui_need_root || continue; _tui_clear; _tui_header "低内存环境保护 · 启用"; _tui_do lowmem_enable; _tui_done ;;
+            disable) _tui_need_root || continue; _tui_clear; _tui_header "低内存环境保护 · 恢复"; _tui_do lowmem_disable; _tui_done ;;
+            detail) _tui_clear; _tui_header "低内存环境保护 · 详情"; _tui_do lowmem_detail; _tui_done ;;
         esac
     done
 }

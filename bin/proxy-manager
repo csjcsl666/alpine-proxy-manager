@@ -14,7 +14,7 @@ if [ "${1:-}" = sing-box ] && [ "${2:-}" = health ] && [ "${3:-}" = run ]; then
     exec sh "$APM_HOME/lib/sbhealth-daemon.sh"
 fi
 
-for _m in common environment state core model policy txn report client snell snellnet anytlsgw singbox sbhealth manager tui; do
+for _m in common environment state core model policy txn report client snell snellnet anytlsgw singbox sbhealth manager lowmem tui; do
     # shellcheck source=/dev/null
     . "$APM_HOME/lib/$_m.sh" || { echo "加载 lib/$_m.sh 失败" >&2; exit 1; }
 done
@@ -72,6 +72,7 @@ usage() {
   sing-box export ID show [--secret] | secret | sing-box [--redacted] [--embed-cert] | url | qr   客户端导出 (show --secret 连接信息加完整凭据 secret url qr 包含凭据)
   snell endpoint [show] | set 主机 端口 | clear   Snell 客户端连接地址
   snell export info [--secret] | show [--secret] | secret   Snell 客户端信息 info 按需查询公网 IP 不需要先设置客户端连接地址 show 使用已设置的客户端连接地址 secret 显示 PSK --secret 在连接信息里直接给出 PSK
+  lowmem [status | detail | enable | disable | log [N]]   低内存环境保护 (默认关闭): 自动检测内存上限 TCP 缓冲 sshd 与 cgroup, 只调整需要调整的项目, 原值可恢复
   manager check-update   检查 GitHub 最新正式 Release 只查询 不下载 非 root 也可以
   manager update         更新 Manager 本身 只用最新正式 Release 复用安装器 需要 root 不重启 Snell 与 sing-box
   tui           统一 TUI 管理界面 (交互式终端中直接运行 proxy-manager 也会进入)
@@ -99,6 +100,7 @@ case ${1:-help} in
     snell) shift; snell_cli "$@"; exit $? ;;
     anytls-gateway) shift; agw_cli "$@"; exit $? ;;
     manager) shift; manager_cli "$@"; exit $? ;;
+    lowmem) shift; lowmem_cli "$@"; exit $? ;;
     sing-box|singbox) shift; singbox_cli "$@"; exit $? ;;
     help|--help|-h) usage ;;
     *) apm_err "未知命令: $1"; usage >&2; exit 2 ;;
