@@ -94,8 +94,8 @@ OUT=$(gw client 1 show 2>&1)
 assert_contains "连接信息: 协议" "$OUT" "协议：AnyTLS"
 assert_contains "连接信息: 服务器" "$OUT" "服务器：203.0.113.10"
 assert_contains "连接信息: 使用映射端口而不是内部监听" "$OUT" "端口：31443"
-assert_contains "连接信息: 默认不指定 SNI" "$OUT" "TLS Server Name：未指定"
-assert_not_contains "连接信息: 不显示内部占位名称" "$OUT" "TLS Server Name：anytls-gateway"
+assert_contains "连接信息: 默认不指定 SNI" "$OUT" "TLS 服务名（SNI）：未指定"
+assert_not_contains "连接信息: 不显示内部占位名称" "$OUT" "TLS 服务名（SNI）：anytls-gateway"
 assert_not_contains "连接信息: 不含密码" "$OUT" "$PW1"
 assert_not_contains "连接信息: 不含 SOCKS5 上游地址" "$OUT" "192.0.2.10"
 
@@ -204,7 +204,7 @@ put_agw_cert gw-one.example.com "DNS:gw-one.example.com"
 assert_eq "默认: 证书里有名称 URL 也没有 sni" "" "$(gsni_url 1)"
 assert_eq "默认: JSON 没有 server_name" "" "$(gsni_json 1)"
 gsame "默认" 1
-assert_contains "show 说明未指定" "$(gw client 1 show 2>&1)" "TLS Server Name：未指定"
+assert_contains "show 说明未指定" "$(gw client 1 show 2>&1)" "TLS 服务名（SNI）：未指定"
 assert_eq "嵌入证书: 名称来自证书 DNS SAN" gw-one.example.com "$(gpin_sni 1)"
 # 不需要 openssl 也能完成默认导出 (没有 openssl 时 Gateway 路径本来就拒绝, 这里只验证有 openssl 的行为)
 put_agw_cert gw-one.example.com "DNS:gw-one.example.com,DNS:gw-two.example.com"
@@ -343,7 +343,7 @@ out=$(tx '3\n0\n0\n')
 assert_contains "Gateway 菜单有客户端配置入口" "$out" "客户端配置"
 # 菜单序号: 查看详细信息 停止/启动 重启 转发线路 证书 客户端配置
 out=$(tx '3\n6\n0\n0\n0\n' ok)
-for item in "客户端配置 · AnyTLS Gateway 线路 1（端口 20443）" "查看完整连接信息" "导出 sing-box JSON" "导出分享 URL" "显示二维码（首次使用会自动安装 qrencode）" "更多导出选项" "修改客户端连接设置" "证书校验：跳过（自签名，免维护）"; do
+for item in "客户端配置 · AnyTLS Gateway 线路 1（端口 20443）" "查看完整连接信息" "导出 sing-box JSON" "导出分享 URL" "显示二维码（首次使用会自动安装 qrencode）" "修改客户端连接地址与端口" "修改客户端 TLS 服务名（SNI）" "更多导出选项" "证书校验：跳过（自签名，免维护）"; do
     assert_contains "Gateway 客户端配置含 $item" "$out" "$item"
 done
 assert_not_contains "只有一条线路时不再询问选哪条" "$out" "选择要导出客户端配置的转发线路"
@@ -361,15 +361,15 @@ assert_not_contains "TUI: 不再有凭据警告" "$out" "警告：以下内容�
 # 已有地址之后: 查看只需 2 次按键 (6 之后的 1)
 out=$(tx '3\n6\n1\n0\n0\n0\n' ok)
 assert_contains "TUI: 已有地址时一步查看" "$out" "$PW1"
-# 修改客户端连接设置 (6): 手动 IPv6 (TLS 协议先选 地址)
-out=$(tx '3\n6\n6\n1\n2001:db8::9\n8443\n0\n0\n0\n0\n' ok)
+# 修改客户端连接地址与端口 (5): 手动 IPv6
+out=$(tx '3\n6\n5\n2001:db8::9\n8443\n0\n0\n0\n0\n' ok)
 assert_eq "TUI 手动 IPv6" 2001:db8::9 "$(kv_get "$(EPF 1)" public.host)"
 assert_eq "TUI 手动端口" 8443 "$(kv_get "$(EPF 1)" public.port)"
 # 0 与 Esc 返回, 不改地址
 T0=$(cat "$(EPF 1)")
-out=$(tx '3\n6\n6\n1\n0\n0\n0\n0\n0\n' ok)
+out=$(tx '3\n6\n5\n0\n0\n0\n0\n' ok)
 assert_eq "输入 0 取消, 地址不变" "$T0" "$(cat "$(EPF 1)")"
-out=$(tx "3\\n6\\n6\\n1\\n${ESC}\\n0\\n0\\n0\\n0\\n" ok)
+out=$(tx "3\\n6\\n5\\n${ESC}\\n0\\n0\\n0\\n0\\n" ok)
 assert_eq "Esc 取消, 地址不变" "$T0" "$(cat "$(EPF 1)")"
 assert_contains "Esc 取消有提示" "$out" "已取消"
 # 自动获取失败: 提示, 之后手动输入
@@ -381,7 +381,7 @@ assert_eq "TUI: 失败后手动输入" 198.51.100.8 "$(kv_get "$(EPF 1)" public.
 out=$(tx '3\n6\n2\n0\n0\n0\n' ok)
 assert_contains "TUI JSON: 真实配置" "$out" "\"password\": \"$PW1\""
 # 更多导出选项 (5) 里的隐藏凭据 JSON
-out=$(tx '3\n6\n5\n1\n0\n0\n0\n0\n' ok)
+out=$(tx '3\n6\n7\n1\n0\n0\n0\n0\n0\n' ok)
 assert_contains "TUI 隐藏凭据" "$out" '"password": "REDACTED"'
 assert_not_contains "TUI 隐藏凭据: 不含真实密码" "$out" "$PW1"
 # 多条线路: 先选线路, 且各自独立

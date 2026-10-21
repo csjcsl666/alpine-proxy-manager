@@ -447,13 +447,13 @@ _cx_r_show() {
     fi
     if [ -n "$CX_TLSMODE" ]; then
         if [ -n "$CX_SNI" ]; then
-            printf '  TLS Server Name：%s (%s)\n' "$CX_SNI" "$(_cx_sni_src_text)"
+            printf '  TLS 服务名（SNI）：%s (%s)\n' "$CX_SNI" "$(_cx_sni_src_text)"
         else
-            printf '  TLS Server Name：未指定 (%s)\n' "$(_cx_sni_src_text)"
+            printf '  TLS 服务名（SNI）：未指定 (%s)\n' "$(_cx_sni_src_text)"
         fi
         [ -z "$CX_TLS_NOTE" ] || printf '  TLS 提示：%s\n' "$CX_TLS_NOTE"
         if [ "${CX_TLSINS:-yes}" = yes ]; then
-            printf '  证书：自签名 (客户端不能按公共 CA 校验, 需要 insecure 或嵌入证书, 这是当前自签名证书模式的限制)\n'
+            printf '  证书：自签名 (客户端需要跳过证书验证, 或使用嵌入证书校验)\n'
         else
             printf '  证书：由 CA 签发 (客户端按证书链与服务器名称校验, 连接地址需要是证书覆盖的域名)\n'
         fi
@@ -476,7 +476,7 @@ _cx_r_show() {
     if [ "$CX_POLICY" = on ]; then
         printf '  服务端提醒：该实例启用了目标访问限制, 这是服务端策略, 不属于客户端参数\n'
     fi
-    printf '  说明：Public Endpoint 只记录客户端应该连接的地址, 不配置 NAT 与防火墙, 公网可达性没有验证\n'
+    printf '  说明：连接地址是你保存的设置，APM 不检查 NAT、防火墙与公网可达性 (未验证)\n'
 }
 
 # 凭据, 与连接参数分开显示, 只包含客户端认证需要的值

@@ -244,22 +244,22 @@ assert_contains "实际配置里仍是 :: (只是不再显示给用户)" "$(cat 
 # 管理实例: 多个实例先选再进入, 单个实例直接进入
 inst() { T "2\n$1\n$2\n0\n0\n0\n"; }
 out=$(T '2\n0\n0\n0\n')
-for item in "1. 管理 AnyTLS-01（AnyTLS，端口 20443）" "2. 管理 Hysteria2-01（Hysteria2，端口 20500）" "3. 管理 Shadowsocks-01（Shadowsocks，端口 20700）" "4. 管理 TUIC-01（TUIC，端口 20600）"; do assert_contains "实例选择含 $item" "$out" "$item"; done
+for item in "1. 管理 AnyTLS-01" "2. 管理 Hysteria2-01" "3. 管理 Shadowsocks-01" "4. 管理 TUIC-01"; do assert_contains "实例选择含 $item" "$out" "$item"; done
 out=$(inst 1 0)
 assert_contains "AnyTLS 实例页标题" "$out" "AnyTLS-01 · AnyTLS"
 assert_contains "实例页状态" "$out" "状态：● 运行中"
 assert_contains "实例页监听端口" "$out" "监听端口：20443"
-assert_contains "实例页 server-name" "$out" "server-name："
+assert_contains "实例页 TLS 服务名" "$out" "TLS 服务名（SNI）："
 assert_contains "实例页出口" "$out" "出口：直连"
 for noise in "内部监听" "::" "TCP [" "目标访问限制：未启用" "客户端连接地址：未配置" "密码：已配置" "TLS：self-signed" "内部 TCP Listener"; do
     assert_not_contains "实例页没有噪声: $noise" "$out" "$noise"
 done
-for item in "1. 禁用" "2. 修改监听端口" "3. 修改 TLS server-name" "4. 修改密码" "5. 客户端配置" "6. 目标访问限制" "7. 删除实例" "0. 返回"; do
+for item in "1. 禁用" "2. 修改监听端口" "3. 修改 TLS 服务名（SNI）" "4. 修改密码" "5. 客户端配置" "6. 目标访问限制" "7. 删除实例" "0. 返回"; do
     assert_contains "AnyTLS 实例页含 $item" "$out" "$item"
 done
 for gone in "修改实例" "客户端连接地址（Public Endpoint）" "查看凭据" "UUID" "method"; do assert_not_contains "AnyTLS 实例页不含 $gone" "$out" "$gone"; done
 out=$(inst 4 0)
-for item in "3. 修改 TLS server-name" "4. 修改 UUID" "5. 修改拥塞控制" "6. 修改密码" "7. 客户端配置" "8. 目标访问限制" "9. 删除实例"; do assert_contains "TUIC 实例页含 $item" "$out" "$item"; done
+for item in "3. 修改 TLS 服务名（SNI）" "4. 修改 UUID" "5. 修改拥塞控制" "6. 修改密码" "7. 客户端配置" "8. 目标访问限制" "9. 删除实例"; do assert_contains "TUIC 实例页含 $item" "$out" "$item"; done
 out=$(inst 3 0)
 for item in "2. 修改监听端口" "3. 修改 method 与密钥" "4. 客户端配置" "5. 目标访问限制" "6. 删除实例"; do assert_contains "Shadowsocks 实例页含 $item" "$out" "$item"; done
 assert_not_contains "Shadowsocks 实例页没有 server-name" "$out" "server-name"
@@ -269,7 +269,7 @@ assert_not_contains "Shadowsocks 实例页没有修改密码" "$out" "修改密�
 out=$(T '2\n1\n2\nabc\n\n0\n0\n0\n')
 assert_contains "无效端口由业务层报错" "$out" "错误:"
 assert_eq "无效端口没有改动" 20443 "$(kv_get "$(INST AnyTLS-01)" listen_port)"
-assert_contains "失败后提示返回码" "$out" "该操作没有完成"
+assert_contains "失败后给出明确结论" "$out" "操作没有完成"
 CSX=$(CFGSUM)
 out=$(T '2\n1\n2\n\n0\n0\n0\n')
 assert_eq "留空取消不改变配置" "$CSX" "$(CFGSUM)"
@@ -378,7 +378,7 @@ assert_contains "管理中心显示实例出口分配" "$out" "实例出口分�
 assert_contains "实例默认是 DIRECT" "$out" "AnyTLS-01  → DIRECT"
 # 管理 SOCKS5 服务器
 out=$(T '2\n6\n1\n0\n0\n0\n0\n')
-for item in "1. 添加 SOCKS5 服务器"; do assert_contains "服务器页含 $item" "$out" "$item"; done
+assert_contains "服务器页含添加入口" "$out" "1. 添加 SOCKS5 服务器"
 assert_not_contains "服务器页没有批量启用禁用" "$out" "批量"
 out=$(T '2\n6\n1\n1\n192.0.2.50\n1080\n\n\n\n0\n0\n0\n0\n')
 assert_contains "添加无认证服务器" "$out" "已添加 SOCKS Profile SOCKS-01"
@@ -680,8 +680,8 @@ assert_contains "客户端配置页标题" "$out" "客户端配置 · AnyTLS-01"
 assert_contains "导出页含证书校验说明" "$out" "证书校验：跳过（自签名，免维护）"
 assert_not_contains "导出页不显示内部监听" "$out" "内部监听"
 assert_not_contains "导出页没有未配置噪声" "$out" "未配置"
-assert_not_contains "导出页没有设置地址入口 (未设置时按需询问)" "$out" "客户端连接地址"
-for item in "查看完整连接信息" "导出 sing-box JSON" "导出分享 URL" "显示二维码（首次使用会自动安装 qrencode）" "更多导出选项" "修改客户端连接设置" "客户端 TLS 服务名：未指定"; do
+assert_not_contains "未设置地址时页头不显示连接地址行 (需要时才询问)" "$out" "客户端连接地址："
+for item in "查看完整连接信息" "导出 sing-box JSON" "导出分享 URL" "显示二维码（首次使用会自动安装 qrencode）" "修改客户端连接地址与端口" "修改客户端 TLS 服务名（SNI）" "更多导出选项" "客户端 TLS 服务名：未指定"; do
     assert_contains "AnyTLS 导出页含 $item" "$out" "$item"
 done
 assert_not_contains "不把嵌入证书说成推荐" "$out" "推荐"
@@ -698,7 +698,7 @@ assert_contains "完整连接信息含密码" "$out" "密码：$APW"
 out=$(T '2\n1\n5\n1\n0\n0\n0\n0\n')
 assert_not_contains "已保存后不再询问地址" "$out" "服务器的公网 IP 或域名"
 assert_contains "已设置时导出页显示地址" "$out" "客户端连接地址：example.com:32001"
-assert_contains "修改入口始终存在" "$out" "修改客户端连接设置"
+assert_contains "修改入口始终存在" "$out" "修改客户端连接地址与端口"
 # 取消询问
 "$PM" sing-box endpoint Shadowsocks-01 clear >/dev/null 2>&1
 ESC=$(printf '\033')
@@ -716,7 +716,7 @@ assert_contains "说明未指定地址不能使用" "$out" "未指定地址 0.0.
 assert_eq "无效地址没有被保存" "" "$(kv_get "$(INST Shadowsocks-01)" public.host)"
 assert_eq "无效地址没有保存" "" "$(kv_get "$(INST Shadowsocks-01)" public.host)"
 # 更改已设置的地址
-T '2\n1\n5\n6\n1\nchanged.example.com\n32002\n0\n0\n0\n0\n0\n' >/dev/null
+T '2\n1\n5\n5\nchanged.example.com\n32002\n0\n0\n0\n0\n' >/dev/null
 assert_eq "更改客户端连接地址" changed.example.com "$(kv_get "$(INST AnyTLS-01)" public.host)"
 # 旧数据没有被 TUI 浏览改动
 assert_eq "旧版本保存的地址没有被浏览改动" "$LEG0" "$(cat "$(INST TUIC-01)")"
@@ -743,10 +743,10 @@ out=$(T '2\n1\n5\n2\n0\n0\n0\n0\n')
 assert_not_contains "JSON 不再确认" "$out" "即将显示客户端凭据"
 assert_contains "JSON 直接输出" "$out" '"type": "anytls"'
 assert_contains "JSON 含密码" "$out" "\"password\": \"$APW\""
-out=$(T '2\n1\n5\n5\n1\n0\n0\n0\n0\n0\n')
+out=$(T '2\n1\n5\n7\n1\n0\n0\n0\n0\n0\n')
 assert_contains "隐藏凭据版本" "$out" '"password": "REDACTED"'
 assert_not_contains "隐藏凭据版本不含密码" "$out" "$APW"
-out=$(T '2\n1\n5\n5\n2\n0\n0\n0\n0\n0\n')
+out=$(T '2\n1\n5\n7\n2\n0\n0\n0\n0\n0\n')
 if [ -x /usr/bin/openssl ]; then
     assert_contains "证书固定可选" "$out" '"certificate": ['
     assert_not_contains "证书固定版本没有 insecure" "$out" insecure
@@ -876,7 +876,7 @@ for mode in fail empty garbage; do
     assert_contains "查询失败($mode): 监听端口仍显示" "$out" "监听端口：20000"
     assert_contains "查询失败($mode): 版本仍显示" "$out" "Snell 版本：v6.0.0"
     assert_contains "查询失败($mode): PSK 仍显示" "$out" "TuiSnellPskNotSecret0123456789ab"
-    assert_not_contains "查询失败($mode): 页面没有报错" "$out" "该操作没有完成"
+    assert_not_contains "查询失败($mode): 页面没有报错" "$out" "操作没有完成"
 done
 # 无效响应不能冒充公网 IP
 for bad in "999.1.1.1" "1.2.3" "1.2.3.4.5" "01.2.3.4" "93.184.216.034" "10.1.2.3" "127.0.0.1" "0.0.0.0" "169.254.1.1" "172.16.0.9" "172.31.255.1" "192.168.1.1" "100.64.0.1" "100.127.0.1" "224.0.0.1" "255.255.255.255" "::1" "2001:db8::1" "93.184.216.34;rm" "93.184.216.34 extra" "<93.184.216.34>" "abc" "-1.2.3.4" "1.2.3.4/32" "https://x.example"; do
@@ -928,7 +928,7 @@ out=$(T '5\n0\n0\n')
 assert_contains "日志页" "$out" "1. Snell 日志"
 assert_contains "日志提示" "$out" "日志可能包含访问目标"
 out=$(T '4\n0\n0\n')
-for item in "状态总览（系统、Core、资源）" "doctor 环境检查"; do assert_contains "状态页含 $item" "$out" ". $item"; done
+for item in "状态总览（服务、功能、资源）" "doctor 环境检查"; do assert_contains "状态页含 $item" "$out" ". $item"; done
 out=$(T '4\n1\n0\n0\n')
 assert_contains "状态总览来自 report_status" "$out" "SOCKS5 出口"
 out=$(T '4\n2\n0\n0\n')

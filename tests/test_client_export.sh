@@ -142,10 +142,10 @@ assert_contains "show 协议" "$out" "协议：AnyTLS"
 assert_contains "show 服务器" "$out" "服务器：example.com"
 assert_contains "show 端口是 public 端口不是内部端口" "$out" "端口：32001"
 assert_not_contains "show 没有内部端口" "$out" "端口：20001"
-assert_contains "show 的 SNI 默认未指定 (与 endpoint 独立)" "$out" "TLS Server Name：未指定"
+assert_contains "show 的 SNI 默认未指定 (与 endpoint 独立)" "$out" "TLS 服务名（SNI）：未指定"
 assert_not_contains "show 不再显示内部占位名称" "$out" "apm.local"
 assert_contains "show 说明自签名" "$out" "自签名"
-assert_contains "show 说明不配置 NAT" "$out" "不配置 NAT"
+assert_contains "show 说明不配置 NAT" "$out" "不检查 NAT"
 PW_A=$(kv_get "$(INST AnyTLS-01)" credential.password)
 assert_not_contains "show 不含密码" "$out" "$PW_A"
 assert_contains "show 说明凭据已配置" "$out" "凭据：已配置"
@@ -154,7 +154,7 @@ assert_contains "TUIC show 含 UUID" "$out" "UUID：$(kv_get "$(INST TUIC-01)" c
 out=$("$PM" sing-box export Shadowsocks-01 show 2>&1)
 assert_contains "Shadowsocks show 含 method" "$out" "method：2022-blake3-aes-128-gcm"
 assert_contains "Shadowsocks 没有 TLS" "$out" "传输层：tcp+udp"
-assert_not_contains "Shadowsocks 没有 SNI" "$out" "TLS Server Name"
+assert_not_contains "Shadowsocks 没有 SNI" "$out" "TLS 服务名（SNI）"
 assert_not_contains "Shadowsocks show 不含密钥" "$out" "$(kv_get "$(INST Shadowsocks-01)" credential.password)"
 # 回环提醒
 "$PM" sing-box endpoint Hysteria2-01 set 127.0.0.1 20002 >/dev/null 2>&1

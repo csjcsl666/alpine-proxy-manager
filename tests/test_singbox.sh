@@ -560,8 +560,8 @@ assert_ok "卸载 sing-box 后 Snell 仍运行" test "$(cat "$K/state")" = start
 core_discover snell
 assert_eq "卸载 sing-box 后 Snell 仍受管" yes "$CF_MANAGED"
 out=$("$PM" status)
-assert_contains "status 同时显示两个 Core" "$out" "Snell       运行中 (Manager 部署, 已接管)"
-assert_contains "status 显示 sing-box 未安装" "$out" "sing-box    未安装"
+assert_contains "status 同时显示两个 Core" "$out" "Snell：运行中 (Manager 部署, 已接管)"
+assert_contains "status 显示 sing-box 未安装" "$out" "sing-box：未安装"
 assert_fail "整个过程没有违规动作" test -e "$K/violations"
 assert_eq "没有任何脚本被执行" "" "$(ls "$SM")"
 t_done

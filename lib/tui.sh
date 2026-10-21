@@ -27,6 +27,8 @@ TUI_RC=0
 TUI_EXIT=0
 TUI_TICK_ON=0
 TUI_KEEP=0
+TUI_ONEKEY=0
+TUI_NCH=99
 
 # ---- 终端能力 ----
 
@@ -379,10 +381,78 @@ _tui_now() {
     fi
 }
 
+# 单键选择: 真实终端里菜单按一个键就进入, 不再需要 Enter (多一次 Enter 等于按键数翻倍), 选项超过 9 个时只有可能是两位数开头的数字才需要再按一个键或 Enter
+# 需要交互终端 stty 与支持 read -n 的 shell, 缺一不可就保持整行输入, 输出与整行模式完全一致
+_tui_onekey_init() {
+    TUI_ONEKEY=0
+    [ "${APM_TUI_ONEKEY:-1}" = 1 ] || return 0
+    [ -t 0 ] && [ -t 1 ] || return 0
+    _snell_run stty -g >/dev/null 2>&1 || return 0
+    # shellcheck disable=SC3045
+    ( IFS= read -r -n 1 _tui_probe ) </dev/null 2>/dev/null
+    [ $? -eq 1 ] || return 0
+    TUI_ONEKEY=1
+}
+
+# 读一个键: 空 Enter 静默忽略 (习惯性补按 Enter 不会报无效), Ctrl-D 视为 EOF, 终端模式在每次读取后立即恢复
+_tui_read_key() {
+    local _st _k _k2 _rc _t0
+    _st=$(_snell_run stty -g 2>/dev/null) || return 2
+    [ -n "$_st" ] || return 2
+    TUI_STTY_SAVED=$_st
+    _snell_run stty -icanon -echo min 1 time 0 2>/dev/null
+    while :; do
+        _k=
+        if [ "${TUI_TICK_ON:-0}" = 1 ]; then
+            _tui_now
+            _t0=$TUI_NOW
+            # shellcheck disable=SC3045
+            IFS= read -r -n 1 -t "$TUI_TICK_SEC" _k
+            _rc=$?
+            if [ "$_rc" -ne 0 ]; then
+                _tui_now
+                if [ $((TUI_NOW - _t0)) -ge $((TUI_TICK_SEC * 100 - 5)) ]; then _tui_tick_mem; continue; fi
+            fi
+        else
+            # shellcheck disable=SC3045
+            IFS= read -r -n 1 _k
+            _rc=$?
+        fi
+        [ "$_rc" -eq 0 ] || break
+        [ -n "$_k" ] || continue
+        break
+    done
+    # 选项超过 9 个时, 第一个数字还可能是两位数的开头 (例如 10 个选项里的 1) 才继续等下一个键或 Enter, 其余数字立刻选中
+    if [ "$_rc" -eq 0 ]; then
+        case $_k in
+            [1-9])
+                if [ "${TUI_NCH:-0}" -ge 10 ] && [ $((_k * 10)) -le "$TUI_NCH" ]; then
+                    _k2=
+                    # shellcheck disable=SC3045
+                    IFS= read -r -n 1 -t 1 _k2 || _k2=
+                    _k=$_k$_k2
+                fi
+                ;;
+        esac
+    fi
+    _snell_run stty "$_st" 2>/dev/null
+    TUI_STTY_SAVED=
+    [ "$_rc" -eq 0 ] || return 1
+    case $_k in "$(printf '\004')") return 1 ;; esac
+    printf '%s\n' "$_k"
+    _c=$_k
+    return 0
+}
+
 # 读取一行选择: 刷新开启时每个间隔超时一次并更新内存行, 其余与 read -r 完全一致
 # BusyBox 的超时与 EOF 返回码相同, 所以用耗时区分: 等满间隔才算超时, EOF (含 Ctrl-D 与连接断开) 会提前返回
 _tui_read_choice() {
-    local _t0
+    local _t0 _r
+    if [ "${TUI_ONEKEY:-0}" = 1 ]; then
+        _tui_read_key
+        _r=$?
+        [ "$_r" -ne 2 ] && return "$_r"
+    fi
     if [ "${TUI_TICK_ON:-0}" != 1 ]; then
         IFS= read -r _c
         return $?
@@ -410,6 +480,7 @@ tui_choose() {
         printf '0. %s\n' "$2"
         printf '\n请选择：'
         _c=
+        TUI_NCH=$_n
         if ! _tui_read_choice; then
             TUI_EOF=1
             TUI_KEY=back
@@ -455,7 +526,7 @@ _tui_do_secret() { # 秘密 命令...
 # 命令之后统一收尾: 失败给出提示, 然后等待
 _tui_done() {
     if [ "$TUI_RC" -ne 0 ]; then
-        printf '\n该操作没有完成 (返回码 %s), 上面是业务层给出的原因\n' "$TUI_RC"
+        printf '\n操作没有完成，原因见上面的提示\n'
     fi
     _tui_pause
 }
@@ -566,8 +637,6 @@ _tui_resources() {
 _tui_overview() {
     report_status
     printf '\n'
-    report_core_list
-    printf '\n'
     _tui_resources
 }
 
@@ -575,7 +644,7 @@ tui_status_menu() {
     while :; do
         _tui_clear
         _tui_header "状态与诊断"
-        tui_choose "overview|状态总览（系统、Core、资源）
+        tui_choose "overview|状态总览（服务、功能、资源）
 doctor|doctor 环境检查" "返回"
         case $TUI_KEY in
             back) return 0 ;;
@@ -720,6 +789,27 @@ _tui_core_lifecycle() { # key op
     esac
     _tui_do "$_cli" "$2"
     _tui_done
+}
+
+# 配置里的 地址:端口 翻译成 范围加端口 (这是配置里写的监听地址, 不是实际检测结果)
+_tui_listen_text() {
+    local _a _p
+    case $1 in
+        -|'') printf '未配置'; return 0 ;;
+        *:*) ;;
+        *) printf '%s' "$1"; return 0 ;;
+    esac
+    _p=${1##*:}
+    _a=${1%:*}
+    case $_p in ''|*[!0-9]*) printf '%s' "$1"; return 0 ;; esac
+    printf '%s，端口 %s' "$(_rpt_scope "$_a")" "$_p"
+}
+
+# Release 与二进制自报的版本只在不一样时才多显示一行 (例如 v6.0.0rc2 与 v6.0.0)
+_tui_release_line() {
+    [ -n "$CF_VERSION_EXACT" ] && [ "$CF_VERSION_EXACT" != unknown ] || return 0
+    [ "${CF_VERSION_EXACT#v}" != "${CF_VERSION_REPORTED#v}" ] || return 0
+    printf 'Release：%s\n' "$CF_VERSION_EXACT"
 }
 
 # ---- Snell ----
@@ -963,9 +1053,9 @@ tui_snell_menu() {
             external) printf '管理：现有部署，未接管\n'; printf '本项目不会修改现有部署，只提供只读信息\n' ;;
             managed)
                 printf '管理：已接管\n'
-                printf 'Release：%s\n' "$CF_VERSION_EXACT"
                 printf '版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
-                printf '监听：%s\n' "${CF_SNELL_LISTEN:--}"
+                _tui_release_line
+                printf '监听：%s\n' "$(_tui_listen_text "${CF_SNELL_LISTEN:--}")"
                 ;;
         esac
         case $CF_STATE in crashed|broken) _tui_warn "Snell 状态异常，详情见详细信息与日志" ;; esac
@@ -1369,8 +1459,8 @@ tui_singbox_menu() {
             external) printf '管理：现有部署，未接管\n'; printf '本项目不会修改现有部署，只提供只读信息\n' ;;
             managed)
                 printf '管理：已接管\n'
-                printf 'Release：%s\n' "$CF_VERSION_EXACT"
                 printf '版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
+                _tui_release_line
                 printf '\n'
                 _any=0
                 for _f in $(state_list_confs "$(state_instances_dir)"); do
@@ -1391,7 +1481,7 @@ log|查看日志" ;;
             managed)
                 _items=
                 for _f in $(state_list_confs "$(state_instances_dir)"); do
-                    _items="${_items}inst:$(kv_get "$_f" id)|管理 $(kv_get "$_f" id)（$(_tui_type_label "$(kv_get "$_f" type)")，端口 $(kv_get "$_f" listen_port)）
+                    _items="${_items}inst:$(kv_get "$_f" id)|管理 $(kv_get "$_f" id)
 "
                 done
                 _items="${_items}add|添加实例
@@ -1459,7 +1549,7 @@ _tui_add_instance() { # 协议
     [ -z "$TUI_IN" ] || set -- "$@" --port "$TUI_IN"
     case $_t in
         anytls|hysteria2|tuic)
-            tui_ask "TLS server-name（留空使用默认）："
+            tui_ask "TLS 服务名（SNI，留空使用默认）："
             [ -z "$TUI_IN" ] || set -- "$@" --server-name "$TUI_IN"
             ;;
     esac
@@ -1493,7 +1583,7 @@ _tui_inst_header() { # FILE
     _t=$(kv_get "$1" type)
     printf '状态：%s\n' "$(_tui_inst_state "$1")"
     printf '监听端口：%s\n' "$(_tui_listen_port_text "$1")"
-    if _sb_type_tls "$_t"; then printf 'server-name：%s\n' "$(kv_get "$1" tls.server_name)"; fi
+    if _sb_type_tls "$_t"; then printf 'TLS 服务名（SNI）：%s\n' "$(kv_get "$1" tls.server_name)"; fi
     _tui_exit_parts "$1"
     if [ -z "$TUI_X_NAME" ]; then
         printf '出口：直连\n'
@@ -1523,7 +1613,7 @@ _tui_inst_edit() { # ID KEY
             _tui_need_root || return 0
             case $2 in
                 port) tui_ask "新的监听端口（留空取消）：" ;;
-                server-name) tui_ask "新的 TLS server-name（留空取消）：" ;;
+                server-name) tui_ask "新的 TLS 服务名（SNI，留空取消）：" ;;
                 congestion-control) tui_ask "拥塞控制 ($SB_TUIC_CC，留空取消)：" ;;
             esac
             [ -n "$TUI_IN" ] || return 0
@@ -1582,7 +1672,7 @@ tui_instance_menu() { # ID
         _items="$_items
 port|修改监听端口"
         if _sb_type_tls "$_t"; then _items="$_items
-server-name|修改 TLS server-name"; fi
+server-name|修改 TLS 服务名（SNI）"; fi
         if [ "$_t" = tuic ]; then _items="$_items
 uuid|修改 UUID
 congestion-control|修改拥塞控制"; fi
@@ -2292,23 +2382,6 @@ _tui_cx_set_sni() { # KIND ID
     _tui_done
 }
 
-# 客户端连接设置: 连接地址与 TLS 服务名. 非 TLS 协议只有连接地址, 直接进入
-_tui_cx_settings_menu() { # KIND ID TYPE
-    if ! _sb_type_tls "$3"; then _tui_cx_set_addr "$1" "$2"; return 0; fi
-    while :; do
-        _tui_clear
-        _tui_header "客户端配置 · 连接设置"
-        tui_choose "addr|客户端连接地址与端口
-sni|客户端 TLS 服务名（SNI）" "返回"
-        case $TUI_KEY in
-            back) return 0 ;;
-            addr) _tui_cx_set_addr "$1" "$2" ;;
-            sni) _tui_cx_set_sni "$1" "$2" ;;
-        esac
-        [ "${TUI_EOF:-0}" != 1 ] || return 0
-    done
-}
-
 # 不常用的导出: 隐藏凭据的 JSON (展示与调试) 与嵌入证书固定校验的 JSON (可选, 不强制)
 _tui_cx_more_menu() { # KIND ID TYPE
     local _items
@@ -2372,13 +2445,17 @@ url|导出分享 URL
 qr|显示二维码（首次使用会自动安装 qrencode）" ;;
         esac
         _items="$_items
-more|更多导出选项
-set|修改客户端连接设置"
+addr|修改客户端连接地址与端口"
+        if _sb_type_tls "$_t"; then _items="$_items
+sni|修改客户端 TLS 服务名（SNI）"; fi
+        _items="$_items
+more|更多导出选项"
         tui_choose "$_items" "返回"
         case $TUI_KEY in
             back) return 0 ;;
             more) _tui_cx_more_menu "$_k" "$1" "$_t" ;;
-            set) _tui_cx_settings_menu "$_k" "$1" "$_t" ;;
+            addr) _tui_cx_set_addr "$_k" "$1" ;;
+            sni) _tui_cx_set_sni "$_k" "$1" ;;
             info|json|url|qr)
                 _tui_need_endpoint "$1" "$_k" || continue
                 case $TUI_KEY in
@@ -2441,6 +2518,7 @@ manager|Manager 管理" "退出"
 # 不检查 TTY, 供测试与 tui_cli 使用
 tui_run() {
     _tui_init
+    _tui_onekey_init
     TUI_EOF=0
     TUI_EXIT=0
     trap '_tui_on_int' INT TERM

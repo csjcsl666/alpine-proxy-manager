@@ -145,11 +145,12 @@ report_status() {
         if [ "$CF_INSTALLED" = yes ]; then
             _extra=" ($(core_deployment_label "$CF_DEPLOYMENT"), $(core_managed_label))"
         fi
-        printf '%-12s%s%s\n' "$CF_NAME" "$(core_state_label "$CF_STATE")" "$_extra"
+        printf '  %s：%s%s\n' "$CF_NAME" "$(core_state_label "$CF_STATE")" "$_extra"
+        _rpt_notes
     done
     printf '\n功能\n────────────────\n'
-    printf '%-14s%s\n' "SOCKS5 出口" "$(state_socks_summary)"
-    printf '%-14s%s\n' "目标访问限制" "$(state_relay_summary)"
+    printf '  SOCKS5 出口：%s\n' "$(state_socks_summary)"
+    printf '  目标访问限制：%s\n' "$(state_relay_summary)"
 }
 
 # ---- 展示用的公共函数: 把底层的 /proc 与 OpenRC 事实翻译成管理员能直接读懂的中文 ----

@@ -367,51 +367,43 @@ publish 0.5.2 "$NEW_ARCH"
 setlatest v0.5.2 false false
 printf '{\n  "sha": "%s"\n}\n' "$NEW_SHA" > "$MOCKD/commit.json"
 if command -v script >/dev/null 2>&1; then
-    tui() { printf '%b' "$1" | SHELL=/bin/sh APM_TUI_ANSI=0 LC_ALL=en_US.UTF-8 script -qec "$MPM" /dev/null 2>&1 | tr -d '\r'; }
+    tui() { printf '%b' "$1" | SHELL=/bin/sh APM_TUI_ONEKEY=0 APM_TUI_ANSI=0 LC_ALL=en_US.UTF-8 script -qec "$MPM" /dev/null 2>&1 | tr -d '\r'; }
     : > "$MOCK_LOG"
     out=$(tui '6\n0\n0\n')
     assert_contains "Manager 菜单标题" "$out" "Manager 管理"
     assert_contains "Manager 菜单版本" "$out" "当前版本：0.5.1"
-    for item in "1. 查看版本" "2. 检查更新" "3. 更新 Manager" "4. 检查环境" "5. 查看帮助" "0. 返回"; do
+    for item in "1. 检查更新" "2. 更新 Manager" "3. 查看帮助" "0. 返回"; do
         assert_contains "Manager 菜单项 $item" "$out" "$item"
     done
+    assert_not_contains "Manager 菜单没有重复的查看版本" "$out" "查看版本"
     assert_eq "进入 TUI 与 Manager 菜单不联网" 0 "$(wc -l < "$MOCK_LOG" | tr -d ' ')"
     # 检查更新: 有新版本, 可选择更新; 这里选择返回, 不更新
-    out=$(tui '6\n2\n0\n0\n0\n')
+    out=$(tui '6\n1\n0\n0\n0\n')
     assert_contains "检查更新页标题" "$out" "Manager · 检查更新"
     assert_contains "检查更新: 最新正式版" "$out" "最新正式版：0.5.2"
     assert_contains "检查更新: 发现新版本" "$out" "发现新版本。"
     assert_contains "检查更新: 更新选项" "$out" "1. 更新到 0.5.2"
     assert_eq "只检查不更新" "Alpine Proxy Manager 0.5.1" "$("$MPM" --version | sed -n 1p)"
     assert_not_contains "检查更新不下载归档" "$(cat "$MOCK_LOG")" "tar.gz"
-    # 拒绝更新: 输入 n
-    out=$(tui '6\n3\nn\n\n0\n0\n')
-    assert_contains "更新确认: 目标版本" "$out" "目标版本：0.5.2"
-    assert_contains "更新确认: 只更新 Manager" "$out" "此次操作只更新 Alpine Proxy Manager。"
-    for item in "Snell 服务及配置" "sing-box 服务及配置" "协议实例" "SOCKS Profile" "目标访问限制" "PSK / 密钥" "客户端连接地址"; do
-        assert_contains "更新确认列出不会修改: $item" "$out" "- $item"
-    done
-    assert_contains "更新确认默认 Yes" "$out" "[Y/n]"
-    assert_eq "拒绝更新后版本不变" "Alpine Proxy Manager 0.5.1" "$("$MPM" --version | sed -n 1p)"
-    out=$(tui '6\n3\nx\nN\n\n0\n0\n')
-    assert_contains "无效输入后重新询问" "$out" "输入无效，请输入 y 或 n"
-    assert_eq "无效输入后输入 N 版本不变" "Alpine Proxy Manager 0.5.1" "$("$MPM" --version | sed -n 1p)"
-    assert_not_contains "拒绝更新不显示成功" "$out" "Manager 更新成功"
     # 网络失败不卡死, 正常返回
-    out=$(MOCK_NET=down tui '6\n2\n\n0\n0\n')
+    out=$(MOCK_NET=down tui '6\n1\n0\n0\n')
     assert_contains "TUI 网络失败的提示" "$out" "检查更新失败：无法获取 GitHub Release 信息。"
     assert_contains "TUI 网络失败后仍可退出" "$out" "已退出"
-    # 已是最新: 没有更新选项
+    # 已是最新: 选择更新只告知, 没有更新确认也没有安装
     printf '{\n  "sha": "%s"\n}\n' "$OLD_SHA" > "$MOCKD/commit.json"
     setlatest v0.5.1 false false
-    out=$(tui '6\n3\n\n0\n0\n')
+    out=$(tui '6\n2\n0\n0\n')
     assert_contains "TUI 已是最新" "$out" "已是最新正式版。"
-    assert_not_contains "已是最新时不出现更新确认" "$out" "此次操作只更新 Alpine Proxy Manager。"
-    # 确认更新: 成功提示, 并退出旧的 TUI 进程, 不回到菜单
+    assert_not_contains "已是最新时不出现更新说明" "$out" "此次操作只更新 Alpine Proxy Manager。"
+    assert_eq "已是最新版本不变" "Alpine Proxy Manager 0.5.1" "$("$MPM" --version | sed -n 1p)"
+    # 选择更新就是更新: 不再确认, 成功后提示并退出旧的 TUI 进程, 不回到菜单
     publish 0.5.2 "$NEW_ARCH"
     setlatest v0.5.2 false false
     printf '{\n  "sha": "%s"\n}\n' "$NEW_SHA" > "$MOCKD/commit.json"
-    out=$(tui '6\n3\n\n\n')
+    out=$(tui '6\n2\n')
+    assert_contains "更新说明: 目标版本" "$out" "更新 Manager：0.5.1 -> 0.5.2"
+    assert_contains "更新说明: 只更新 Manager" "$out" "只更新 Manager，不改动 Snell、sing-box、实例、Profile 与凭据"
+    assert_not_contains "更新不再确认" "$out" "[Y/n]"
     assert_contains "TUI 更新成功" "$out" "Manager 更新成功。"
     assert_contains "TUI 成功后提示重新运行 apm" "$out" "请重新运行 apm 使用新版管理界面。"
     after=$(printf '%s\n' "$out" | sed -n '/请重新运行 apm/,$p')
@@ -420,11 +412,11 @@ if command -v script >/dev/null 2>&1; then
     assert_not_contains "更新成功后不回到主菜单" "$after" "1. Snell"
     assert_eq "TUI 更新后版本" "Alpine Proxy Manager 0.5.2" "$("$MPM" --version | sed -n 1p)"
     assert_eq "TUI 更新后没有留下锁和暂存" "" "$(leftover)"
-    # 从检查更新页直接更新
+    # 从检查更新页直接更新 (同样没有确认)
     rm -rf "$ROOT"
     cp "$T_TMP/rel.1.tgz" "$MOCKD/bootstrap.tgz"
     OUT=$(sh -c "$(cat "$INSTALLER")" -- 2>&1)
-    out=$(tui '6\n2\n1\ny\n\n')
+    out=$(tui '6\n1\n1\n')
     assert_contains "检查更新页直接更新" "$out" "Manager 更新成功。"
     assert_eq "检查更新页更新后版本" "Alpine Proxy Manager 0.5.2" "$("$MPM" --version | sed -n 1p)"
 else

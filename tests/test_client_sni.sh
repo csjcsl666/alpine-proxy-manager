@@ -70,7 +70,7 @@ assert_not_contains "默认 JSON 不含 apm.local" "$("$PM" sing-box export AnyT
 assert_contains "默认 JSON 仍启用 TLS 并跳过证书验证" "$("$PM" sing-box export AnyTLS-01 sing-box 2>/dev/null)" '"insecure": true'
 same_semantics "默认" AnyTLS-01
 out=$("$PM" sing-box export AnyTLS-01 show 2>&1)
-assert_contains "show 说明未指定" "$out" "TLS Server Name：未指定"
+assert_contains "show 说明未指定" "$out" "TLS 服务名（SNI）：未指定"
 assert_contains "show 说明默认来源" "$out" "默认: 不填写 SNI"
 assert_not_contains "show 不含内部占位名称" "$out" "apm.local"
 # 历史实例 (升级前创建的, 没有 public.sni): 与新实例行为相同, 不依赖证书里的名称
