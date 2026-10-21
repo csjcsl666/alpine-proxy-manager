@@ -87,6 +87,7 @@ cleanup_stale
 
 if [ "$MODE" = access ]; then
     echo "DBG uid=$(id -u) run=$RUN dir=$(ls -ld "$RUN" 2>&1 | cut -c1-40) files=$(ls "$RUN" 2>&1 | tr "\n" " ") conf=$(ls -l "$RUN/tinyproxy.conf" 2>&1 | cut -c1-60) mnt=$(grep -E " /run " /proc/mounts | cut -c1-60)" >&2
+    { timeout 2 strace -f tinyproxy -d -c "$RUN/tinyproxy.conf" 2>&1 | grep -B14 "tinyproxy.conf" | head -24 | cut -c1-150 | sed "s/^/DBG6 /"; cp "$RUN/tinyproxy.conf" /tmp/tp-copy.conf; timeout 2 tinyproxy -d -c /tmp/tp-copy.conf 2>&1 | head -2 | sed "s/^/DBG7 /"; } >&2
     { echo "DBG5 cat=$(cat "$RUN/tinyproxy.conf" >/dev/null 2>&1 && echo ok || echo fail) redir=$( ( : < "$RUN/tinyproxy.conf" ) 2>&1 && echo ok) caps=$(grep -E "^Cap(Eff|Bnd)" /proc/self/status | tr "\n" " ") nnp=$(grep NoNewPrivs /proc/self/status) seccomp=$(grep Seccomp: /proc/self/status) attr=$(cat /proc/self/attr/current 2>&1) stat=$(stat -c "%U:%G %a %F" "$RUN/tinyproxy.conf" 2>&1) tp=$(ls -l $(command -v tinyproxy) | cut -c1-60) tpcaps=$(command -v getcap >/dev/null && getcap $(command -v tinyproxy))" >&2; } 
     { echo "DBG2 nofile=$(ulimit -n) ver=$(tinyproxy -v 2>&1 | head -1) conf=$(head -c 300 "$RUN/tinyproxy.conf" | tr "\n" "|")"; timeout 2 tinyproxy -d -c "$RUN/tinyproxy.conf" 2>&1 | head -3 | sed "s/^/DBG3 /"; timeout 2 strace -f -e trace=openat,open,fcntl,setrlimit,prlimit64 tinyproxy -d -c "$RUN/tinyproxy.conf" 2>&1 | grep -E "tinyproxy.conf|ENOENT|EACCES|EMFILE" | head -5 | sed "s/^/DBG4 /"; } >&2
     tinyproxy -d -c "$RUN/tinyproxy.conf" &
