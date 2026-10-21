@@ -86,6 +86,7 @@ listening_tcp() { # 端口 (十进制), 127.0.0.1
 cleanup_stale
 
 if [ "$MODE" = access ]; then
+    echo "DBG uid=$(id -u) run=$RUN dir=$(ls -ld "$RUN" 2>&1 | cut -c1-40) files=$(ls "$RUN" 2>&1 | tr "\n" " ") conf=$(ls -l "$RUN/tinyproxy.conf" 2>&1 | cut -c1-60) mnt=$(grep -E " /run " /proc/mounts | cut -c1-60)" >&2
     tinyproxy -d -c "$RUN/tinyproxy.conf" &
     TP_PID=$!
     echo "$TP_PID" > "$RUN/gateway.pid"
