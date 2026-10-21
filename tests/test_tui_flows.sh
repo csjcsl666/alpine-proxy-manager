@@ -170,6 +170,37 @@ EOD
     scr=$(ptyrun 100 40 2 Escape)
     assert_eq "单独 Esc 等同返回: 回到主菜单, sing-box 页只出现一次" 1 "$(printf '%s\n' "$scr" | grep -c '管理 AnyTLS-01')"
     assert_contains "单独 Esc 返回后仍在主菜单" "$scr" "状态与诊断"
+    # 通用: 启动后先执行 PRE 命令 (例如改变窗口尺寸), 再按键, 每个按键之间的等待可指定
+    ptyseq() { # 等待秒数 PRE 按键...  (PRE 为 - 表示不做)
+        _gap=$1; _pre=$2; shift 2
+        tmux kill-session -t apmflow$$ 2>/dev/null
+        tmux new-session -d -s apmflow$$ -x 100 -y 40 "sh $DRV" || return 1
+        _i=0
+        while [ "$_i" -lt 50 ] && ! tmux capture-pane -p -t apmflow$$ | grep -q '请选择：'; do sleep 0.1; _i=$((_i + 1)); done
+        sleep 0.5
+        [ "$_pre" = - ] || eval "tmux $_pre"
+        sleep 0.5
+        for _k in "$@"; do tmux send-keys -t apmflow$$ -- "$_k"; sleep "$_gap"; done
+        sleep 1.5
+        tmux capture-pane -p -S -200 -t apmflow$$
+        tmux kill-session -t apmflow$$ 2>/dev/null
+    }
+    # 终端窗口在菜单等待输入时改变尺寸 (SIGWINCH 不能被当成输入结束或误选)
+    scr=$(ptyseq 0.4 "resize-window -t apmflow$$ -x 60 -y 24" 2)
+    assert_contains "窗口尺寸变化后按键仍然有效" "$scr" "管理 AnyTLS-01"
+    assert_not_contains "窗口尺寸变化没有让程序退出" "$scr" "已退出"
+    # 慢速分批到达 (SSH 延迟): 10 项菜单里的 1 与 0 间隔超过 1 秒 = 先进入实例再返回, 间隔很短 = 第 10 项 (卸载, 有确认)
+    scr=$(ptyseq 2 - 2 1 0)
+    assert_not_contains "间隔 2 秒的 1 和 0 不会变成第 10 项卸载" "$scr" "完整卸载：删除 sing-box"
+    scr=$(ptyseq 0.1 - 2 1 0)
+    assert_contains "间隔很短的 1 0 是第 10 项, 进入卸载选择页 (未执行任何删除)" "$scr" "完整卸载：删除 sing-box"
+    # 缺少 stty: 自动退回整行输入, 单独一个数字不会生效, 必须按 Enter
+    rm -f "$A/usr/bin/stty"
+    scr=$(ptyseq 0.5 - 2)
+    assert_not_contains "无 stty: 单个数字不生效 (整行输入等待 Enter)" "$scr" "管理 AnyTLS-01"
+    scr=$(ptyseq 0.5 - 2 Enter)
+    assert_contains "无 stty: 数字加 Enter 可用" "$scr" "管理 AnyTLS-01"
+    ln -sf "$(command -v stty)" "$A/usr/bin/stty"
 else
     t_skip "没有 tmux, 真实终端流程测试跳过 (apk add tmux)"
 fi

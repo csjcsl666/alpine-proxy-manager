@@ -59,7 +59,11 @@ assert_eq "下载之后信号重新被忽略" survived "$r"
 # ---- 二进制属主告警 (0.5.0 之前安装的 sing-box 保留了上游 uid) ----
 ready h2b
 out=$("$PM" core list 2>&1)
-assert_not_contains "属主是 root 时不告警" "$out" "二进制属主是 uid"
+if [ "$(id -u)" = 0 ]; then
+    assert_not_contains "属主是 root 时不告警" "$out" "二进制属主是 uid"
+else
+    t_skip "非 root 运行, 测试夹具的二进制属主是当前用户, 属主是 root 时不告警的反例只在 root 下成立"
+fi
 if chown 1001 "$A/usr/local/bin/sing-box" 2>/dev/null && [ "$(stat -c %u "$A/usr/local/bin/sing-box")" = 1001 ]; then
     out=$("$PM" core list 2>&1)
     assert_contains "属主不是 root 时告警" "$out" "二进制属主是 uid 1001 而不是 root"
