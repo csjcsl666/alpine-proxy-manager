@@ -785,6 +785,18 @@ lowmem_disable() {
         done < "$_f"
         printf '  Snell 优先牺牲：已把 %s 个进程的 oom_score_adj 恢复为原值%s\n' "$_c" "$([ "$_k" -eq 0 ] || printf '，%s 个因权限无法降低，需在 Snell 下次重启后恢复' "$_k")"
     fi
+    # 当前 oom_score_adj 等于 APM 设置值、却没有原值记录的 Snell 进程: 不猜原值，如实说明
+    if [ "$(_lm_cget snell_sac)" = on ]; then
+        _k=0
+        while read -r _pid _adj _comm; do
+            [ -n "$_pid" ] || continue
+            [ "$_adj" = "$(_lm_cget snell_adj)" ] || continue
+            grep -q "^$_pid " "$(env_path "$LM_RUN/snell.adj")" 2>/dev/null || _k=$((_k + 1))
+        done <<EOF
+$(_lm_snell_procs)
+EOF
+        [ "$_k" -eq 0 ] || printf '  Snell 优先牺牲：%s 个进程的 oom_score_adj 是 %s 但没有原值记录，没有改动，Snell 下次重启后恢复默认\n' "$_k" "$(_lm_cget snell_adj)"
+    fi
     # tcp: 只在当前值仍等于 APM 设置值时写回
     for _k in rmem wmem; do
         _t=$(kv_get "$(_lm_orig)" "tcp_${_k}_target" 2>/dev/null)
@@ -981,7 +993,7 @@ lowmem_log() {
     local _n _f
     _n=${1:-20}
     case $_n in ''|*[!0-9]*) apm_err "行数必须是正整数"; return 2 ;; esac
-    [ "$_n" -ge 1 ] && [ "$_n" -le 200 ] || { apm_err "行数范围 1 到 200"; return 2; }
+    if [ "$_n" -lt 1 ] || [ "$_n" -gt 200 ]; then apm_err "行数范围 1 到 200"; return 2; fi
     _f=$(env_path "$LM_LOG")
     if [ ! -s "$_f" ]; then printf '还没有取证记录（%s）\n' "$LM_LOG"; return 0; fi
     tail -n "$_n" "$_f"

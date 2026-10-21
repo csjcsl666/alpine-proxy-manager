@@ -242,5 +242,9 @@ assert_eq "OpenRC 默认运行级别没有重复登记" 1 "$(grep -c '^sing-box$
 assert_eq "库代码没有把秘密作为命令行参数传给子命令" 0 "$(grep -n -E -- '(--password|--psk|--key)[ =]"?\$[A-Za-z_{]' "$T_ROOT"/lib/*.sh "$T_ROOT"/bin/proxy-manager | grep -v 'apm_err\|用法\|printf\|usage\|#' | wc -l | tr -d ' ')"
 assert_eq "库代码没有 shell 跟踪" 0 "$(grep -n -E 'set -x|sh -x|set -o xtrace' "$T_ROOT"/lib/*.sh "$T_ROOT"/bin/proxy-manager | wc -l | tr -d ' ')"
 assert_eq "库代码不使用 awk -v 传递凭据" 0 "$(grep -n -E 'awk .*-v [a-z]*(pw|psk|pass|secret)' "$T_ROOT"/lib/*.sh | wc -l | tr -d ' ')"
-assert_eq "不修改防火墙与网络" 0 "$(grep -n -E '\b(iptables|ip6tables|nft|ufw|sysctl|ip route|ip rule)\b' "$T_ROOT"/lib/*.sh "$T_ROOT"/bin/proxy-manager "$T_ROOT"/install.sh | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' | grep -v 'printf\|apm_err\|说明\|不' | wc -l | tr -d ' ')"
+assert_eq "不修改防火墙与网络" 0 "$(grep -n -E '\b(iptables|ip6tables|nft|ufw|sysctl|ip route|ip rule)\b' "$T_ROOT"/lib/*.sh "$T_ROOT"/bin/proxy-manager "$T_ROOT"/install.sh | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' | grep -v 'printf\|apm_err\|说明\|不' | grep -v '^[^:]*lib/lowmem\.sh:' | wc -l | tr -d ' ')"
+# 低内存环境保护是管理员主动启用的功能，会写 /proc/sys/net/ipv4/tcp_rmem 与 tcp_wmem，代码里出现的 sysctl 只是读取 /etc/sysctl.conf 与 sysctl.d 来避开管理员的设置，以及测试接缝文件名
+# 对它仍然禁止防火墙与路由命令，并且不允许调用 sysctl 命令本身
+assert_eq "低内存保护不改防火墙与路由" 0 "$(grep -n -E '\b(iptables|ip6tables|nft|ufw|ip route|ip rule)\b' "$T_ROOT"/lib/lowmem.sh "$T_ROOT"/lib/lowmem-daemon.sh | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' | grep -v 'printf\|apm_err\|说明\|不' | wc -l | tr -d ' ')"
+assert_eq "低内存保护不调用 sysctl 命令" 0 "$(grep -n -E '(^|[;&|(`[:space:]])sysctl[[:space:]]+(-|[a-z])' "$T_ROOT"/lib/lowmem.sh "$T_ROOT"/lib/lowmem-daemon.sh | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' | grep -v 'printf\|apm_err\|说明\|不' | wc -l | tr -d ' ')"
 t_done

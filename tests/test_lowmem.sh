@@ -478,6 +478,13 @@ assert_eq "801 恢复" 0 "$(cat "$A/proc/801/oom_score_adj")"
 assert_eq "802 恢复" 0 "$(cat "$A/proc/802/oom_score_adj")"
 assert_eq "803 恢复" 0 "$(cat "$A/proc/803/oom_score_adj")"
 assert_contains "报告恢复个数" "$out" "Snell 优先牺牲：已把 3 个进程"
+printf '== Snell 优先牺牲: 没有原值记录的进程如实说明 不猜原值\n'
+A="$T_TMP/sac_norec"; mk_snellsys "$A"
+lm enable --snell-sacrifice >/dev/null
+rm -f "$A/run/apm-lowmem/snell.adj"
+out=$(lm disable)
+assert_contains "无记录: 如实说明" "$out" "但没有原值记录，没有改动"
+assert_eq "无记录: 不猜原值 不改" 300 "$(cat "$A/proc/801/oom_score_adj")"
 printf '== Snell 优先牺牲: 不适用的环境\n'
 A="$T_TMP/sac_nosnell"; mk_lm "$A" $((64 * MIB)) "$HYT_R" "$HYT_W"
 out=$(lm enable --snell-sacrifice)
