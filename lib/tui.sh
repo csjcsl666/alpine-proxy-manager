@@ -682,17 +682,24 @@ tui_lowmem_menu() {
         printf '\n'
         if lm_enabled; then
             _items="detail|查看保护详情
+log|查看取证记录"
+            [ "$(_lm_cget snell_sac)" = on ] || _items="$_items
+sac|追加高级选项：Snell 优先被 OOM 终止（代价：Snell 更容易被终止）"
+            _items="$_items
 disable|恢复原始设置"
         else
-            _items="enable|启用低内存保护
+            _items="enable|启用低内存保护（自动检测，只调整需要调整的项目）
+sac|启用，并加上高级选项：Snell 优先被 OOM 终止（代价：Snell 更容易被终止）
 detail|查看保护详情"
         fi
         tui_choose "$_items" "返回"
         case $TUI_KEY in
             back) return 0 ;;
             enable) _tui_need_root || continue; _tui_clear; _tui_header "低内存环境保护 · 启用"; _tui_do lowmem_enable; _tui_done ;;
+            sac) _tui_need_root || continue; _tui_clear; _tui_header "低内存环境保护 · 启用（含 Snell 优先牺牲）"; _tui_do lowmem_enable --snell-sacrifice; _tui_done ;;
             disable) _tui_need_root || continue; _tui_clear; _tui_header "低内存环境保护 · 恢复"; _tui_do lowmem_disable; _tui_done ;;
             detail) _tui_clear; _tui_header "低内存环境保护 · 详情"; _tui_do lowmem_detail; _tui_done ;;
+            log) _tui_clear; _tui_header "低内存环境保护 · 取证记录"; _tui_do lowmem_log 30; _tui_done ;;
         esac
     done
 }

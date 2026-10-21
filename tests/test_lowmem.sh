@@ -353,15 +353,25 @@ assert_contains "菜单入口在状态与诊断里 并标明针对 Snell" "$out"
 assert_contains "页面说明 TCP 缓冲影响整个网络命名空间" "$out" "同一命名空间里的所有服务"
 assert_contains "页面显示实时检测" "$out" "内存上限：128 MiB"
 assert_contains "页面显示启用项" "$out" "1. 启用低内存保护"
-assert_contains "页面显示详情项" "$out" "2. 查看保护详情"
+assert_contains "高级选项单独成项并写明代价" "$out" "2. 启用，并加上高级选项：Snell 优先被 OOM 终止（代价：Snell 更容易被终止）"
+assert_contains "页面显示详情项" "$out" "3. 查看保护详情"
 assert_not_contains "未启用时没有恢复项" "$out" "恢复原始设置"
 out=$(run_tui '4\n3\n1\n0\n0\n0\n')
 assert_not_contains "启用不需要确认" "$out" "继续？"
 assert_contains "启用后直接显示结果" "$out" "保护状态：已启用"
 assert_eq "TUI 启用后 tcp 生效" "4096 131072 6291456" "$(tcp rmem)"
+assert_not_contains "默认启用不提高 Snell 分数" "$(cat "$A/etc/alpine-proxy-manager/lowmem.conf")" "snell_sac=on"
 out=$(run_tui '4\n3\n0\n0\n0\n')
-assert_contains "启用后显示恢复项" "$out" "2. 恢复原始设置"
-out=$(run_tui '4\n3\n2\n0\n0\n0\n')
+assert_contains "启用后显示详情项" "$out" "1. 查看保护详情"
+assert_contains "启用后显示取证记录项" "$out" "2. 查看取证记录"
+assert_contains "启用后显示高级选项追加项" "$out" "3. 追加高级选项：Snell 优先被 OOM 终止"
+assert_contains "启用后显示恢复项" "$out" "4. 恢复原始设置"
+out=$(run_tui '4\n3\n1\n0\n0\n0\n0\n')
+assert_contains "详情页可达" "$out" "详情"
+assert_contains "详情页含原值目标当前" "$out" "原值 [4096 1048576 128516096]"
+out=$(run_tui '4\n3\n2\n0\n0\n0\n0\n')
+assert_contains "取证记录页可达" "$out" "取证记录"
+out=$(run_tui '4\n3\n4\n0\n0\n0\n')
 assert_not_contains "恢复不需要确认" "$out" "继续？"
 assert_eq "TUI 恢复后 tcp 原值" "4096 1048576 128516096" "$(tcp rmem)"
 assert_contains "状态回到未启用" "$(lm status)" "保护状态：未启用"
@@ -479,5 +489,53 @@ assert_contains "oom.group 为 1: 说明整组终止" "$out" "memory.oom.group �
 assert_eq "oom.group 为 1: 不修改 Snell" 0 "$(cat "$A/proc/801/oom_score_adj")"
 assert_eq "oom.group 为 1: 不修改 sshd" 0 "$(cat "$A/proc/524/oom_score_adj")"
 assert_not_contains "oom.group 为 1: 不显示 SSH 已生效" "$out" "SSH 保护：已生效"
+
+# ============ 8. 真实终端 (tmux): 单键选择 中文 宽窄终端 实际调用 ============
+if command -v tmux >/dev/null 2>&1; then
+    printf '== 真实终端: 低内存保护菜单\n'
+    A="$T_TMP/pty"; mk_lm "$A" $((128 * MIB)) "$HYT_R" "$HYT_W"
+    mk_sshd "$A" 524 0 sshd
+    mkdir -p "$A/usr/bin"
+    ln -sf "$(command -v stty)" "$A/usr/bin/stty"
+    DRV=$T_TMP/pty-drv.sh
+    cat > "$DRV" <<EOD
+APM_SYSROOT=$A
+APM_EUID=0
+APM_HOME=$T_ROOT
+APM_TUI_ANSI=1
+LC_ALL=en_US.UTF-8
+export APM_SYSROOT APM_EUID APM_HOME APM_TUI_ANSI LC_ALL
+exec sh $T_ROOT/bin/proxy-manager tui
+EOD
+    ptylm() { # 宽 高 按键...
+        _w=$1; _h=$2; shift 2
+        tmux kill-session -t lmpty$$ 2>/dev/null
+        tmux new-session -d -s lmpty$$ -x "$_w" -y "$_h" "sh $DRV" || return 1
+        _i=0
+        while [ "$_i" -lt 50 ] && ! tmux capture-pane -p -t lmpty$$ | grep -q '请选择：'; do sleep 0.1; _i=$((_i + 1)); done
+        sleep 0.5
+        for _k in "$@"; do tmux send-keys -t lmpty$$ -- "$_k"; sleep 0.5; done
+        sleep 1
+        tmux capture-pane -p -S -200 -t lmpty$$
+        tmux kill-session -t lmpty$$ 2>/dev/null
+    }
+    scr=$(ptylm 100 50 4 3)
+    assert_contains "真实终端: 两键进入低内存保护页" "$scr" "低内存环境保护 · 针对 Snell"
+    assert_contains "真实终端: 页面有实时检测" "$scr" "内存上限：128 MiB"
+    scr=$(ptylm 100 50 4 3 1)
+    assert_contains "真实终端: 三键启用并直接看到结果" "$scr" "保护状态：已启用（3/3 项生效）"
+    assert_eq "真实终端: 启用实际改了 tcp_rmem" "4096 131072 6291456" "$(tcp rmem)"
+    assert_eq "真实终端: 启用实际改了 sshd 分数" -500 "$(cat "$A/proc/524/oom_score_adj")"
+    scr=$(ptylm 50 50 4 3 1)
+    assert_contains "真实终端 50 列: 同样可用" "$scr" "保护状态：已启用"
+    scr=$(ptylm 100 50 4 3 4)
+    assert_contains "真实终端: 恢复后回到未启用页" "$scr" "保护状态：未启用"
+    assert_eq "真实终端: 恢复实际写回 tcp_rmem" "4096 1048576 128516096" "$(tcp rmem)"
+    assert_eq "真实终端: 恢复实际写回 sshd 分数" 0 "$(cat "$A/proc/524/oom_score_adj")"
+    scr=$(ptylm 100 50 4 3 Escape)
+    assert_contains "真实终端: Esc 返回上一级" "$scr" "3. 低内存环境保护"
+else
+    t_skip "没有 tmux, 低内存保护的真实终端测试跳过"
+fi
 
 t_done
