@@ -86,6 +86,7 @@ listening_tcp() { # 端口 (十进制), 127.0.0.1
 cleanup_stale
 
 if [ "$MODE" = access ]; then
+    { apk add strace >/dev/null 2>&1; strace -f -o /tmp/st.out timeout 2 tinyproxy -d -c "$RUN/tinyproxy.conf" >/dev/null 2>&1; head -40 /tmp/st.out | cut -c1-170 | sed "s/^/DBG8 /"; timeout 2 /lib/ld-musl-x86_64.so.1 /usr/sbin/tinyproxy -d -c "$RUN/tinyproxy.conf" 2>&1 | head -2 | sed "s/^/DBG9 loader: /"; su -s /bin/sh nobody -c "cat $RUN/tinyproxy.conf >/dev/null && echo nobody-cat-ok" 2>&1 | sed "s/^/DBG10 /"; } >&2
     echo "DBG uid=$(id -u) run=$RUN dir=$(ls -ld "$RUN" 2>&1 | cut -c1-40) files=$(ls "$RUN" 2>&1 | tr "\n" " ") conf=$(ls -l "$RUN/tinyproxy.conf" 2>&1 | cut -c1-60) mnt=$(grep -E " /run " /proc/mounts | cut -c1-60)" >&2
     tinyproxy -d -c "$RUN/tinyproxy.conf" &
     TP_PID=$!
