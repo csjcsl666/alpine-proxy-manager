@@ -42,6 +42,18 @@ SB_HEALTH_DIR=
 
 _sb_say() { printf '%s\n' "$*"; }
 
+# 启用或禁用会重新加载整个 sing-box: 还有其他已启用实例时, 在结果里说明它们的连接可能短暂中断 (不是确认步骤)
+_sb_reload_note() { # ID 操作前的 Core 状态
+    local _c
+    [ "$2" = running ] || return 0
+    for _c in $(state_list_confs "$(state_instances_dir)"); do
+        [ "$(kv_get "$_c" id)" != "$1" ] || continue
+        [ "$(kv_get "$_c" enabled)" = true ] || continue
+        printf '，sing-box 已重新加载，其他实例的连接可能短暂中断'
+        return 0
+    done
+}
+
 _sb_rc() { _snell_run rc-service sing-box "$1"; }
 _sb_user_exists() { grep -q "^$SB_USER:" "$(env_path /etc/passwd)" 2>/dev/null; }
 _sb_group_exists() { grep -q "^$SB_GROUP:" "$(env_path /etc/group)" 2>/dev/null; }
@@ -1671,6 +1683,11 @@ singbox_change() {
     _dir=$(_sb_propose_dir) || return 1
     _f=$_dir/$_id.conf
     [ -f "$_f" ] || { apm_err "实例 $_id 不存在"; return 1; }
+    # 已经处于目标状态: 直接告知, 不写配置也不重启 sing-box
+    case $_action:$(kv_get "$_f" enabled) in
+        enable:true) _sb_say "实例 $_id 已经是启用状态，无需操作"; return 0 ;;
+        disable:false) _sb_say "实例 $_id 已经是禁用状态，无需操作"; return 0 ;;
+    esac
     _t=$(kv_get "$_f" type)
     _crt=$(kv_get "$_f" tls.certificate_path)
     _key_path=$(kv_get "$_f" tls.key_path)
@@ -1765,8 +1782,8 @@ singbox_change() {
         rm -f -- "$(env_path "$_crt")" "$(env_path "$_key_path")"
     fi
     case $_action in
-        enable) _sb_say "实例 $_id 已启用" ;;
-        disable) _sb_say "实例 $_id 已禁用" ;;
+        enable) _sb_say "实例 $_id 已启用$(_sb_reload_note "$_id" "$_was")" ;;
+        disable) _sb_say "实例 $_id 已禁用$(_sb_reload_note "$_id" "$_was")" ;;
         delete) _sb_say "实例 $_id 已删除" ;;
         set)
             case $_key in
