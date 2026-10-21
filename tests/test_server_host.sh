@@ -184,7 +184,7 @@ tx() { # 输入 模式 -> TUI 输出
 # 查看连接信息 (show): 空输入 Enter 自动获取 -> 端口默认 -> 继续原有操作
 rm -f "$(INST AnyTLS-01)".bak
 BEFORE=$(cd "$A" && find etc -type f ! -name '*.conf' | sort | tr '\n' ' ')
-out=$(tx "2\\n1\\n${I_ANYTLS}\\n5\\n1\\n\\n\\n\\n0\\n0\\n0\\n0\\n")
+out=$(tx "2\\n${I_ANYTLS}\\n5\\n1\\n\\n\\n0\\n0\\n0\\n0\\n")
 assert_contains "show: 自动获取成功" "$out" "已自动获取服务器公网 IP：93.184.216.34"
 assert_contains "show: 继续原有操作显示连接信息" "$out" "协议：AnyTLS"
 assert_eq "show: 保存的客户端连接地址" 93.184.216.34 "$(kv_get "$(INST AnyTLS-01)" public.host)"
@@ -198,44 +198,44 @@ for inst in Hysteria2-01 Shadowsocks-01 TUIC-01; do
     "$PM" sing-box endpoint "$inst" clear >/dev/null 2>&1
 done
 # Hysteria2: 导出 sing-box JSON (隐藏凭据): 菜单项顺序 1 查看连接信息 2 查看凭据 3 JSON 4 JSON(隐藏) 5 pin 6 url 7 qr
-out=$(tx "2\\n1\\n${I_HY2}\\n5\\n4\\n198.51.100.20\\n\\n0\\n0\\n0\\n0\\n")
+out=$(tx "2\\n${I_HY2}\\n5\\n5\\n1\\n198.51.100.20\\n\\n0\\n0\\n0\\n0\\n0\\n")
 assert_contains "json-redacted: 使用统一组件" "$out" "输入 0 或按 Esc：取消并返回"
 assert_eq "json-redacted: 手动 IPv4 被保存" 198.51.100.20 "$(kv_get "$(INST Hysteria2-01)" public.host)"
 assert_contains "json-redacted: JSON 使用该地址" "$out" '"server": "198.51.100.20"'
 # Shadowsocks: 分享 URL, 手动 IPv6
 "$PM" sing-box endpoint Shadowsocks-01 clear >/dev/null 2>&1
-out=$(tx "2\\n1\\n${I_SS}\\n4\\n5\\n2001:db8::77\\n\\n\\n\\n0\\n0\\n0\\n0\\n")
+out=$(tx "2\\n${I_SS}\\n4\\n3\\n2001:db8::77\\n\\n0\\n0\\n0\\n0\\n")
 assert_eq "url: 手动 IPv6 以不带方括号的规范形式保存" 2001:db8::77 "$(kv_get "$(INST Shadowsocks-01)" public.host)"
 assert_contains "url: 分享 URL 里的 IPv6 带方括号" "$out" "@[2001:db8::77]:20700"
 # 域名
 "$PM" sing-box endpoint AnyTLS-01 clear >/dev/null 2>&1
-out=$(tx "2\\n1\\n${I_ANYTLS}\\n5\\n3\\nvpn.example.com\\n\\n\\n\\n0\\n0\\n0\\n0\\n")
+out=$(tx "2\\n${I_ANYTLS}\\n5\\n2\\nvpn.example.com\\n\\n0\\n0\\n0\\n0\\n")
 assert_eq "json: 域名被保存" vpn.example.com "$(kv_get "$(INST AnyTLS-01)" public.host)"
 assert_contains "json: JSON 使用域名" "$out" '"server": "vpn.example.com"'
 # 嵌入证书固定校验 (pin) 入口也走统一组件
 "$PM" sing-box endpoint AnyTLS-01 clear >/dev/null 2>&1
-out=$(tx "2\\n1\\n${I_ANYTLS}\\n5\\n5\\n\\n\\n\\n\\n0\\n0\\n0\\n0\\n")
+out=$(tx "2\\n${I_ANYTLS}\\n5\\n5\\n2\\n\\n\\n0\\n0\\n0\\n0\\n0\\n")
 assert_contains "json-pin: 使用统一组件并自动获取" "$out" "已自动获取服务器公网 IP：93.184.216.34"
 # 二维码入口 (没有 qrencode 时仍先走统一组件)
 "$PM" sing-box endpoint AnyTLS-01 clear >/dev/null 2>&1
-out=$(tx "2\\n1\\n${I_ANYTLS}\\n5\\n7\\n198.51.100.30\\n\\n\\n\\n0\\n0\\n0\\n0\\n")
+out=$(tx "2\\n${I_ANYTLS}\\n5\\n4\\n198.51.100.30\\n\\n0\\n0\\n0\\n0\\n")
 assert_contains "qr: 使用统一组件" "$out" "输入 0 或按 Esc：取消并返回"
 assert_eq "qr: 地址被保存" 198.51.100.30 "$(kv_get "$(INST AnyTLS-01)" public.host)"
 # Esc 取消: 不保存, 回到上级菜单, 后续菜单仍可用
 "$PM" sing-box endpoint TUIC-01 clear >/dev/null 2>&1
-out=$(tx "2\\n1\\n${I_TUIC}\\n7\\n1\\n${ESC}\\n0\\n0\\n0\\n0\\n")
+out=$(tx "2\\n${I_TUIC}\\n7\\n2\\n${ESC}\\n0\\n0\\n0\\n0\\n")
 assert_eq "Esc 取消不保存地址" "" "$(kv_get "$(INST TUIC-01)" public.host)"
 assert_contains "Esc 取消有提示" "$out" "已取消"
 assert_contains "Esc 之后回到客户端配置菜单 (再次显示菜单项)" "$out" "导出 sing-box JSON"
-out=$(tx "2\\n1\\n${I_TUIC}\\n7\\n1\\n0\\n0\\n0\\n0\\n0\\n")
+out=$(tx "2\\n${I_TUIC}\\n7\\n2\\n0\\n0\\n0\\n0\\n0\\n")
 assert_eq "输入 0 取消不保存地址" "" "$(kv_get "$(INST TUIC-01)" public.host)"
 assert_contains "输入 0 之后回到客户端配置菜单" "$out" "导出 sing-box JSON"
 # 更改客户端连接地址: 同一组件, 手动 / 自动 / Esc
-out=$(tx "2\\n1\\n${I_ANYTLS}\\n5\\n8\\n203.0.113.5\\n\\n\\n0\\n0\\n0\\n0\\n")
+out=$(tx "2\\n${I_ANYTLS}\\n5\\n6\\n1\\n203.0.113.5\\n\\n0\\n0\\n0\\n0\\n0\\n")
 assert_eq "更改地址: 手动" 203.0.113.5 "$(kv_get "$(INST AnyTLS-01)" public.host)"
-out=$(tx "2\\n1\\n${I_ANYTLS}\\n5\\n8\\n\\n\\n\\n0\\n0\\n0\\n0\\n")
+out=$(tx "2\\n${I_ANYTLS}\\n5\\n6\\n1\\n\\n\\n0\\n0\\n0\\n0\\n0\\n")
 assert_eq "更改地址: Enter 自动获取" 93.184.216.34 "$(kv_get "$(INST AnyTLS-01)" public.host)"
-out=$(tx "2\\n1\\n${I_ANYTLS}\\n5\\n8\\n${ESC}\\n0\\n0\\n0\\n0\\n")
+out=$(tx "2\\n${I_ANYTLS}\\n5\\n6\\n1\\n${ESC}\\n0\\n0\\n0\\n0\\n0\\n")
 assert_eq "更改地址: Esc 取消保持原值" 93.184.216.34 "$(kv_get "$(INST AnyTLS-01)" public.host)"
 # 网络不可用: 自动获取失败不挂起, 随后手动输入
 "$PM" sing-box endpoint AnyTLS-01 clear >/dev/null 2>&1
