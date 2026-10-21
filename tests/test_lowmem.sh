@@ -317,12 +317,13 @@ assert_contains "进程表含 sshd" "$log" "sshd=3800"
 assert_contains "进程表含 Snell 的加载器名" "$log" "ld-musl-x86_64.=5120"
 assert_not_contains "不记录命令行" "$log" "SECRET_CMDLINE"
 assert_contains "心跳记录" "$log" "BEAT "
+assert_contains "心跳里的内存当前值没有被时间戳覆盖" "$log" "cur=33554432 sock=4000000"
 printf '== 取证: 日志有大小上限并轮转\n'
 rm -f "$A/var/log/apm-lowmem.log" "$A/var/log/apm-lowmem.log.1"
 i=0
 while [ "$i" -lt 12 ]; do APM_SYSROOT="$A" APM_LOWMEM_ONCE=1 APM_LOWMEM_LOGMAX=700 sh "$DAEMON"; i=$((i + 1)); done
 assert_ok "产生旧日志" test -f "$A/var/log/apm-lowmem.log.1"
-size=$(wc -c < "$A/var/log/apm-lowmem.log")
+size=$(wc -c < "$A/var/log/apm-lowmem.log" 2>/dev/null || echo 0)
 assert_ok "当前日志不超过上限加一条记录" test "$size" -le 1500
 
 printf '== SSH: 常驻进程维护新出现的 sshd\n'

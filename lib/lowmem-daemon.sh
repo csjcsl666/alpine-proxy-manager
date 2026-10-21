@@ -193,7 +193,6 @@ wait_sec() {
     if [ -n "$FIFO" ]; then
         # shellcheck disable=SC3045
         read -r -t "$1" _x <> "$FIFO" 2>/dev/null
-        [ $? -le 128 ] && [ $? -ne 0 ] 2>/dev/null
         return 0
     fi
     sleep "$1"
@@ -213,7 +212,7 @@ setup_wait() {
 }
 
 main() {
-    local _last _now _hb_at _since _burst _first
+    local _last _since _burst _first _c
     load_conf
     find_cg || CG=
     if [ -f "$LOG" ]; then
@@ -250,16 +249,18 @@ main() {
             if [ "$_burst" -gt 0 ]; then
                 # 事件之后一小段时间加密采样, 看内存是否在回落
                 first_line "$CG/memory.current"
+                _c=${V:--}
                 read_stat
                 stamp
-                log_line "BURST $TS cur=${V:--} sock=$ST_SOCK anon=$ST_ANON"
+                log_line "BURST $TS cur=$_c sock=$ST_SOCK anon=$ST_ANON"
                 _burst=$((_burst - 1))
             fi
             if [ "$_since" -ge "$HEARTBEAT" ] || [ "${APM_LOWMEM_ONCE:-0}" = 1 ]; then
                 first_line "$CG/memory.current"
+                _c=${V:--}
                 read_stat
                 stamp
-                log_line "BEAT $TS cur=${V:--} sock=$ST_SOCK anon=$ST_ANON oom_kill=${EV_OOMKILL:--}"
+                log_line "BEAT $TS cur=$_c sock=$ST_SOCK anon=$ST_ANON oom_kill=${EV_OOMKILL:--}"
                 _since=0
             fi
         fi
