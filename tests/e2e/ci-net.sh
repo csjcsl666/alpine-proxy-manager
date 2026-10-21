@@ -14,7 +14,7 @@ SRC=${SRC:-/src}
 W=/tmp/apm-ci-net
 mkdir -p "$W/out" "$W/dl" /srv/dl
 
-apk add --no-cache openssl openrc python3 gcompat libstdc++ libgcc unzip wget tinyproxy unbound git go gcc musl-dev make linux-headers patch >/dev/null
+apk add --no-cache strace openssl openrc python3 gcompat libstdc++ libgcc unzip wget tinyproxy unbound git go gcc musl-dev make linux-headers patch >/dev/null
 
 echo '== 构建补丁版 graftcp'
 sh "$SRC/third_party/graftcp/build-inner.sh" "$W/out"
