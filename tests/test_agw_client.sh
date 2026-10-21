@@ -343,42 +343,45 @@ out=$(tx '3\n0\n0\n')
 assert_contains "Gateway 菜单有客户端配置入口" "$out" "客户端配置"
 # 菜单序号: 查看详细信息 停止/启动 重启 转发线路 证书 客户端配置
 out=$(tx '3\n6\n0\n0\n0\n' ok)
-for item in "客户端配置 · AnyTLS Gateway 线路 1（端口 20443）" "查看连接信息" "查看凭据" "导出 sing-box JSON" "导出 sing-box JSON（隐藏凭据）" "可选：嵌入证书固定校验" "导出分享 URL" "显示 QR（首次使用会自动安装 qrencode）" "设置客户端 TLS 服务名（SNI）" "证书校验：跳过（自签名，免维护）"; do
+for item in "客户端配置 · AnyTLS Gateway 线路 1（端口 20443）" "查看完整连接信息" "导出 sing-box JSON" "导出分享 URL" "显示二维码（首次使用会自动安装 qrencode）" "更多导出选项" "修改客户端连接设置" "证书校验：跳过（自签名，免维护）"; do
     assert_contains "Gateway 客户端配置含 $item" "$out" "$item"
 done
 assert_not_contains "只有一条线路时不再询问选哪条" "$out" "选择要导出客户端配置的转发线路"
-# 查看凭据 (2) 直接显示该线路密码
-out=$(tx '3\n6\n2\n\n0\n0\n0\n0\n' ok)
-assert_contains "TUI 凭据: 线路密码" "$out" "$PW1"
-# 查看连接信息 (1): 没有保存地址 -> 统一组件 -> Enter 自动获取 -> 端口默认 -> 继续
-out=$(tx '3\n6\n1\n\n\n\n0\n0\n0\n0\n' ok)
+assert_not_contains "不再有按 Enter 返回" "$out" "按 Enter 返回"
+# 查看完整连接信息 (1): 没有保存地址 -> 统一组件 -> Enter 自动获取 -> 端口默认 -> 直接显示, 含完整密码
+out=$(tx '3\n6\n1\n\n\n0\n0\n0\n' ok)
 assert_contains "TUI: 使用统一地址选择" "$out" "直接按 Enter：自动获取公网 IP"
 assert_contains "TUI: 提示 0 与 Esc" "$out" "输入 0 或按 Esc：取消并返回"
 assert_contains "TUI: 自动获取成功" "$out" "已自动获取服务器公网 IP：93.184.216.34"
 assert_eq "TUI: 保存的地址" 93.184.216.34 "$(kv_get "$(EPF 1)" public.host)"
 assert_eq "TUI: 端口默认使用监听端口" 20443 "$(kv_get "$(EPF 1)" public.port)"
-assert_contains "TUI: 继续显示连接信息" "$out" "客户端连接信息 AnyTLS-Gateway-1"
-assert_not_contains "TUI: 连接信息不含密码" "$out" "$PW1"
-# 更改地址 (菜单最后一项 endpoint = 8): 手动 IPv6
-out=$(tx '3\n6\n8\n2001:db8::9\n8443\n\n0\n0\n0\n0\n' ok)
+assert_contains "TUI: 显示连接信息" "$out" "客户端连接信息 AnyTLS-Gateway-1"
+assert_contains "TUI: 完整连接信息含线路密码" "$out" "$PW1"
+assert_not_contains "TUI: 不再有凭据警告" "$out" "警告：以下内容包含客户端凭据"
+# 已有地址之后: 查看只需 2 次按键 (6 之后的 1)
+out=$(tx '3\n6\n1\n0\n0\n0\n' ok)
+assert_contains "TUI: 已有地址时一步查看" "$out" "$PW1"
+# 修改客户端连接设置 (6): 手动 IPv6 (TLS 协议先选 地址)
+out=$(tx '3\n6\n6\n1\n2001:db8::9\n8443\n0\n0\n0\n0\n' ok)
 assert_eq "TUI 手动 IPv6" 2001:db8::9 "$(kv_get "$(EPF 1)" public.host)"
 assert_eq "TUI 手动端口" 8443 "$(kv_get "$(EPF 1)" public.port)"
 # 0 与 Esc 返回, 不改地址
 T0=$(cat "$(EPF 1)")
-out=$(tx '3\n6\n8\n0\n0\n0\n0\n' ok)
+out=$(tx '3\n6\n6\n1\n0\n0\n0\n0\n0\n' ok)
 assert_eq "输入 0 取消, 地址不变" "$T0" "$(cat "$(EPF 1)")"
-out=$(tx "3\\n6\\n8\\n${ESC}\\n0\\n0\\n0\\n" ok)
+out=$(tx "3\\n6\\n6\\n1\\n${ESC}\\n0\\n0\\n0\\n0\\n" ok)
 assert_eq "Esc 取消, 地址不变" "$T0" "$(cat "$(EPF 1)")"
 assert_contains "Esc 取消有提示" "$out" "已取消"
 # 自动获取失败: 提示, 之后手动输入
 gw endpoint 1 clear >/dev/null 2>&1
-out=$(tx '3\n6\n1\n\n198.51.100.8\n\n\n0\n0\n0\n0\n' fail)
+out=$(tx '3\n6\n1\n\n198.51.100.8\n\n0\n0\n0\n' fail)
 assert_contains "TUI: 自动失败提示" "$out" "自动获取失败"
 assert_eq "TUI: 失败后手动输入" 198.51.100.8 "$(kv_get "$(EPF 1)" public.host)"
-# 导出 JSON (3) 需要确认, 内容含线路密码
-out=$(tx '3\n6\n3\n\n\n0\n0\n0\n0\n' ok)
+# 导出 JSON (2) 直接输出, 内容含线路密码
+out=$(tx '3\n6\n2\n0\n0\n0\n' ok)
 assert_contains "TUI JSON: 真实配置" "$out" "\"password\": \"$PW1\""
-out=$(tx '3\n6\n4\n\n0\n0\n0\n0\n' ok)
+# 更多导出选项 (5) 里的隐藏凭据 JSON
+out=$(tx '3\n6\n5\n1\n0\n0\n0\n0\n' ok)
 assert_contains "TUI 隐藏凭据" "$out" '"password": "REDACTED"'
 assert_not_contains "TUI 隐藏凭据: 不含真实密码" "$out" "$PW1"
 # 多条线路: 先选线路, 且各自独立
@@ -388,7 +391,7 @@ out=$(tx '3\n6\n0\n0\n0\n' ok)
 assert_contains "多条线路: 询问选择线路" "$out" "选择要导出客户端配置的转发线路"
 assert_contains "多条线路: 列出线路 1" "$out" "转发线路 1（端口 20443）"
 assert_contains "多条线路: 列出线路 2" "$out" "转发线路 2（端口 20444）"
-out=$(tx '3\n6\n2\n2\n\n0\n0\n0\n0\n0\n' ok)
+out=$(tx '3\n6\n2\n1\n\n\n0\n0\n0\n0\n' ok)
 assert_contains "线路 2 的凭据" "$out" "$PW2"
 assert_not_contains "线路 2 的凭据页不含线路 1 密码" "$out" "$PW1"
 gw endpoint 2 set 203.0.113.22 20444 >/dev/null 2>&1
