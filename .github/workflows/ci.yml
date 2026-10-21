@@ -32,6 +32,20 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # ubuntu-26.04 起宿主机 apparmor 自带 tinyproxy 配置 (附加到 /usr/bin/tinyproxy, 只允许读 /etc/tinyproxy/tinyproxy.conf)
+      # 下面的容器用 apparmor=unconfined 运行, 执行容器内同一路径的 Alpine tinyproxy 时会切换到这个宿主机配置,
+      # 读取 /run/apm-snell/tinyproxy.conf 被拒绝 (内核审计 apparmor="DENIED" profile="tinyproxy" operation="open")
+      # 只卸载这一个配置, AppArmor 本身保持开启; 卸载后核对确实不在内核里, 否则直接失败
+      - name: 卸载宿主机按路径附加到 tinyproxy 的 AppArmor 配置
+        run: |
+          P=/sys/kernel/security/apparmor/profiles
+          if sudo grep -q '^tinyproxy ' "$P" 2>/dev/null; then
+            sudo apparmor_parser -R /etc/apparmor.d/tinyproxy
+            if sudo grep -q '^tinyproxy ' "$P"; then echo "tinyproxy 配置仍在内核里" >&2; exit 1; fi
+            echo "已卸载宿主机 AppArmor 配置 tinyproxy"
+          else
+            echo "宿主机没有加载 tinyproxy 配置, 无需处理"
+          fi
       - name: 构建补丁版 graftcp, 安装官方 Snell v6, 运行端到端测试
         run: >
           docker run --rm --cap-add SYS_PTRACE --cap-add SYS_ADMIN --cap-add NET_ADMIN

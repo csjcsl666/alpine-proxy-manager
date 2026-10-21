@@ -16,6 +16,15 @@ mkdir -p "$W/out" "$W/dl" /srv/dl
 
 apk add --no-cache openssl openrc python3 gcompat libstdc++ libgcc unzip wget tinyproxy unbound git go gcc musl-dev make linux-headers patch >/dev/null
 
+# 先确认 tinyproxy 能读取放在 /run 下的配置 (与 Manager 生成的运行时配置同一类位置), 宿主机安全模块按路径限制它时在这里给出明确原因, 而不是到端到端测试中途才失败
+mkdir -p /run/apm-ci-tp
+printf 'Port 18899\nListen 127.0.0.1\n' > /run/apm-ci-tp/t.conf
+if timeout 2 tinyproxy -d -c /run/apm-ci-tp/t.conf 2>&1 | grep -q 'Could not open config file'; then
+    echo "tinyproxy 无法读取 /run 下的配置: 宿主机的 AppArmor 等安全模块可能按路径给 $(command -v tinyproxy) 附加了配置 (见 CI 中卸载 tinyproxy 配置的步骤)" >&2
+    exit 1
+fi
+rm -rf /run/apm-ci-tp
+
 echo '== 构建补丁版 graftcp'
 sh "$SRC/third_party/graftcp/build-inner.sh" "$W/out"
 GC=$W/out/graftcp-v0.8.3-apm1-linux-x86_64
