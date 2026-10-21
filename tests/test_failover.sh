@@ -165,9 +165,9 @@ assert_eq "default 恢复默认" "" "$(kv_get "$(CONF)" probe_url)"
 
 # ---- TUI: 管理中心 4. 自动故障切换 ----
 "$PM" sing-box egress Hysteria2-01 socks SOCKS-01 >/dev/null 2>&1
-out=$(T '2\n3\n0\n0\n0\n')
+out=$(T '2\n4\n0\n0\n0\n')
 assert_contains "管理中心含 4. 自动故障切换" "$out" "4. 自动故障切换"
-out=$(T '2\n3\n4\n0\n0\n0\n0\n')
+out=$(T '2\n4\n4\n0\n0\n0\n0\n')
 assert_contains "页面标题" "$out" "SOCKS5 · 自动故障切换"
 assert_contains "页面警告会通过 VPS 自己的 IP" "$out" "VPS 自己的 IP"
 assert_contains "页面说明默认关闭" "$out" "默认关闭"
@@ -176,31 +176,31 @@ assert_contains "页面显示恢复验证地址 1" "$out" "恢复验证地址 1�
 assert_contains "页面显示恢复验证地址 2" "$out" "恢复验证地址 2：https://www.gstatic.com/generate_204"
 assert_contains "设置恢复验证地址入口在同一页" "$out" "2. 设置恢复验证地址"
 FB=$(CFGSUM)
-T '2\n3\n4\n1' >/dev/null
+T '2\n4\n4\n1' >/dev/null
 assert_eq "确认处 EOF 不开启" "" "$(kv_get "$(CONF)" failover_on)"
 assert_eq "确认处 EOF 不改配置" "$FB" "$(CFGSUM)"
-T '2\n3\n4\n1\nn\n0\n0\n0\n0\n' >/dev/null
+T '2\n4\n4\n1\nn\n0\n0\n0\n0\n' >/dev/null
 assert_eq "确认处回答 n 不开启" "" "$(kv_get "$(CONF)" failover_on)"
-out=$(T '2\n3\n4\n1\n\n0\n0\n0\n0\n')
+out=$(T '2\n4\n4\n1\n\n0\n0\n0\n0\n')
 assert_eq "回车默认 Yes 开启" SOCKS-01 "$(kv_get "$(CONF)" failover_on)"
 assert_contains "运行配置带 selector" "$(CFG)" '"tag": "apm-sel-SOCKS-01"'
-out=$(T '2\n3\n4\n0\n0\n0\n0\n')
+out=$(T '2\n4\n4\n0\n0\n0\n0\n')
 assert_contains "开启后一览显示已开启" "$out" "1. SOCKS-01    已开启"
-out=$(T '2\n3\n1\n2\n1\n0\n0\n0\n0\n0\n')
+out=$(T '2\n4\n1\n2\n1\n0\n0\n0\n0\n0\n')
 assert_contains "服务器页显示首选出口" "$out" "首选出口：SOCKS5"
 assert_contains "服务器页显示当前出口" "$out" "当前出口：SOCKS5"
 assert_contains "服务器页显示最近故障" "$out" "最近故障："
 assert_contains "服务器页显示最近恢复" "$out" "最近恢复："
-T '2\n3\n4\n1\n0\n0\n0\n0\n' >/dev/null
+T '2\n4\n4\n1\n0\n0\n0\n0\n' >/dev/null
 assert_eq "再选一次关闭 (不需要确认)" "" "$(kv_get "$(CONF)" failover_on)"
 assert_not_contains "关闭后没有 selector" "$(CFG)" selector
-out=$(T '2\n3\n4\n2\nhttp://example.test/x\n\n0\n0\n0\n0\n')
+out=$(T '2\n4\n4\n2\nhttp://example.test/x\n\n0\n0\n0\n0\n')
 assert_contains "TUI 拒绝 http 地址" "$out" "必须以 https:// 开头"
 assert_eq "被拒绝时不保存" "" "$(kv_get "$(CONF)" probe_url)"
-T '2\n3\n4\n2\nhttps://example.test/a\nhttps://example.test/b\n0\n0\n0\n0\n' >/dev/null
+T '2\n4\n4\n2\nhttps://example.test/a\nhttps://example.test/b\n0\n0\n0\n0\n' >/dev/null
 assert_eq "TUI 保存地址 1" https://example.test/a "$(kv_get "$(CONF)" probe_url)"
 assert_eq "TUI 保存地址 2" https://example.test/b "$(kv_get "$(CONF)" probe_url2)"
-T '2\n3\n4\n2\ndefault\ndefault\n0\n0\n0\n0\n' >/dev/null
+T '2\n4\n4\n2\ndefault\ndefault\n0\n0\n0\n0\n' >/dev/null
 assert_eq "TUI default 恢复默认" "" "$(kv_get "$(CONF)" probe_url)"
 assert_not_contains "TUI 页面不含密码" "$out" "$SPW"
 
