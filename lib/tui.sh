@@ -23,6 +23,7 @@ TUI_SECRET=
 TUI_PICK=
 TUI_STTY_SAVED=
 TUI_EOF=0
+TUI_WAITKEY=enter
 TUI_RC=0
 TUI_EXIT=0
 TUI_TICK_ON=0
@@ -351,13 +352,18 @@ _tui_wait_flush() {
 # 等待回车. 单键终端里只有 Enter Esc Ctrl-D 结束, 其他键与方向键忽略 (不回显, 不累积); 其余终端读一整行. EOF 不阻塞, 置 TUI_EOF 后返回
 _tui_wait_enter() {
     local _st _k _rc
+    TUI_WAITKEY=enter
     if [ "${TUI_ONEKEY:-0}" != 1 ]; then
         IFS= read -r _k || TUI_EOF=1
+        case $_k in q|Q) TUI_WAITKEY=esc ;; esac
+        [ "$TUI_EOF" != 1 ] || TUI_WAITKEY=esc
         return 0
     fi
     _st=$(_snell_run stty -g 2>/dev/null) || _st=
     if [ -z "$_st" ]; then
         IFS= read -r _k || TUI_EOF=1
+        case $_k in q|Q) TUI_WAITKEY=esc ;; esac
+        [ "$TUI_EOF" != 1 ] || TUI_WAITKEY=esc
         return 0
     fi
     TUI_STTY_SAVED=$_st
@@ -367,7 +373,7 @@ _tui_wait_enter() {
         # shellcheck disable=SC3045
         IFS= read -r -n 1 _k
         _rc=$?
-        if [ "$_rc" -ne 0 ]; then TUI_EOF=1; break; fi
+        if [ "$_rc" -ne 0 ]; then TUI_EOF=1; TUI_WAITKEY=esc; break; fi
         [ -n "$_k" ] || break
         case $_k in
             "$(printf '\033')")
@@ -375,9 +381,10 @@ _tui_wait_enter() {
                 _tui_getbyte
                 _snell_run stty min 1 time 0 2>/dev/null
                 if [ -n "$TUI_K" ]; then _tui_key_drain; continue; fi
+                TUI_WAITKEY=esc
                 break
                 ;;
-            "$(printf '\004')") break ;;
+            "$(printf '\004')") TUI_WAITKEY=esc; break ;;
         esac
     done
     _snell_run stty "$_st" 2>/dev/null
@@ -776,35 +783,693 @@ doctor|doctor 环境检查" "返回"
     done
 }
 
-# 网络与进程保护（低内存环境） (lowmem): 入口在 Snell 管理的网络功能里, 显示实时检测到的事实，启用与恢复直接执行（预检在启用时完成，不能处理的项目会明确说明）
-tui_lowmem_menu() {
+# ---- Snell · 网络与进程保护（低内存环境） ----
+# 信息架构: 首页看状态 (哪些机制实际生效) / 详情看原理 (分组的技术信息) / 取证看事件 (摘要加原始记录) / 操作看结果 (成功 失败 跳过 未改变)
+# 展示只读 lowmem.sh 的检测与计划函数并实时读系统, 不信任保存的 "全部成功"; 命令行 apm lowmem 的输出不变
+# 状态码 ok 已生效  bad 配置了但未生效  part 部分生效  avail 可启用  fine 无需调整  na 环境不允许  off 可选项未启用
+
+# 把一段说明按 ； 拆成缩进的多行, 不依赖终端自动换行
+_tui_lm_wrap() { # 缩进 文字
+    printf '%s\n' "$2" | sed "s/；/\\
+/g" | sed "s/^/$1/"
+}
+
+_tui_lm_row() { # 标记状态 标签 文字
+    local _mk
+    case $1 in bad|part) _mk='! ' ;; *) _mk='  ' ;; esac
+    case $3 in 未生效*|未应用*) _mk='! ' ;; esac
+    printf '%s%s：%s\n' "$_mk" "$2" "$3"
+}
+
+# 收集全部展示用的状态 (只读). 结果放在 LMT_* 里
+_tui_lm_collect() {
+    local _c_tcp _c_ssh _c_for _c_sac _k _t _c _n _okn _pid _adj _cm _bad
+    lm_probe
+    lm_plan_tcp
+    lm_plan_ssh
+    lm_plan_forensics
+    lm_plan_sac
+    LMT_EN=no
+    lm_enabled && LMT_EN=yes
+    _c_tcp=$(_lm_cget tcp); _c_ssh=$(_lm_cget ssh); _c_for=$(_lm_cget forensics); _c_sac=$(_lm_cget snell_sac)
+    LMT_DAEMON=no
+    _lm_daemon_running && LMT_DAEMON=yes
+    LMT_CONF=0; LMT_OK=0; LMT_BAD=0; LMT_NA=0
+    # ---- TCP ----
+    if [ "$LMT_EN" = yes ] && [ "$_c_tcp" = on ]; then
+        LMT_CONF=$((LMT_CONF + 1))
+        _bad=
+        for _k in rmem wmem; do
+            _t=$(_lm_cget "tcp_$_k")
+            [ -n "$_t" ] || continue
+            _c=$(_lm_tcp_read "$_k")
+            [ "$_c" = "$_t" ] || _bad="$_bad $_k"
+        done
+        if [ -z "$_bad" ]; then LMT_TCP_S=ok; LMT_TCP_T="已生效"; LMT_OK=$((LMT_OK + 1))
+        else LMT_TCP_S=bad; LMT_TCP_T="未生效（当前值与设置不一致，可能被外部修改）"; LMT_BAD=$((LMT_BAD + 1)); fi
+    else
+        case $LM_P_TCP in
+            plan) LMT_TCP_S=avail; LMT_TCP_T="可调整（缓冲上限偏大，启用后降到内核默认值）" ;;
+            fine) LMT_TCP_S=fine; LMT_TCP_T="无需调整（缓冲上限合理）" ;;
+            unconfirmed) LMT_TCP_S=na; LMT_TCP_T="未启用（作用范围未确认，不自动修改）" ;;
+            unknown) LMT_TCP_S=na; LMT_TCP_T="无法判断（内存上限或参数格式未知）" ;;
+            *)
+                LMT_TCP_S=na
+                case $LM_P_TCP_NOTE in
+                    *只读*) LMT_TCP_T="不可用（当前环境不允许修改）" ;;
+                    *没有提供*) LMT_TCP_T="不可用（内核没有提供该参数）" ;;
+                    *管理员已在*) LMT_TCP_T="不可用（已由管理员在 sysctl 配置中设置）" ;;
+                    *) LMT_TCP_T="不可用" ;;
+                esac
+                ;;
+        esac
+        { [ "$LMT_EN" != yes ] || [ "$LMT_TCP_S" != na ]; } || LMT_NA=$((LMT_NA + 1))
+    fi
+    # ---- SSH ----
+    LMT_SSH_N=0
+    LMT_SSH_OKN=0
+    while read -r _pid _adj _cm; do
+        [ -n "$_pid" ] || continue
+        LMT_SSH_N=$((LMT_SSH_N + 1))
+        [ "$_adj" -le "$LM_SSH_ADJ" ] 2>/dev/null && LMT_SSH_OKN=$((LMT_SSH_OKN + 1))
+    done <<EOF
+$(_lm_ssh_procs)
+EOF
+    if [ "$LMT_EN" = yes ] && [ "$_c_ssh" = on ]; then
+        LMT_CONF=$((LMT_CONF + 1))
+        if [ "$LMT_SSH_N" -eq 0 ]; then
+            if [ "$LMT_DAEMON" = yes ]; then LMT_SSH_S=ok; LMT_SSH_T="已启用（当前没有 sshd 进程，出现后自动设置）"; LMT_OK=$((LMT_OK + 1))
+            else LMT_SSH_S=bad; LMT_SSH_T="未生效（常驻进程没有运行）"; LMT_BAD=$((LMT_BAD + 1)); fi
+        elif [ "$LMT_SSH_OKN" -eq "$LMT_SSH_N" ]; then
+            LMT_SSH_S=ok; LMT_SSH_T="已生效（$LMT_SSH_N 个 sshd 进程，oom_score_adj 不高于 $LM_SSH_ADJ）"; LMT_OK=$((LMT_OK + 1))
+        else
+            LMT_SSH_S=part; LMT_SSH_T="部分生效（$LMT_SSH_OKN/$LMT_SSH_N 个进程，其余由常驻进程在数秒内设置）"; LMT_BAD=$((LMT_BAD + 1))
+        fi
+    else
+        case $LM_P_SSH in
+            plan) LMT_SSH_S=avail; LMT_SSH_T="可启用（把 sshd 的 oom_score_adj 降到 $LM_SSH_ADJ）" ;;
+            fine) LMT_SSH_S=fine; LMT_SSH_T="可启用（sshd 的 oom_score_adj 已不高于 $LM_SSH_ADJ）" ;;
+            *)
+                LMT_SSH_S=na
+                case $LM_P_SSH_NOTE in
+                    *memory.oom.group*) LMT_SSH_R="cgroup 整组终止（memory.oom.group 为 1），调整无效" ;;
+                    *不允许降低*) LMT_SSH_R="权限不足，无法降低 oom_score_adj" ;;
+                    *) LMT_SSH_R="环境不允许" ;;
+                esac
+                if [ "$LMT_EN" = yes ]; then LMT_SSH_T="未生效（$LMT_SSH_R）"; LMT_NA=$((LMT_NA + 1)); else LMT_SSH_T="不可用（$LMT_SSH_R）"; fi
+                ;;
+        esac
+    fi
+    # ---- 内存取证 ----
+    if [ "$LMT_EN" = yes ] && [ "$_c_for" = on ]; then
+        LMT_CONF=$((LMT_CONF + 1))
+        if [ "$LMT_DAEMON" = yes ]; then LMT_FOR_S=ok; LMT_FOR_T="运行中"; LMT_OK=$((LMT_OK + 1))
+        else LMT_FOR_S=bad; LMT_FOR_T="未运行（常驻进程没有运行）"; LMT_BAD=$((LMT_BAD + 1)); fi
+    else
+        case $LM_P_FOR in
+            plan) LMT_FOR_S=avail; LMT_FOR_T="可启用（记录 OOM 发生时的内存组成和进程表）" ;;
+            *)
+                LMT_FOR_S=na
+                if [ "$LMT_EN" = yes ]; then LMT_FOR_T="未生效（需要 cgroup v2 的 memory.events）"; LMT_NA=$((LMT_NA + 1)); else LMT_FOR_T="不可用（需要 cgroup v2 的 memory.events）"; fi
+                ;;
+        esac
+    fi
+    # ---- Snell 优先终止 (可选) ----
+    LMT_SAC_N=0
+    LMT_SAC_OKN=0
+    while read -r _pid _adj _cm; do
+        [ -n "$_pid" ] || continue
+        LMT_SAC_N=$((LMT_SAC_N + 1))
+        [ "$_adj" -ge "$LM_SNELL_ADJ" ] 2>/dev/null && LMT_SAC_OKN=$((LMT_SAC_OKN + 1))
+    done <<EOF
+$(_lm_snell_procs)
+EOF
+    if [ "$LMT_EN" = yes ] && [ "$_c_sac" = on ]; then
+        LMT_CONF=$((LMT_CONF + 1))
+        if [ "$LMT_SAC_N" -eq 0 ]; then
+            if [ "$LMT_DAEMON" = yes ]; then LMT_SAC_S=ok; LMT_SAC_T="已启用（Snell 当前没有运行，启动后自动设置）"; LMT_OK=$((LMT_OK + 1))
+            else LMT_SAC_S=bad; LMT_SAC_T="未生效（常驻进程没有运行）"; LMT_BAD=$((LMT_BAD + 1)); fi
+        elif [ "$LMT_SAC_OKN" -eq "$LMT_SAC_N" ]; then
+            LMT_SAC_S=ok; LMT_SAC_T="已启用（$LMT_SAC_N 个 Snell 进程，oom_score_adj 不低于 $LM_SNELL_ADJ）"; LMT_OK=$((LMT_OK + 1))
+        else
+            LMT_SAC_S=part; LMT_SAC_T="部分生效（$LMT_SAC_OKN/$LMT_SAC_N 个进程，其余由常驻进程在数秒内设置）"; LMT_BAD=$((LMT_BAD + 1))
+        fi
+    else
+        case $LM_P_SAC in
+            na)
+                LMT_SAC_S=na
+                case $LM_P_SAC_NOTE in
+                    *没有检测到*) LMT_SAC_T="不可用（没有检测到 Snell 服务）" ;;
+                    *memory.oom.group*) LMT_SAC_T="不可用（cgroup 整组终止，调整无效）" ;;
+                    *) LMT_SAC_T="不可用" ;;
+                esac
+                ;;
+            *) LMT_SAC_S=off; LMT_SAC_T="未启用" ;;
+        esac
+    fi
+    # ---- 开机持久化 ----
+    LMT_PER_S=off
+    LMT_PER_T=
+    if [ "$LMT_EN" = yes ]; then
+        if _lm_init_ours && [ -e "$(env_path "/etc/runlevels/default/$LM_SVC")" ]; then LMT_PER_S=ok; LMT_PER_T="已启用（OpenRC 服务 $LM_SVC，default 运行级别）"
+        else LMT_PER_S=bad; LMT_PER_T="未生效（OpenRC 服务缺失或没有加入开机启动）"; fi
+    fi
+    return 0
+}
+
+# 一句话总结, 统计口径写明: 配置项 = 设置文件里启用的机制; 生效项 = 实时检测确认生效
+_tui_lm_headline() {
+    if [ "$LMT_EN" != yes ]; then printf '未启用'; return 0; fi
+    if [ "$LMT_CONF" -eq 0 ]; then printf '已启用，但没有任何机制可用（见下）'; return 0; fi
+    printf '已启用（配置 %s 项，实际生效 %s 项' "$LMT_CONF" "$LMT_OK"
+    [ "$LMT_BAD" -eq 0 ] || printf '，%s 项未完全生效' "$LMT_BAD"
+    [ "$LMT_NA" -eq 0 ] || printf '；另有 %s 项因环境限制没有生效' "$LMT_NA"
+    printf '）'
+}
+
+# 首页: 只显示状态. 不展开路径 原始参数 权限解释
+_tui_lm_home() {
+    _tui_lm_collect
+    printf '调整 TCP 缓冲与进程的 OOM 优先级，并记录内存取证；不清理或回收内存\n\n'
+    printf '保护状态：%s\n' "$(_tui_lm_headline)"
+    if [ "$LMT_EN" = yes ]; then printf '  配置项 = 设置里启用的机制；生效项 = 实时检测确认；环境限制项另计\n'; fi
+    printf '\n'
+    _tui_lm_row "$LMT_TCP_S" "TCP 缓冲优化" "$LMT_TCP_T"
+    _tui_lm_row "$LMT_SSH_S" "SSH 进程保护" "$LMT_SSH_T"
+    _tui_lm_row "$LMT_FOR_S" "内存取证" "$LMT_FOR_T"
+    _tui_lm_row "$LMT_SAC_S" "Snell 优先终止" "$LMT_SAC_T"
+    [ "$LMT_EN" != yes ] || _tui_lm_row "$LMT_PER_S" "开机持久化" "$LMT_PER_T"
+    if [ "$LMT_SAC_S" = ok ] || [ "$LMT_SAC_S" = part ]; then
+        printf '\n! Snell 优先终止不提高 Snell 的稳定性：内存不足时 Snell 会最先被终止\n'
+    fi
+    if [ "$LMT_EN" = yes ] && [ $((LMT_BAD + LMT_NA)) -gt 0 ]; then
+        printf '\n! 有 %s 项没有生效（含环境限制），原因见「查看保护详情」\n' "$((LMT_BAD + LMT_NA))"
+    fi
+}
+
+# ---- 保护详情 ----
+
+_tui_lm_proc_list() { # 过程名 (_lm_ssh_procs|_lm_snell_procs) 最多 5 个
+    local _pid _adj _cm _n
+    _n=0
+    while read -r _pid _adj _cm; do
+        [ -n "$_pid" ] || continue
+        _n=$((_n + 1))
+        [ "$_n" -gt 5 ] || printf '      PID %s（%s）：oom_score_adj %s\n' "$_pid" "$_cm" "$_adj"
+    done <<EOF
+$($1)
+EOF
+    [ "$_n" -le 5 ] || printf '      …… 共 %s 个进程\n' "$_n"
+    [ "$_n" -gt 0 ] || printf '      当前没有该进程\n'
+}
+
+# 依据按 ， 拆成多行, 续行缩进
+_tui_lm_why() {
+    printf '%s\n' "$1" | sed 's/，/\
+/g' | awk 'NR == 1 { print "    依据：" $0; next } { print "      " $0 }'
+}
+
+_tui_lm_tcp_block() { # rmem|wmem
+    local _cur _o _t _w _kd _lbl _cap
+    if [ "$1" = rmem ]; then _cur=$LM_RMEM; _kd=$LM_KD_RMEM; _lbl="tcp_rmem（接收缓冲）"; else _cur=$LM_WMEM; _kd=$LM_KD_WMEM; _lbl="tcp_wmem（发送缓冲）"; fi
+    _o=$(kv_get "$(_lm_orig)" "tcp_$1_orig" 2>/dev/null)
+    _t=$(kv_get "$(_lm_orig)" "tcp_$1_target" 2>/dev/null)
+    _w=$(kv_get "$(_lm_orig)" "tcp_$1_why" 2>/dev/null)
+    printf '  %s\n' "$_lbl"
+    if [ -n "$_cur" ]; then
+        # shellcheck disable=SC2086
+        set -- $_cur
+        printf '    当前：%s（单个连接上限 %s）\n' "$_cur" "$(_lm_mib "$3")"
+    else
+        printf '    当前：不可用\n'
+    fi
+    if [ -n "$_o" ]; then
+        # shellcheck disable=SC2086
+        set -- $_o
+        _cap=$(_lm_mib "$3")
+        printf '    原始：%s（上限 %s）\n' "$_o" "$_cap"
+        # shellcheck disable=SC2086
+        set -- $_t
+        printf '    目标：%s（上限 %s）\n' "$_t" "$(_lm_mib "$3")"
+        _tui_lm_why "$_w"
+    else
+        printf '    内核默认（参照）：%s\n' "$_kd"
+        printf '    原始 / 目标：没有保存（没有调整过）\n'
+    fi
+}
+
+_tui_lm_detail() {
+    local _k _on _ad
+    _tui_lm_collect
+    printf '保护状态：%s\n' "$(_tui_lm_headline)"
+    printf '\nA. 运行环境\n'
+    printf '  内存上限：%s（%s）\n' "$(_lm_mib "$LM_LIMIT")" "$(_lm_limit_src_text)"
+    printf '  cgroup：%s%s\n' "${LM_CG_VER:-未知}" "$([ -z "$LM_CG_DIR" ] || printf '，%s' "${LM_CG_DIR#"${APM_SYSROOT:-}"}")"
+    case $LM_NS_SCOPE in
+        own) printf '  网络命名空间：与宿主机不共享\n  判断依据：本进程在子用户命名空间里，并且能写网络参数\n' ;;
+        *) printf '  网络命名空间：是否与宿主机共享未确认\n  判断依据：没有直接证据，不用容器标记推断\n' ;;
+    esac
+    [ "$(_lm_cget netns_assumed)" != yes ] || printf '  管理员已用 --assume-own-netns 声明独占，APM 没有独立证据\n'
+    printf '  辅助信息（不参与判断）：\n'
+    _tui_lm_wrap '    ' "$(printf '%s' "$LM_NS_AUX" | sed 's/，/；/g')"
+    printf '  TCP 参数影响范围：当前网络命名空间内的所有服务\n'
+    printf '    （含 sing-box 与 AnyTLS Gateway，不只是 Snell）\n'
+    printf '\nB. TCP 缓冲区\n'
+    printf '  状态：%s\n' "$LMT_TCP_T"
+    printf '  单位：字节，三个数依次是 最小 / 初值 / 上限\n'
+    _tui_lm_tcp_block rmem
+    _tui_lm_tcp_block wmem
+    printf '  判断：单个连接上限之和超过内存上限的 1/4 时才调整\n'
+    printf '  调整方向：只降不升，降到内核默认值与当前值中较小者\n'
+    printf '\nC. 进程保护\n'
+    printf '  SSH 进程保护：%s\n' "$LMT_SSH_T"
+    printf '    目标：sshd 的 oom_score_adj 降到 %s\n' "$LM_SSH_ADJ"
+    _tui_lm_proc_list _lm_ssh_procs
+    printf '  Snell 优先终止（可选）：%s\n' "$LMT_SAC_T"
+    printf '    目标：Snell 进程的 oom_score_adj 提高到 %s\n' "$LM_SNELL_ADJ"
+    _tui_lm_proc_list _lm_snell_procs
+    printf '\nD. 取证与持久化\n'
+    printf '  内存取证：%s\n' "$LMT_FOR_T"
+    printf '  记录文件：%s（%s 字节）\n' "$LM_LOG" "$(_lm_log_size)"
+    printf '  记录方式：每 5 分钟一条心跳；OOM 计数变化时详细记录\n'
+    printf '  常驻进程：%s\n' "$([ "$LMT_DAEMON" = yes ] && printf '运行中' || printf '没有运行')"
+    if [ "$LMT_EN" = yes ]; then printf '  开机持久化：%s\n' "$LMT_PER_T"; else printf '  开机持久化：未启用（保护启用后创建 OpenRC 服务 %s）\n' "$LM_SVC"; fi
+    printf '  设置文件：%s\n' "$(_lm_conf)"
+    printf '  原始设置：%s\n' "$(_lm_orig)"
+    printf '\nE. 限制与风险\n'
+    printf '  - TCP 参数影响整个网络命名空间，不只是 Snell\n'
+    printf '  - 修改 OOM 优先级不能保证进程不被终止\n'
+    printf '  - Snell 优先终止会提高 Snell 被终止的可能，不提高其稳定性\n'
+    printf '  - memory.events 的 OOM 计数是累计值，当前 %s 次\n' "${LM_OOM_KILL:-不可用}"
+    printf '    （所在 cgroup 创建以来，不是最近一次）\n'
+    printf '  - 内存占用偏高不等于发生过 OOM；周期采样抓不到毫秒级峰值\n'
+    printf '  - 资源本身不足时，这些保护无法替代更多内存\n'
+    return 0
+}
+
+# ---- 取证记录 ----
+
+# 从取证日志提取摘要 (只读). 结果放在 LMF_*; 日志格式解析失败的行被忽略, 原始记录始终可查看
+_tui_lm_log_scan() {
+    local _f _r
+    _f=$(env_path "$LM_LOG")
+    LMF_LINES=0; LMF_LAST=; LMF_CUR=; LMF_BEATS=0; LMF_TFIRST=; LMF_TLAST=; LMF_MIN=; LMF_MAX=
+    LMF_C0=; LMF_C1=; LMF_K0=; LMF_K1=; LMF_OOM=0; LMF_LASTOOM=; LMF_START=0; LMF_FIRSTTS=
+    [ -s "$_f" ] || return 0
+    _r=$(awk '
+        function num(s, key,   m) { if (match(s, key "=[0-9]+")) return substr(s, RSTART + length(key) + 1, RLENGTH - length(key) - 1) + 0; return "" }
+        { n++ }
+        $1=="START"||$1=="BEAT"||$1=="BURST"||$1=="OOM" {
+            if (first == "") first = $2 " " $3
+            last = $2 " " $3
+            c = num($0, "cur"); if (c != "") cur = c
+        }
+        $1=="START" { st++ }
+        $1=="OOM" { oom++; lastoom = $2 " " $3 }
+        $1=="BEAT" {
+            c = num($0, "cur"); k = num($0, "oom_kill")
+            if (c != "") { b++; cv[b] = c; ct[b] = $2 " " $3; if (k != "") kv[b] = k }
+        }
+        END {
+            lo = b - 11; if (lo < 1) lo = 1
+            mn = ""; mx = ""
+            for (i = lo; i <= b; i++) { if (mn == "" || cv[i] < mn) mn = cv[i]; if (mx == "" || cv[i] > mx) mx = cv[i] }
+            print "lines=" n; print "last=" last; print "first=" first; print "cur=" cur
+            print "beats=" (b - lo + 1 > 0 ? b - lo + 1 : 0)
+            print "tfirst=" ct[lo]; print "tlast=" ct[b]
+            print "c0=" cv[lo]; print "c1=" cv[b]; print "min=" mn; print "max=" mx
+            print "k0=" kv[lo]; print "k1=" kv[b]
+            print "oom=" oom; print "lastoom=" lastoom; print "start=" st
+        }' "$_f" 2>/dev/null) || return 0
+    LMF_LINES=$(printf '%s\n' "$_r" | sed -n 's/^lines=//p')
+    LMF_LAST=$(printf '%s\n' "$_r" | sed -n 's/^last=//p')
+    LMF_FIRSTTS=$(printf '%s\n' "$_r" | sed -n 's/^first=//p')
+    LMF_CUR=$(printf '%s\n' "$_r" | sed -n 's/^cur=//p')
+    LMF_BEATS=$(printf '%s\n' "$_r" | sed -n 's/^beats=//p')
+    LMF_TFIRST=$(printf '%s\n' "$_r" | sed -n 's/^tfirst=//p')
+    LMF_TLAST=$(printf '%s\n' "$_r" | sed -n 's/^tlast=//p')
+    LMF_C0=$(printf '%s\n' "$_r" | sed -n 's/^c0=//p')
+    LMF_C1=$(printf '%s\n' "$_r" | sed -n 's/^c1=//p')
+    LMF_MIN=$(printf '%s\n' "$_r" | sed -n 's/^min=//p')
+    LMF_MAX=$(printf '%s\n' "$_r" | sed -n 's/^max=//p')
+    LMF_K0=$(printf '%s\n' "$_r" | sed -n 's/^k0=//p')
+    LMF_K1=$(printf '%s\n' "$_r" | sed -n 's/^k1=//p')
+    LMF_OOM=$(printf '%s\n' "$_r" | sed -n 's/^oom=//p')
+    LMF_LASTOOM=$(printf '%s\n' "$_r" | sed -n 's/^lastoom=//p')
+    LMF_START=$(printf '%s\n' "$_r" | sed -n 's/^start=//p')
+    return 0
+}
+
+_tui_lm_mib_of() { # 字节
+    case $1 in ''|*[!0-9]*) printf '未知' ;; *) printf '%s MiB' "$(($1 / 1048576))" ;; esac
+}
+
+_tui_lm_forensics_summary() {
+    local _d _thr _pct
+    _tui_lm_collect
+    _tui_lm_log_scan
+    printf '监控：%s\n' "$LMT_FOR_T"
+    if [ "$LMF_LINES" -eq 0 ] 2>/dev/null && [ ! -s "$(env_path "$LM_LOG")" ]; then
+        printf '记录：还没有取证记录（%s）\n' "$LM_LOG"
+        printf '  启用保护后，取证进程每 5 分钟记录一次心跳采样\n'
+    elif [ -z "$LMF_LAST" ]; then
+        printf '记录：日志有内容（%s 字节），但没有可识别的采样行\n' "$(_lm_log_size)"
+        printf '  请查看原始记录，摘要不做猜测\n'
+    else
+        printf '最近采样：%s\n' "$LMF_LAST"
+        if [ -n "$LMF_CUR" ] && [ "${LM_LIMIT:-0}" -gt 0 ] 2>/dev/null; then
+            _pct=$((LMF_CUR * 100 / LM_LIMIT))
+            printf '内存使用：%s / %s（%s%%，最近一次采样）\n' "$(_tui_lm_mib_of "$LMF_CUR")" "$(_lm_mib "$LM_LIMIT")" "$_pct"
+        elif [ -n "$LMF_CUR" ]; then
+            printf '内存使用：%s（最近一次采样）\n' "$(_tui_lm_mib_of "$LMF_CUR")"
+        fi
+        if [ "${LMF_BEATS:-0}" -lt 2 ] 2>/dev/null; then
+            printf '近期趋势：采样不足（心跳 %s 条），无法判断\n' "${LMF_BEATS:-0}"
+        else
+            _d=$((LMF_C1 - LMF_C0))
+            _thr=2097152
+            [ "${LM_LIMIT:-0}" -le 0 ] 2>/dev/null || { [ $((LM_LIMIT / 50)) -le "$_thr" ] || _thr=$((LM_LIMIT / 50)); }
+            if [ "$_d" -gt "$_thr" ]; then _d="上升 $(_tui_lm_mib_of "$_d")"
+            elif [ "$_d" -lt "-$_thr" ]; then _d="下降 $(_tui_lm_mib_of "$((0 - _d))")"
+            else _d="基本平稳"; fi
+            printf '近期趋势：%s\n' "$_d"
+            printf '  统计区间：%s 到 %s\n' "$LMF_TFIRST" "$LMF_TLAST"
+            printf '  共 %s 条心跳，最低 %s，最高 %s\n' "$LMF_BEATS" "$(_tui_lm_mib_of "$LMF_MIN")" "$(_tui_lm_mib_of "$LMF_MAX")"
+        fi
+    fi
+    if [ -n "$LM_OOM_KILL" ]; then
+        printf 'OOM Kill 累计：%s 次（所在 cgroup 创建以来，不是最近一次）\n' "$LM_OOM_KILL"
+    else
+        printf 'OOM Kill 累计：不可用（没有可读的 cgroup v2 memory.events）\n'
+    fi
+    if [ -n "$LMF_K0" ] && [ -n "$LMF_K1" ] && [ "${LMF_BEATS:-0}" -ge 2 ] 2>/dev/null; then
+        if [ "$LMF_K1" -ge "$LMF_K0" ] 2>/dev/null; then
+            printf '  观察窗口内变化：%s -> %s（新增 %s 次）\n' "$LMF_K0" "$LMF_K1" "$((LMF_K1 - LMF_K0))"
+        else
+            printf '  观察窗口内变化：%s -> %s（计数变小，可能是 cgroup 重建）\n' "$LMF_K0" "$LMF_K1"
+        fi
+    else
+        printf '  观察窗口内变化：采样不足，无法判断\n'
+    fi
+    if [ "${LMF_OOM:-0}" -gt 0 ] 2>/dev/null; then
+        printf '异常事件：%s 次 OOM 事件记录，最近一次 %s\n' "$LMF_OOM" "$LMF_LASTOOM"
+        printf '  累计值不变时的重复数字不是新事件；事件以 OOM 记录为准\n'
+    else
+        printf '异常事件：无（日志中没有 OOM 事件记录）\n'
+    fi
+    [ "${LMF_START:-0}" -le 0 ] 2>/dev/null || printf '取证进程启动：%s 次（日志范围 %s 起）\n' "$LMF_START" "$LMF_FIRSTTS"
+    printf '完整日志：%s（%s 字节）\n' "$LM_LOG" "$(_lm_log_size)"
+}
+
+# 分页显示一个文件: 每页按终端高度估算 (折行的长记录占多行), 回车下一页, Esc 或 q 结束
+_tui_lm_pager() { # 文件
+    local _rows _cols _tot _p
+    _rows=${LINES:-24}
+    _cols=${COLUMNS:-80}
+    [ "$_rows" -ge 10 ] 2>/dev/null || _rows=24
+    [ "$_cols" -ge 40 ] 2>/dev/null || _cols=80
+    awk -v rows=$((_rows - 4)) -v cols="$_cols" '
+        BEGIN { page = 0; used = 0 }
+        { r = int((length($0) + cols - 1) / cols); if (r < 1) r = 1
+          if (used + r > rows && used > 0) { page++; used = 0 }
+          used += r; print page "\t" $0 }' "$1" > "$1.paged"
+    _tot=$(tail -n 1 "$1.paged" | cut -f1)
+    _tot=$((_tot + 1))
+    _p=0
+    while [ "$_p" -lt "$_tot" ]; do
+        awk -F'\t' -v p="$_p" '$1 == p { sub(/^[0-9]+\t/, ""); print }' "$1.paged"
+        _p=$((_p + 1))
+        [ "$_p" -lt "$_tot" ] || break
+        printf -- '-- 第 %s/%s 页，回车下一页，Esc 结束 --' "$_p" "$_tot"
+        _tui_wait_enter
+        printf '\n'
+        [ "$TUI_WAITKEY" = enter ] || break
+    done
+    rm -f -- "$1.paged"
+}
+
+# 原始记录: 最近 N 行, 保留原始时间戳和数据; FILTER=events 时只看异常事件相关行
+_tui_lm_rawlog() { # all|events
+    local _f _t
+    _f=$(env_path "$LM_LOG")
+    if [ ! -s "$_f" ]; then printf '还没有取证记录（%s）\n' "$LM_LOG"; return 0; fi
+    _t=$(mktemp "${TMPDIR:-/tmp}/apm-lmlog.XXXXXX") || { printf '无法创建临时文件\n'; return 1; }
+    if [ "$1" = events ]; then
+        grep -a -E '^(OOM|PROCS|BURST|START) ' "$_f" | tail -n 100 > "$_t"
+        [ -s "$_t" ] || { printf '没有 OOM、进程表或事件后加密采样记录\n'; rm -f -- "$_t"; return 0; }
+        printf '异常事件相关记录（OOM、PROCS、BURST、START，最近 100 行）\n\n'
+    else
+        tail -n 100 "$_f" > "$_t"
+        printf '原始记录（最近 100 行；完整日志 %s）\n\n' "$LM_LOG"
+    fi
+    _tui_lm_pager "$_t"
+    rm -f -- "$_t"
+    return 0
+}
+
+tui_lm_log_menu() {
+    while :; do
+        _tui_clear
+        _tui_header "Snell · 取证记录"
+        _tui_do _tui_lm_forensics_summary
+        printf '\n'
+        tui_choose "raw|查看原始记录（最近 100 行，分页）
+events|只看异常事件相关记录（OOM、进程表、事件后采样）" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            raw) _tui_clear; _tui_header "取证记录 · 原始记录"; _tui_do _tui_lm_rawlog all; _tui_wait ;;
+            events) _tui_clear; _tui_header "取证记录 · 异常事件"; _tui_do _tui_lm_rawlog events; _tui_wait ;;
+        esac
+        [ "${TUI_EOF:-0}" != 1 ] || return 0
+    done
+}
+
+# ---- 启用 ----
+
+_tui_lm_tcp_changed() { # 来自原始设置的 原值 -> 目标
+    local _k _o _t
+    for _k in rmem wmem; do
+        _o=$(kv_get "$(_lm_orig)" "tcp_${_k}_orig" 2>/dev/null)
+        [ -n "$_o" ] || continue
+        _t=$(kv_get "$(_lm_orig)" "tcp_${_k}_target" 2>/dev/null)
+        printf '      tcp_%s：%s -> %s\n' "$_k" "$_o" "$_t"
+    done
+}
+
+# 启用 (含可选的 Snell 优先终止): 执行前显示环境检查与预计启用项, 执行后只显示真正发生的结果
+_tui_lm_enable() { # [sac]
+    local _sac _rc _will _before_en _b_tcp _b_ssh _b_for _b_sac
+    _sac=${1:-}
+    _tui_lm_collect
+    _before_en=$LMT_EN; _b_tcp=$LMT_TCP_S; _b_ssh=$LMT_SSH_S; _b_for=$LMT_FOR_S; _b_sac=$LMT_SAC_S
+    printf '环境检查\n'
+    _tui_lm_row "$LMT_TCP_S" "TCP 缓冲" "$LMT_TCP_T"
+    _tui_lm_row "$LMT_SSH_S" "SSH 进程保护" "$LMT_SSH_T"
+    _tui_lm_row "$LMT_FOR_S" "内存取证" "$LMT_FOR_T"
+    if [ "$_sac" = sac ] || [ "$LMT_SAC_S" = ok ] || [ "$LMT_SAC_S" = part ]; then _tui_lm_row "$LMT_SAC_S" "Snell 优先终止" "$LMT_SAC_T"; fi
+    _will=
+    [ "$LMT_TCP_S" != avail ] || _will="$_will
+  - TCP 缓冲优化"
+    case $LMT_SSH_S in avail|fine) _will="$_will
+  - SSH 进程保护" ;; esac
+    [ "$LMT_FOR_S" != avail ] || _will="$_will
+  - 内存取证"
+    if [ "$_sac" = sac ]; then
+        case $LMT_SAC_S in off) [ "$LM_P_SAC" = na ] || _will="$_will
+  - Snell 优先终止（高级选项）" ;; esac
+    fi
+    if [ -n "$_will" ]; then printf '\n本次预计启用：%s\n' "$_will"; else printf '\n本次没有可启用的机制\n'; fi
+    if [ "$_sac" = sac ]; then lowmem_enable --snell-sacrifice >/dev/null; else lowmem_enable >/dev/null; fi
+    _rc=$?
+    _tui_lm_collect
+    printf '\n启用结果\n'
+    if [ "$LMT_EN" != yes ]; then
+        printf '  没有任何机制生效，没有保留设置\n'
+        return "$_rc"
+    fi
+    case $LMT_TCP_S in
+        ok) if [ "$_before_en" = yes ] && [ "$_b_tcp" = ok ]; then _tui_lm_row ok "TCP 缓冲" "已生效（与之前相同，未改变）"; else _tui_lm_row ok "TCP 缓冲" "成功"; _tui_lm_tcp_changed; fi ;;
+        bad) _tui_lm_row bad "TCP 缓冲" "$LMT_TCP_T" ;;
+        fine) _tui_lm_row fine "TCP 缓冲" "未调整（缓冲上限合理）" ;;
+        *) _tui_lm_row "$LMT_TCP_S" "TCP 缓冲" "未应用（${LMT_TCP_T}）" ;;
+    esac
+    case $LMT_SSH_S in
+        ok) if [ "$_before_en" = yes ] && [ "$_b_ssh" = ok ]; then _tui_lm_row ok "SSH 进程保护" "已生效（未改变）"; else _tui_lm_row ok "SSH 进程保护" "$LMT_SSH_T"; fi ;;
+        na) _tui_lm_row na "SSH 进程保护" "未应用（$LMT_SSH_R）" ;;
+        *) _tui_lm_row "$LMT_SSH_S" "SSH 进程保护" "$LMT_SSH_T" ;;
+    esac
+    case $LMT_FOR_S in
+        ok) if [ "$_before_en" = yes ] && [ "$_b_for" = ok ]; then _tui_lm_row ok "内存取证" "运行中（未改变）"; else _tui_lm_row ok "内存取证" "已启动"; fi ;;
+        na) _tui_lm_row na "内存取证" "未应用（需要 cgroup v2 的 memory.events）" ;;
+        *) _tui_lm_row "$LMT_FOR_S" "内存取证" "$LMT_FOR_T" ;;
+    esac
+    if [ "$_sac" = sac ] || [ "$LMT_SAC_S" = ok ] || [ "$LMT_SAC_S" = part ] || [ "$LMT_SAC_S" = bad ]; then
+        case $LMT_SAC_S in
+            ok) if [ "$_before_en" = yes ] && [ "$_b_sac" = ok ]; then _tui_lm_row ok "Snell 优先终止" "已生效（未改变）"; else _tui_lm_row ok "Snell 优先终止" "$LMT_SAC_T"; fi ;;
+            na) _tui_lm_row na "Snell 优先终止" "未应用（$LMT_SAC_T）" ;;
+            *) _tui_lm_row "$LMT_SAC_S" "Snell 优先终止" "$LMT_SAC_T" ;;
+        esac
+    fi
+    case $LMT_PER_S in
+        ok) _tui_lm_row ok "开机持久化" "已配置" ;;
+        *) _tui_lm_row bad "开机持久化" "$LMT_PER_T" ;;
+    esac
+    printf '\n'
+    if [ "$LMT_BAD" -gt 0 ]; then
+        printf '! 保护已启用，但有 %s 项配置了却没有完全生效，详见「查看保护详情」\n' "$LMT_BAD"
+    elif [ "$LMT_NA" -gt 0 ]; then
+        printf '保护已启用，实际生效 %s 项；%s 项因环境限制不可用\n' "$LMT_OK" "$LMT_NA"
+    else
+        printf '保护已启用，已配置的 %s 项机制全部生效\n' "$LMT_OK"
+    fi
+    return "$_rc"
+}
+
+# ---- 恢复 ----
+
+_tui_lm_disable() {
+    local _ev _rc _bad _file _line _code _val _a _b _any _un
+    _tui_lm_collect
+    if [ "$LMT_EN" != yes ] && [ ! -f "$(_lm_orig)" ] && ! _lm_init_ours; then
+        printf '网络与进程保护（低内存环境）没有启用，没有需要恢复的内容\n'
+        return 0
+    fi
+    _file=$(mktemp "${TMPDIR:-/tmp}/apm-lmev.XXXXXX") || { printf '无法创建临时文件\n'; return 1; }
+    LM_EVENTS_FILE=$_file lowmem_disable >/dev/null
+    _rc=$?
+    printf '恢复结果\n'
+    _bad=0
+    _un=0
+    printf '\n  TCP 参数\n'
+    _any=0
+    while IFS='|' read -r _code _val; do
+        case $_code in
+            tcp-restored-*) _any=1; printf '    tcp_%s：已恢复（%s）\n' "${_code#tcp-restored-}" "$_val" ;;
+            tcp-same-*) _any=1; printf '    tcp_%s：当前已是原值 %s，无需恢复\n' "${_code#tcp-same-}" "$_val" ;;
+            tcp-failed-*) _any=1; _bad=$((_bad + 1)); printf '! 写回原值失败：tcp_%s 当前仍是 %s\n' "${_code#tcp-failed-}" "$_val" ;;
+            tcp-external-*) _any=1; _un=$((_un + 1)); printf '! tcp_%s：当前值 %s 已被外部修改，没有覆盖，未恢复\n' "${_code#tcp-external-}" "$_val" ;;
+        esac
+    done < "$_file"
+    [ "$_any" = 1 ] || printf '    没有调整过 TCP 参数，无需恢复\n'
+    printf '\n  进程保护\n'
+    _any=0
+    while IFS='|' read -r _code _val; do
+        case $_code in
+            ssh-restored) _any=1; printf '    SSH 进程保护：已把 %s 个进程的 oom_score_adj 恢复为原值\n' "$_val" ;;
+            ssh-none) _any=1; printf '    SSH 进程保护：没有需要恢复的进程\n' ;;
+            sac-restored)
+                _any=1
+                _a=${_val%% *}; _b=${_val##* }
+                if [ "$_a" -gt 0 ] 2>/dev/null; then printf '    Snell 优先终止：已把 %s 个进程恢复为原值\n' "$_a"; else printf '    Snell 优先终止：没有可恢复的进程记录\n'; fi
+                if [ "$_b" -gt 0 ] 2>/dev/null; then _un=$((_un + 1)); printf '! %s 个进程因权限无法降低，需在 Snell 下次重启后恢复\n' "$_b"; fi
+                ;;
+        esac
+    done < "$_file"
+    [ "$_any" = 1 ] || printf '    没有需要恢复的进程设置\n'
+    if grep -q '^sac-norecord|' "$_file"; then
+        printf '\n  未修改的项目（没有原始记录，不是已恢复）\n'
+        while IFS='|' read -r _code _val; do
+            [ "$_code" = sac-norecord ] || continue
+            _un=$((_un + 1))
+            printf '! Snell 优先终止：%s 个进程的 oom_score_adj 是 %s，没有原值记录，没有改动\n' "${_val%% *}" "${_val##* }"
+            printf '    Snell 下次重启后恢复默认\n'
+        done < "$_file"
+    fi
+    printf '\n  OpenRC 与配置\n'
+    if grep -q '^service-removed|' "$_file"; then
+        printf '    apm-lowmem 服务和设置文件：已删除\n'
+        printf '    取证日志：保留在 %s\n' "$LM_LOG"
+    else
+        printf '! 没有完成：服务和设置文件可能仍在，见上面的提示\n'
+        _bad=$((_bad + 1))
+    fi
+    rm -f -- "$_file"
+    printf '\n最终状态：'
+    if lm_enabled; then
+        printf '保护仍处于启用状态\n'
+        return 1
+    fi
+    if [ "$_bad" -gt 0 ] || [ "$_un" -gt 0 ]; then
+        printf '保护已停用，但有 %s 项没有恢复到原始状态，见上面标 ! 的行\n' "$((_bad + _un))"
+    else
+        printf '保护已停用，已恢复到启用前的状态\n'
+    fi
+    return "$_rc"
+}
+
+# ---- 高级保护选项 ----
+
+_tui_lm_adv_info() {
+    _tui_lm_collect
+    printf 'Snell 优先终止（OOM）\n'
+    _tui_lm_row "$LMT_SAC_S" "当前策略" "$LMT_SAC_T"
+    printf '  Snell 进程：\n'
+    _tui_lm_proc_list _lm_snell_procs
+    printf '  目标策略：把 Snell 进程的 oom_score_adj 提高到 %s\n' "$LM_SNELL_ADJ"
+    printf '  预期效果：内存不足时，内核优先终止 Snell，\n'
+    printf '    而不是 sshd 等其他进程；这是为了保护管理入口\n'
+    printf '! 代价与风险：\n'
+    printf '    - 这不会提高 Snell 的稳定性，而是让它更容易被终止\n'
+    printf '    - Snell 即使不是内存压力的来源，也会最先被终止\n'
+    printf '    - memory.oom.group 为 1 时调整无效\n'
+    printf '  只影响 Snell 的 supervise-daemon 的后代进程，不动\n'
+    printf '    supervise-daemon、sshd、sing-box 与 AnyTLS Gateway\n'
+    if [ "$LMT_SAC_S" = ok ] || [ "$LMT_SAC_S" = part ] || [ "$LMT_SAC_S" = bad ]; then
+        printf '  关闭方式：「停用保护并恢复设置」会一并关闭\n    （目前没有单独关闭该选项的命令）\n'
+    fi
+}
+
+tui_lm_adv_menu() {
     local _items
     while :; do
         _tui_clear
-        _tui_header "Snell · 网络与进程保护（低内存环境）"
-        _tui_do lowmem_status
+        _tui_header "Snell · 高级保护选项"
+        _tui_do _tui_lm_adv_info
         printf '\n'
-        if lm_enabled; then
-            _items="detail|查看保护详情
-log|查看取证记录"
-            [ "$(_lm_cget snell_sac)" = on ] || _items="$_items
-sac|追加高级选项：Snell 优先被 OOM 终止（代价：Snell 更容易被终止）"
-            _items="$_items
-disable|恢复原始设置"
-        else
-            _items="enable|启用保护（自动检测，只调整需要调整的项目）
-sac|启用，并加上高级选项：Snell 优先被 OOM 终止（代价：Snell 更容易被终止）
-detail|查看保护详情"
-        fi
+        _tui_lm_collect >/dev/null 2>&1
+        _items=
+        case $LMT_SAC_S in
+            off) _items="sac|启用 Snell 优先终止（代价见上，未启用保护时会一并启用默认保护）" ;;
+        esac
         tui_choose "$_items" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            enable) _tui_need_root || continue; _tui_clear; _tui_header "网络与进程保护（低内存环境） · 启用"; _tui_do lowmem_enable; _tui_page ;;
-            sac) _tui_need_root || continue; _tui_clear; _tui_header "网络与进程保护（低内存环境） · 启用（含 Snell 优先牺牲）"; _tui_do lowmem_enable --snell-sacrifice; _tui_page ;;
-            disable) _tui_need_root || continue; _tui_clear; _tui_header "网络与进程保护（低内存环境） · 恢复"; _tui_do lowmem_disable; _tui_page ;;
-            detail) _tui_clear; _tui_header "网络与进程保护（低内存环境） · 详情"; _tui_do lowmem_detail; _tui_page ;;
-            log) _tui_clear; _tui_header "网络与进程保护（低内存环境） · 取证记录"; _tui_do lowmem_log 30; _tui_page ;;
+            sac)
+                _tui_need_root || continue
+                _tui_clear
+                _tui_header "高级保护选项 · 启用 Snell 优先终止"
+                _tui_do _tui_lm_enable sac
+                _tui_page
+                ;;
         esac
+        [ "${TUI_EOF:-0}" != 1 ] || return 0
+    done
+}
+
+# ---- 入口 ----
+
+tui_lowmem_menu() {
+    local _items _t
+    while :; do
+        _tui_clear
+        _tui_header "Snell · 网络与进程保护（低内存环境）"
+        _tui_do _tui_lm_home
+        printf '\n'
+        if lm_enabled; then _t="off|停用保护并恢复设置"; else _t="on|启用保护（自动检测，只调整需要调整的项目）"; fi
+        _items="detail|查看保护详情
+log|查看取证记录
+adv|高级保护选项
+$_t"
+        tui_choose "$_items" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            detail) _tui_clear; _tui_header "保护详情"; _tui_do _tui_lm_detail; _tui_page ;;
+            log) tui_lm_log_menu ;;
+            adv) tui_lm_adv_menu ;;
+            on) _tui_need_root || continue; _tui_clear; _tui_header "启用保护"; _tui_do _tui_lm_enable; _tui_page ;;
+            off) _tui_need_root || continue; _tui_clear; _tui_header "停用保护并恢复设置"; _tui_do _tui_lm_disable; _tui_page ;;
+        esac
+        [ "${TUI_EOF:-0}" != 1 ] || return 0
     done
 }
 

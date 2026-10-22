@@ -40,6 +40,9 @@ _lm_conf() { printf '%s/lowmem.conf' "$(state_etc)"; }
 _lm_orig() { printf '%s/lowmem.orig' "$(state_var)"; }
 _lm_rc() { _snell_run rc-service "$LM_SVC" "$1"; }
 
+# 结构化事件: 只有设置了 LM_EVENTS_FILE (TUI 的结果页) 才写, 每行 "事件码|说明", 命令行输出不受影响
+_lm_ev() { [ -z "${LM_EVENTS_FILE:-}" ] || printf '%s|%s\n' "$1" "$2" >> "$LM_EVENTS_FILE" 2>/dev/null; return 0; }
+
 _lm_mib() { printf '%s MiB' "$(($1 / 1048576))"; }
 
 # 规范化空白: "4096\t131072\t6291456" -> "4096 131072 6291456"
@@ -163,7 +166,7 @@ _lm_tcp_writable() {
     for _k in rmem wmem; do
         [ -w "$(_lm_tcp_path "$_k")" ] || return 1
         _v=$(cat "$(_lm_tcp_path "$_k")" 2>/dev/null)
-        printf '%s\n' "$_v" > "$(_lm_tcp_path "$_k")" 2>/dev/null || return 1
+        { printf '%s\n' "$_v" > "$(_lm_tcp_path "$_k")"; } 2>/dev/null || return 1
     done
     return 0
 }
@@ -766,8 +769,10 @@ lowmem_disable() {
             printf '%s\n' "$_adj" > "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null && _c=$((_c + 1))
         done < "$_f"
         printf '  SSH 保护：已把 %s 个进程的 oom_score_adj 恢复为原值\n' "$_c"
+        _lm_ev ssh-restored "$_c"
     else
         printf '  SSH 保护：没有需要恢复的进程\n'
+        _lm_ev ssh-none ""
     fi
     # Snell 优先牺牲: 只恢复仍然等于 APM 设置值的进程；降低分数需要权限时可能失败，如实报告
     if [ -f "$(env_path "$LM_RUN/snell.adj")" ]; then
@@ -784,6 +789,7 @@ lowmem_disable() {
             if printf '%s\n' "$_adj" > "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null; then _c=$((_c + 1)); else _k=$((_k + 1)); fi
         done < "$_f"
         printf '  Snell 优先牺牲：已把 %s 个进程的 oom_score_adj 恢复为原值%s\n' "$_c" "$([ "$_k" -eq 0 ] || printf '，%s 个因权限无法降低，需在 Snell 下次重启后恢复' "$_k")"
+        _lm_ev sac-restored "$_c $_k"
     fi
     # 当前 oom_score_adj 等于 APM 设置值、却没有原值记录的 Snell 进程: 不猜原值，如实说明
     if [ "$(_lm_cget snell_sac)" = on ]; then
@@ -795,7 +801,7 @@ lowmem_disable() {
         done <<EOF
 $(_lm_snell_procs)
 EOF
-        [ "$_k" -eq 0 ] || printf '  Snell 优先牺牲：%s 个进程的 oom_score_adj 是 %s 但没有原值记录，没有改动，Snell 下次重启后恢复默认\n' "$_k" "$(_lm_cget snell_adj)"
+        [ "$_k" -eq 0 ] || { printf '  Snell 优先牺牲：%s 个进程的 oom_score_adj 是 %s 但没有原值记录，没有改动，Snell 下次重启后恢复默认\n' "$_k" "$(_lm_cget snell_adj)"; _lm_ev sac-norecord "$_k $(_lm_cget snell_adj)"; }
     fi
     # tcp: 只在当前值仍等于 APM 设置值时写回
     for _k in rmem wmem; do
@@ -805,20 +811,25 @@ EOF
         _c=$(_lm_tcp_read "$_k")
         if [ "$_c" = "$_o" ]; then
             printf '  tcp_%s：当前值已是原值 %s\n' "$_k" "$_o"
+            _lm_ev "tcp-same-$_k" "$_o"
         elif [ "$_c" = "$_t" ]; then
             if _lm_tcp_write "$_k" "$_o" && [ "$(_lm_tcp_read "$_k")" = "$_o" ]; then
                 printf '  tcp_%s：%s -> %s（恢复为原值）\n' "$_k" "$_c" "$_o"
+                _lm_ev "tcp-restored-$_k" "$_c -> $_o"
             else
                 printf '  tcp_%s：写回原值失败，当前仍是 %s\n' "$_k" "$_c"
+                _lm_ev "tcp-failed-$_k" "$_c"
             fi
         else
             printf '  tcp_%s：当前值 %s 既不是 APM 的设置也不是原值，已被外部修改，没有覆盖\n' "$_k" "$_c"
+            _lm_ev "tcp-external-$_k" "$_c"
         fi
     done
     if _lm_init_ours; then rm -f -- "$(env_path "$LM_INIT")"; fi
     rm -rf -- "$(env_path "$LM_RUN")"
     rm -f -- "$(_lm_conf)" "$(_lm_orig)"
     printf '  OpenRC 服务与设置文件已删除，取证日志 %s 保留\n' "$LM_LOG"
+    _lm_ev service-removed "$LM_LOG"
     return 0
 }
 
