@@ -60,7 +60,7 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 
 升级到新的正式版 把命令里的 `v0.8.4` 换成新版本的 tag 即可 README 的默认命令会随每次正式发布更新 同一 Build 且工作正常时不做任何改动 新版本自检失败会继续使用旧版本 升级 Manager 本身不会重启 Snell 与 sing-box 不会改写任何已有配置与实例
 
-也可以直接在 `apm` 里升级 `Manager 管理` 里选 `检查更新` 只查询 GitHub 上最新的正式 Release 不自动下载 `更新 Manager` 会先确认 回车默认 Yes 需要 root 并复用同一个安装脚本 所以原子切换 自检失败回滚 与 sha256 校验都一样 只更新到正式 Release 的 tag 不会更新到 main 草稿或预发布 不会降级 更新成功后请重新运行 `apm`
+也可以直接在 `apm` 里升级 `Manager 管理` 里选 `检查更新` 只查询 GitHub 上最新的正式 Release 不自动下载 `更新 Manager` 选中即开始 需要 root 并复用同一个安装脚本 所以原子切换 自检失败回滚 与 sha256 校验都一样 只更新到正式 Release 的 tag 不会更新到 main 草稿或预发布 不会降级 更新成功后请重新运行 `apm`
 
 ```sh
 apm manager check-update    # 只检查 有新版本时退出码为 10 非 root 也可以
@@ -85,11 +85,12 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 
 - 主菜单 Snell sing-box 状态与诊断 日志 Manager 管理 数字选择 `0` 返回 主菜单的 `0` 退出 Snell 与 sing-box 是两个独立的 Core 各自直接进入
 - sing-box 页面直接列出全部协议实例 每个实例显示协议 监听端口 运行状态 绑定的 SOCKS5 出口和上游健康 菜单是 管理实例 添加实例 SOCKS5 出口 启停重启 日志 更新 诊断详情 卸载 实例页只管理协议本身 启用禁用 监听端口 密码 TLS server-name UUID 拥塞控制 method 客户端配置 目标访问限制 删除 不再提供修改监听地址 已有实例的监听地址原样保留 命令行仍然可以改 SOCKS5 出口管理集中在一处 管理 SOCKS5 服务器 分配实例出口 把全部实例当前的出口列出来 选一个实例再选服务器或 DIRECT 就完成 健康监控开关 不再需要手动检查配置 修改保存前和启动前都会自动校验 失败时显示原因并保持原配置 客户端连接地址在第一次导出客户端配置时才询问 已保存的地址原样保留 底层监听 socket 等技术信息在 诊断详情 里 启用或禁用协议实例在 sing-box 运行且还有其他启用的实例时会先提示需要重启 sing-box
-- Snell 菜单里的 `客户端信息` 提供 `查看连接信息` 与 `查看 PSK` Manager 菜单提供 查看版本 检查更新 更新 Manager 检查环境 查看帮助
+- Snell 菜单里的 `查看连接信息（含 PSK）` 直接显示地址 端口和 PSK 不再逐层确认 Manager 菜单提供 查看版本 检查更新 更新 Manager 检查环境 查看帮助
 - 界面以中文为主 协议与技术名词保持原名
 - TUI 只是命令行的交互层 校验 保护与事务与命令行完全一致 现有部署只提供只读入口 不显示启动 停止 更新 卸载
 - 密码 密钥 PSK 输入时不回显 无论正常结束 失败还是 Ctrl+C 都会恢复终端 秘密经标准输入交给业务函数 不出现在进程参数里
-- 删除实例 删除 Profile 卸载 批量禁用 以及任何会显示客户端凭据的操作都需要确认 默认是 N
+- 日常操作直接执行 不再逐项确认 启用 禁用 重启 sing-box 安装 AnyTLS Gateway 查看与导出连接信息 (完整信息 sing-box JSON 分享 URL 二维码 Snell PSK) 都是选中即执行 启用或禁用实例会重新加载 sing-box 结果行会写明 其他实例的连接可能短暂中断 实例已经处于目标状态时只告知 不重启 只有不可逆或会中断连接的操作保留确认 停止服务 卸载与彻底卸载 删除实例 线路或 SOCKS5 服务器 清空名单 重新生成密码或证书 开启自动故障切换
+- 菜单数字单键选择 不用再按 Enter 超过 9 项的菜单里 可能是两位数开头的数字 (例如 12 项菜单里的 1) 会等待下一个键或 1 秒 或按 Enter 确认 一次性到达的多个字符 (粘贴) 只取第一个 方向键序列被忽略 单独的 Esc 等同返回 终端缺少 `stty` 或不是交互终端时自动回退为整行输入 `APM_TUI_ONEKEY=0` 可以强制关闭
 - 没有外部依赖 没有常驻进程 进入时不联网 不检查更新 只有在你选择 `查看连接信息` 或 `检查更新` 时才会联网 `NO_COLOR` 与 `TERM=dumb` 退化为纯文本 终端不是 UTF-8 时状态符号改用 `[RUNNING]` 等文本
 - 不是 root 时只能查看 写操作会提示需要 root
 - 在脚本或管道中运行 `proxy-manager` 不会进入 TUI 仍然输出帮助 所有命令行用法保持不变
@@ -159,6 +160,26 @@ proxy-manager snell access enable [--yes] | disable
 - 组件按需安装 启用前列出并确认 graftcp 是本项目维护的补丁版 固定版本和 SHA256 来自本项目 Release 补丁 许可证与构建脚本见 `third_party/graftcp` unbound 与 tinyproxy 来自 Alpine 官方仓库 卸载 Snell 不会移除这些软件包
 - 当前只验证 x86_64 需要 ptrace 与 root 容器需要 SYS_PTRACE 名单里有域名时还需要创建挂载命名空间的权限
 - SOCKS5 上游自己的回环地址 例如上游就在本机 由上游决定是否放行 Snell 本机的回环服务不会被直连
+
+## 低内存环境保护 (针对 Snell)
+
+管理员主动启用 默认关闭 入口 `apm` 的 `状态与诊断` 里的 `低内存环境保护（针对 Snell）` 命令行 `apm lowmem status | detail | enable | disable | log [N]` 针对在 128 MB 容器里观察到的 Snell 内存故障 (socket 缓冲计入容器内存 OOM 先杀 RSS 最大的 sshd 或 Snell) 设计 不承诺启用后 Snell 一定不会被 OOM 终止 也不承诺 SSH 一定不会被 OOM 终止 资源本身不足时这些保护无法替代更多内存
+
+```sh
+apm lowmem status                        # 实时检测结果 各项是否生效
+apm lowmem enable                        # 一键启用 只调整需要调整的项目
+apm lowmem enable --snell-sacrifice      # 同时启用高级选项 见下
+apm lowmem disable                       # 恢复原值 删除服务与设置文件
+```
+
+- 三个独立模块 各自检测 各自可能不适用 状态永远从系统实时读取 整体显示 已启用 部分启用 或 未启用
+- TCP 缓冲 单个连接的缓冲上限之和 (`tcp_rmem` 上限加 `tcp_wmem` 上限) 超过内存上限的四分之一时 把各字段降到内核默认值与当前值中较小者 只降不升 配置已经合理就不改 不查表 任意内存上限走同一套判断 管理员已经在 `/etc/sysctl.conf` 或 `sysctl.d` 里设置同名参数时跳过该参数 缓冲上限决定长延迟链路上的单连接吞吐上限 内核默认值在回环加延迟的实测里 RTT 50 ms 约 630 Mbit/s RTT 120 ms 约 275 Mbit/s (不是真实公网性能) 链路带宽更高且延迟更大时单连接会受限 请按需取舍
+- TCP 缓冲是网络命名空间级配置 同一个网络命名空间里的所有服务都受影响 包括 sing-box 与 AnyTLS Gateway 不只是 Snell 只有进程在子用户命名空间里并且 sysctl 可写 才能确认该命名空间归本容器所有 否则显示 是否与宿主机共享 未确认 并且不自动修改 TCP 参数 独占该命名空间的管理员可以用 `--assume-own-netns` 明确指定 设置文件会记录这是用户声明
+- SSH 保护 把 sshd 相关进程的 `oom_score_adj` 降到 -500 内核要求初始用户命名空间的 CAP_SYS_RESOURCE 无特权容器通常没有 此时明确显示不支持 不尝试 所在 cgroup 的 `memory.oom.group` 为 1 时整组一起终止 也不适用
+- 内存取证 一个只用 sh 内建的常驻小进程 oom_kill 计数变化时记录内存组成 (anon file kernel sock slab) 与进程表 (只有进程名和 RSS 不含命令行 地址 流量与凭据) 日志 `/var/log/apm-lowmem.log` 上限约 1 MiB 需要 cgroup v2 实测 BusyBox ash 下稳态不 fork RSS 约 1.2 MB
+- 高级选项 Snell 优先被 OOM 终止 (`--snell-sacrifice`) 默认不启用 把 Snell 服务的 supervise-daemon 的后代进程的 `oom_score_adj` 提高到 300 让内存吃紧时先终止 Snell 而不是 sshd 代价是 Snell 更容易被终止 即使它不是原因 300 只是实验取样值 不是各环境的最佳值 不触碰 supervise-daemon sshd sing-box AnyTLS Gateway 与其他进程 不重启 Snell
+- 修改范围 当前网络命名空间的 `tcp_rmem` `tcp_wmem` sshd 进程的 `oom_score_adj` 一个 OpenRC 服务 `apm-lowmem` 开机时重新应用 TCP 设置 原值保存在 `/var/lib/alpine-proxy-manager/lowmem.orig` 关闭时只在当前值仍等于 APM 设置值时写回 被别人改过的不覆盖
+- 卸载 Manager 不会自动恢复这些设置 先执行 `apm lowmem disable`
 
 ## AnyTLS Gateway
 

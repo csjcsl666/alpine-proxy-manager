@@ -72,7 +72,9 @@ usage() {
   sing-box export ID show [--secret] | secret | sing-box [--redacted] [--embed-cert] | url | qr   客户端导出 (show --secret 连接信息加完整凭据 secret url qr 包含凭据)
   snell endpoint [show] | set 主机 端口 | clear   Snell 客户端连接地址
   snell export info [--secret] | show [--secret] | secret   Snell 客户端信息 info 按需查询公网 IP 不需要先设置客户端连接地址 show 使用已设置的客户端连接地址 secret 显示 PSK --secret 在连接信息里直接给出 PSK
-  lowmem [status | detail | enable | disable | log [N]]   低内存环境保护 (默认关闭): 自动检测内存上限 TCP 缓冲 sshd 与 cgroup, 只调整需要调整的项目, 原值可恢复
+  lowmem status | detail | log [N]   低内存环境保护 (针对 Snell, 默认关闭) 实时检测结果与各项是否生效 取证记录
+  lowmem enable [--assume-own-netns] [--snell-sacrifice]   自动检测内存上限 TCP 缓冲 sshd 与 cgroup 只调整需要调整的项目 --assume-own-netns 声明独占网络命名空间 --snell-sacrifice 高级选项 OOM 时先终止 Snell
+  lowmem disable   恢复原值 删除服务与设置文件
   manager check-update   检查 GitHub 最新正式 Release 只查询 不下载 非 root 也可以
   manager update         更新 Manager 本身 只用最新正式 Release 复用安装器 需要 root 不重启 Snell 与 sing-box
   tui           统一 TUI 管理界面 (交互式终端中直接运行 proxy-manager 也会进入)
