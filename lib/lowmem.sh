@@ -592,7 +592,7 @@ lowmem_enable() {
         LM_P_WMEM_T=$(_lm_cget tcp_wmem)
         LM_P_TCP_NOTE="已启用，沿用保存的设置并重新确认"
     fi
-    printf '低内存环境保护：检测结果\n'
+    printf '网络与进程保护（低内存环境）：检测结果\n'
     printf '  内存上限：%s（%s）\n' "$(_lm_mib "$LM_LIMIT")" "$(_lm_limit_src_text)"
     printf '  作用范围：%s\n' "$LM_NS_TEXT"
     printf '  TCP 缓冲：%s\n' "$LM_P_TCP_NOTE"
@@ -742,7 +742,7 @@ lowmem_disable() {
     local _k _o _t _c _pid _adj _comm _f _orig
     _lm_begin || return $?
     if ! lm_enabled && [ ! -f "$(_lm_orig)" ] && ! _lm_init_ours; then
-        printf '低内存环境保护没有启用，没有需要恢复的内容\n'
+        printf '网络与进程保护（低内存环境）没有启用，没有需要恢复的内容\n'
         return 0
     fi
     # 先停服务: 常驻进程不再维护 sshd 的分数
@@ -850,7 +850,7 @@ lowmem_status() {
     _tcp=$(_lm_cget tcp); _ssh=$(_lm_cget ssh); _for=$(_lm_cget forensics)
     _total=0
     _ok=0
-    printf '低内存环境保护（针对 Snell 的低内存故障）\n'
+    printf '网络与进程保护（低内存环境，针对 Snell 的低内存故障）\n'
     printf '  适用范围：针对 HK-Hytron2 上观察到的 Snell 内存故障设计；TCP 缓冲属于当前网络命名空间，同一命名空间里的所有服务（包括 sing-box 与 AnyTLS Gateway）都会受到影响，不只是 Snell；APM 不修改 sing-box 与 AnyTLS Gateway 进程的任何优先级\n'
     printf '  内存上限：%s（%s）\n' "$(_lm_mib "$LM_LIMIT")" "$(_lm_limit_src_text)"
     printf '  作用范围：%s\n' "$LM_NS_TEXT"

@@ -340,38 +340,52 @@ assert_eq "更低的分数不被抬高" -700 "$(cat "$A/proc/901/oom_score_adj")
 assert_eq "非 sshd 进程不动" 0 "$(cat "$A/proc/902/oom_score_adj")"
 assert_contains "登记原值供恢复" "$(cat "$A/run/apm-lowmem/ssh.adj")" "900 0 sshd-session"
 
+# 受管的 Snell (停止状态): 入口在 Snell 管理 的 网络功能 里, 没有受管 Snell 时 TUI 不显示
+mk_msnell() {
+    mkdir -p "$1/usr/local/bin"
+    mk_elf_stub "$1/usr/local/bin/snell-server" "snell-server" || return 1
+    mkdir -p "$1/var/lib/alpine-proxy-manager/cores"
+    printf 'core=snell\nmanaged=true\n' > "$1/var/lib/alpine-proxy-manager/cores/snell.meta"
+}
+
 # ============ 5. TUI 与状态总览 ============
 printf '== TUI 入口与状态总览\n'
 A="$T_TMP/tui"
 mk_lm "$A" $((128 * MIB)) "$HYT_R" "$HYT_W"
 mk_sshd "$A" 524 0 sshd
+mk_msnell "$A"
 out=$(APM_SYSROOT="$A" APM_EUID=0 APM_HOME="$T_ROOT" "$PM" status 2>&1)
-assert_contains "状态总览有低内存保护一行" "$out" "低内存保护：未启用"
+assert_contains "状态总览有网络与进程保护一行" "$out" "网络与进程保护：未启用"
 run_tui() { printf '%b' "$1" | ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; APM_TUI_ANSI=0; export APM_SYSROOT APM_EUID APM_HOME APM_TUI_ANSI; tui_run ) 2>&1; }
-out=$(run_tui '4\n3\n0\n0\n0\n')
-assert_contains "菜单入口在状态与诊断里 并标明针对 Snell" "$out" "3. 低内存环境保护（针对 Snell）"
+out=$(run_tui '1\n4\n2\n0\n0\n0\n')
+assert_contains "入口在 Snell 管理的网络功能里" "$out" "2. 网络与进程保护（低内存环境）"
+assert_contains "页面标题" "$out" "Snell · 网络与进程保护（低内存环境）"
+out_st=$(run_tui '4\n0\n0\n')
+assert_not_contains "全局状态与诊断不再有管理入口" "$out_st" "网络与进程保护"
+assert_not_contains "全局状态与诊断不再有旧入口" "$out_st" "低内存环境保护"
+assert_contains "状态与诊断仍有状态总览与 doctor" "$out_st" "2. doctor 环境检查"
 assert_contains "页面说明 TCP 缓冲影响整个网络命名空间" "$out" "同一命名空间里的所有服务"
 assert_contains "页面显示实时检测" "$out" "内存上限：128 MiB"
-assert_contains "页面显示启用项" "$out" "1. 启用低内存保护"
+assert_contains "页面显示启用项" "$out" "1. 启用保护"
 assert_contains "高级选项单独成项并写明代价" "$out" "2. 启用，并加上高级选项：Snell 优先被 OOM 终止（代价：Snell 更容易被终止）"
 assert_contains "页面显示详情项" "$out" "3. 查看保护详情"
 assert_not_contains "未启用时没有恢复项" "$out" "恢复原始设置"
-out=$(run_tui '4\n3\n1\n0\n0\n0\n')
+out=$(run_tui '1\n4\n2\n1\n0\n0\n0\n')
 assert_not_contains "启用不需要确认" "$out" "继续？"
 assert_contains "启用后直接显示结果" "$out" "保护状态：已启用"
 assert_eq "TUI 启用后 tcp 生效" "4096 131072 6291456" "$(tcp rmem)"
 assert_not_contains "默认启用不提高 Snell 分数" "$(cat "$A/etc/alpine-proxy-manager/lowmem.conf")" "snell_sac=on"
-out=$(run_tui '4\n3\n0\n0\n0\n')
+out=$(run_tui '1\n4\n2\n0\n0\n0\n')
 assert_contains "启用后显示详情项" "$out" "1. 查看保护详情"
 assert_contains "启用后显示取证记录项" "$out" "2. 查看取证记录"
 assert_contains "启用后显示高级选项追加项" "$out" "3. 追加高级选项：Snell 优先被 OOM 终止"
 assert_contains "启用后显示恢复项" "$out" "4. 恢复原始设置"
-out=$(run_tui '4\n3\n1\n0\n0\n0\n0\n')
+out=$(run_tui '1\n4\n2\n1\n0\n0\n0\n0\n')
 assert_contains "详情页可达" "$out" "详情"
 assert_contains "详情页含原值目标当前" "$out" "原值 [4096 1048576 128516096]"
-out=$(run_tui '4\n3\n2\n0\n0\n0\n0\n')
+out=$(run_tui '1\n4\n2\n2\n0\n0\n0\n0\n')
 assert_contains "取证记录页可达" "$out" "取证记录"
-out=$(run_tui '4\n3\n4\n0\n0\n0\n')
+out=$(run_tui '1\n4\n2\n4\n0\n0\n0\n')
 assert_not_contains "恢复不需要确认" "$out" "继续？"
 assert_eq "TUI 恢复后 tcp 原值" "4096 1048576 128516096" "$(tcp rmem)"
 assert_contains "状态回到未启用" "$(lm status)" "保护状态：未启用"
@@ -502,6 +516,7 @@ if command -v tmux >/dev/null 2>&1; then
     printf '== 真实终端: 低内存保护菜单\n'
     A="$T_TMP/pty"; mk_lm "$A" $((128 * MIB)) "$HYT_R" "$HYT_W"
     mk_sshd "$A" 524 0 sshd
+    mk_msnell "$A"
     mkdir -p "$A/usr/bin"
     ln -sf "$(command -v stty)" "$A/usr/bin/stty"
     DRV=$T_TMP/pty-drv.sh
@@ -526,21 +541,21 @@ EOD
         tmux capture-pane -p -S -200 -t lmpty$$
         tmux kill-session -t lmpty$$ 2>/dev/null
     }
-    scr=$(ptylm 100 50 4 3)
-    assert_contains "真实终端: 两键进入低内存保护页" "$scr" "低内存环境保护 · 针对 Snell"
+    scr=$(ptylm 100 50 1 4 2)
+    assert_contains "真实终端: 三键进入保护页" "$scr" "Snell · 网络与进程保护（低内存环境）"
     assert_contains "真实终端: 页面有实时检测" "$scr" "内存上限：128 MiB"
-    scr=$(ptylm 100 50 4 3 1)
-    assert_contains "真实终端: 三键启用并直接看到结果" "$scr" "保护状态：已启用（3/3 项生效）"
+    scr=$(ptylm 100 50 1 4 2 1)
+    assert_contains "真实终端: 四键启用并直接看到结果" "$scr" "保护状态：已启用（3/3 项生效）"
     assert_eq "真实终端: 启用实际改了 tcp_rmem" "4096 131072 6291456" "$(tcp rmem)"
     assert_eq "真实终端: 启用实际改了 sshd 分数" -500 "$(cat "$A/proc/524/oom_score_adj")"
-    scr=$(ptylm 50 50 4 3 1)
+    scr=$(ptylm 50 50 1 4 2 1)
     assert_contains "真实终端 50 列: 同样可用" "$scr" "保护状态：已启用"
-    scr=$(ptylm 100 50 4 3 4)
+    scr=$(ptylm 100 50 1 4 2 4 Enter)
     assert_contains "真实终端: 恢复后回到未启用页" "$scr" "保护状态：未启用"
     assert_eq "真实终端: 恢复实际写回 tcp_rmem" "4096 1048576 128516096" "$(tcp rmem)"
     assert_eq "真实终端: 恢复实际写回 sshd 分数" 0 "$(cat "$A/proc/524/oom_score_adj")"
-    scr=$(ptylm 100 50 4 3 Escape)
-    assert_contains "真实终端: Esc 返回上一级" "$scr" "3. 低内存环境保护"
+    scr=$(ptylm 100 50 1 4 2 Escape)
+    assert_contains "真实终端: Esc 返回上一级 (网络功能菜单)" "$scr" "1. Snell 网络功能（SOCKS5 出口、目标访问限制）"
 else
     t_skip "没有 tmux, 低内存保护的真实终端测试跳过"
 fi

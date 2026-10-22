@@ -90,7 +90,7 @@ sh -c "$(wget -qO- https://raw.githubusercontent.com/csjcsl666/alpine-proxy-mana
 - TUI 只是命令行的交互层 校验 保护与事务与命令行完全一致 现有部署只提供只读入口 不显示启动 停止 更新 卸载
 - 密码 密钥 PSK 输入时不回显 无论正常结束 失败还是 Ctrl+C 都会恢复终端 秘密经标准输入交给业务函数 不出现在进程参数里
 - 日常操作直接执行 不再逐项确认 启用 禁用 重启 sing-box 安装 AnyTLS Gateway 查看与导出连接信息 (完整信息 sing-box JSON 分享 URL 二维码 Snell PSK) 都是选中即执行 启用或禁用实例会重新加载 sing-box 结果行会写明 其他实例的连接可能短暂中断 实例已经处于目标状态时只告知 不重启 只有不可逆或会中断连接的操作保留确认 停止服务 卸载与彻底卸载 删除实例 线路或 SOCKS5 服务器 清空名单 重新生成密码或证书 开启自动故障切换
-- 菜单数字单键选择 不用再按 Enter 超过 9 项的菜单里 可能是两位数开头的数字 (例如 12 项菜单里的 1) 会等待下一个键或 1 秒 或按 Enter 确认 一次性到达的多个字符 (粘贴) 只取第一个 方向键序列被忽略 单独的 Esc 等同返回 终端缺少 `stty` 或不是交互终端时自动回退为整行输入 `APM_TUI_ONEKEY=0` 可以强制关闭
+- 菜单数字单键选择 不用再按 Enter 超过 9 项的菜单里 可能是两位数开头的数字 (例如 12 项菜单里的 1) 会等待下一个键或 1 秒 或按 Enter 确认 一次性到达的多个字符 (粘贴) 只取第一个 方向键序列被忽略 单独的 Esc 等同返回 终端缺少 `stty` 或不是交互终端时自动回退为整行输入 `APM_TUI_ONEKEY=0` 可以强制关闭 需要阅读的页面 (状态总览 doctor 详细信息 日志 连接信息 安装与更新结果 以及所有失败提示) 输出完整内容后停在 `按回车返回...` 按 Enter 或 Esc 才返回上级菜单 暂停期间按其他键或方向键不会返回 非交互输入不会等待
 - 没有外部依赖 没有常驻进程 进入时不联网 不检查更新 只有在你选择 `查看连接信息` 或 `检查更新` 时才会联网 `NO_COLOR` 与 `TERM=dumb` 退化为纯文本 终端不是 UTF-8 时状态符号改用 `[RUNNING]` 等文本
 - 不是 root 时只能查看 写操作会提示需要 root
 - 在脚本或管道中运行 `proxy-manager` 不会进入 TUI 仍然输出帮助 所有命令行用法保持不变
@@ -161,9 +161,9 @@ proxy-manager snell access enable [--yes] | disable
 - 当前只验证 x86_64 需要 ptrace 与 root 容器需要 SYS_PTRACE 名单里有域名时还需要创建挂载命名空间的权限
 - SOCKS5 上游自己的回环地址 例如上游就在本机 由上游决定是否放行 Snell 本机的回环服务不会被直连
 
-## 低内存环境保护 (针对 Snell)
+## 网络与进程保护 (低内存环境, 针对 Snell)
 
-管理员主动启用 默认关闭 入口 `apm` 的 `状态与诊断` 里的 `低内存环境保护（针对 Snell）` 命令行 `apm lowmem status | detail | enable | disable | log [N]` 针对在 128 MB 容器里观察到的 Snell 内存故障 (socket 缓冲计入容器内存 OOM 先杀 RSS 最大的 sshd 或 Snell) 设计 不承诺启用后 Snell 一定不会被 OOM 终止 也不承诺 SSH 一定不会被 OOM 终止 资源本身不足时这些保护无法替代更多内存
+管理员主动启用 默认关闭 入口 `apm` 的 `Snell` 里的 `网络功能` 下的 `网络与进程保护（低内存环境）` 它调整 TCP 缓冲 sshd 的 OOM 优先级并记录内存取证 不是内存清理或回收工具 命令行 `apm lowmem status | detail | enable | disable | log [N]` 针对在 128 MB 容器里观察到的 Snell 内存故障 (socket 缓冲计入容器内存 OOM 先杀 RSS 最大的 sshd 或 Snell) 设计 不承诺启用后 Snell 一定不会被 OOM 终止 也不承诺 SSH 一定不会被 OOM 终止 资源本身不足时这些保护无法替代更多内存
 
 ```sh
 apm lowmem status                        # 实时检测结果 各项是否生效

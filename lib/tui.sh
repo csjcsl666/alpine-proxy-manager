@@ -321,7 +321,86 @@ tui_confirm() { # 说明文字, 回车默认 Yes
     done
 }
 
-# 显示完内容之后不再要求按 Enter: 只标记下一次不清屏, 管理员想看多久都可以, 想继续直接选菜单
+# ---- 结果与阅读 ----
+# 三种不同的事, 不混用:
+#   _tui_pause  只标记下一屏不清屏, 刚才的内容留在上面, 下一个菜单接在它下面; 不等待输入. 用于一两行就看完的操作反馈 (已启用 已取消)
+#   _tui_wait   阅读暂停: 提示按回车返回并真正等待, 之后下一屏清屏重绘. 用于需要读完的内容 (报告 状态 日志 连接信息 错误)
+#   清屏        _tui_clear 只负责画面, 不代替阅读暂停
+# 零确认 (D141) 取消的是执行前的确认, 不取消结果的阅读: 菜单选择 单键 Esc 不变, 只在有东西要读时才停
+
+# 阅读暂停是否生效: 交互终端才等待, 管道与脚本驱动 (测试 CI) 退回只标记不清屏, 不会吞掉后面的输入
+# APM_TUI_PAUSE=1 强制开启 (测试用管道驱动时验证阅读暂停), 0 强制关闭
+_tui_wait_on() {
+    case ${APM_TUI_PAUSE:-auto} in
+        1) return 0 ;;
+        0) return 1 ;;
+    esac
+    [ -t 0 ] && [ -t 1 ]
+}
+
+# 丢弃停顿之前已经到达的输入 (粘贴的残余 误按的键), 否则阅读暂停会被旧输入立刻跳过
+_tui_wait_flush() {
+    local _st
+    _st=$(_snell_run stty -g 2>/dev/null) || return 0
+    [ -n "$_st" ] || return 0
+    _snell_run stty -icanon -echo min 0 time 0 2>/dev/null
+    dd bs=256 count=1 >/dev/null 2>&1
+    _snell_run stty "$_st" 2>/dev/null
+}
+
+# 等待回车. 单键终端里只有 Enter Esc Ctrl-D 结束, 其他键与方向键忽略 (不回显, 不累积); 其余终端读一整行. EOF 不阻塞, 置 TUI_EOF 后返回
+_tui_wait_enter() {
+    local _st _k _rc
+    if [ "${TUI_ONEKEY:-0}" != 1 ]; then
+        IFS= read -r _k || TUI_EOF=1
+        return 0
+    fi
+    _st=$(_snell_run stty -g 2>/dev/null) || _st=
+    if [ -z "$_st" ]; then
+        IFS= read -r _k || TUI_EOF=1
+        return 0
+    fi
+    TUI_STTY_SAVED=$_st
+    _snell_run stty -icanon -echo min 1 time 0 2>/dev/null
+    while :; do
+        _k=
+        # shellcheck disable=SC3045
+        IFS= read -r -n 1 _k
+        _rc=$?
+        if [ "$_rc" -ne 0 ]; then TUI_EOF=1; break; fi
+        [ -n "$_k" ] || break
+        case $_k in
+            "$(printf '\033')")
+                _snell_run stty min 0 time 2 2>/dev/null
+                _tui_getbyte
+                _snell_run stty min 1 time 0 2>/dev/null
+                if [ -n "$TUI_K" ]; then _tui_key_drain; continue; fi
+                break
+                ;;
+            "$(printf '\004')") break ;;
+        esac
+    done
+    _snell_run stty "$_st" 2>/dev/null
+    TUI_STTY_SAVED=
+    return 0
+}
+
+_tui_wait() {
+    if ! _tui_wait_on; then TUI_KEEP=1; return 0; fi
+    _tui_wait_flush
+    printf '\n按回车返回...'
+    _tui_wait_enter
+    printf '\n'
+    TUI_KEEP=0
+    return 0
+}
+
+# 刚才的操作没有完成时, 说明在上面的输出里, 这里补一句并让管理员读完
+_tui_fail_note() {
+    printf '\n操作没有完成，原因见上面的提示\n'
+}
+
+# 显示完内容之后不再等待: 只标记下一次不清屏, 内容留在屏幕上
 _tui_pause() { TUI_KEEP=1; }
 
 # ---- 主菜单内存显示与空闲刷新 ----
@@ -539,18 +618,26 @@ _tui_do_secret() { # 秘密 命令...
     TUI_RC=$?
 }
 
-# 命令之后统一收尾: 失败给出提示, 然后等待
+# 操作之后的收尾. 失败一定要读到, 所以等待; 成功只有一两行反馈的操作留在屏幕上 (下一屏不清屏), 不打断连续操作
 _tui_done() {
     if [ "$TUI_RC" -ne 0 ]; then
-        printf '\n操作没有完成，原因见上面的提示\n'
+        _tui_fail_note
+        _tui_wait
+    else
+        _tui_pause
     fi
-    _tui_pause
+}
+
+# 报告页的收尾: 内容就是用户要看的东西 (状态 日志 连接信息 安装与更新结果), 无论成功失败都读完再返回
+_tui_page() {
+    if [ "$TUI_RC" -ne 0 ]; then _tui_fail_note; fi
+    _tui_wait
 }
 
 _tui_need_root() {
     if env_is_root; then return 0; fi
     printf '此操作需要 root, TUI 不会自动 sudo\n'
-    _tui_pause
+    _tui_wait
     return 1
 }
 
@@ -600,7 +687,7 @@ _tui_log() { # key
     local _n
     _n=30
     case $1 in snell) _tui_do snell_cli log "$_n" ;; anytlsgw) _tui_do agw_cli log "$_n" ;; *) _tui_do singbox_cli log "$_n" ;; esac
-    _tui_done
+    _tui_page
 }
 
 tui_log_menu() {
@@ -661,23 +748,21 @@ tui_status_menu() {
         _tui_clear
         _tui_header "状态与诊断"
         tui_choose "overview|状态总览（服务、功能、资源）
-doctor|doctor 环境检查
-lowmem|低内存环境保护（针对 Snell）" "返回"
+doctor|doctor 环境检查" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            overview) _tui_do _tui_overview; _tui_done ;;
-            doctor) _tui_do report_doctor; _tui_done ;;
-            lowmem) tui_lowmem_menu ;;
+            overview) _tui_do _tui_overview; _tui_page ;;
+            doctor) _tui_do report_doctor; _tui_page ;;
         esac
     done
 }
 
-# 低内存环境保护: 入口显示实时检测到的事实，启用与恢复直接执行（预检在启用时完成，不能处理的项目会明确说明）
+# 网络与进程保护（低内存环境） (lowmem): 入口在 Snell 管理的网络功能里, 显示实时检测到的事实，启用与恢复直接执行（预检在启用时完成，不能处理的项目会明确说明）
 tui_lowmem_menu() {
     local _items
     while :; do
         _tui_clear
-        _tui_header "低内存环境保护 · 针对 Snell"
+        _tui_header "Snell · 网络与进程保护（低内存环境）"
         _tui_do lowmem_status
         printf '\n'
         if lm_enabled; then
@@ -688,18 +773,18 @@ sac|追加高级选项：Snell 优先被 OOM 终止（代价：Snell 更容易�
             _items="$_items
 disable|恢复原始设置"
         else
-            _items="enable|启用低内存保护（自动检测，只调整需要调整的项目）
+            _items="enable|启用保护（自动检测，只调整需要调整的项目）
 sac|启用，并加上高级选项：Snell 优先被 OOM 终止（代价：Snell 更容易被终止）
 detail|查看保护详情"
         fi
         tui_choose "$_items" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            enable) _tui_need_root || continue; _tui_clear; _tui_header "低内存环境保护 · 启用"; _tui_do lowmem_enable; _tui_done ;;
-            sac) _tui_need_root || continue; _tui_clear; _tui_header "低内存环境保护 · 启用（含 Snell 优先牺牲）"; _tui_do lowmem_enable --snell-sacrifice; _tui_done ;;
-            disable) _tui_need_root || continue; _tui_clear; _tui_header "低内存环境保护 · 恢复"; _tui_do lowmem_disable; _tui_done ;;
-            detail) _tui_clear; _tui_header "低内存环境保护 · 详情"; _tui_do lowmem_detail; _tui_done ;;
-            log) _tui_clear; _tui_header "低内存环境保护 · 取证记录"; _tui_do lowmem_log 30; _tui_done ;;
+            enable) _tui_need_root || continue; _tui_clear; _tui_header "网络与进程保护（低内存环境） · 启用"; _tui_do lowmem_enable; _tui_page ;;
+            sac) _tui_need_root || continue; _tui_clear; _tui_header "网络与进程保护（低内存环境） · 启用（含 Snell 优先牺牲）"; _tui_do lowmem_enable --snell-sacrifice; _tui_page ;;
+            disable) _tui_need_root || continue; _tui_clear; _tui_header "网络与进程保护（低内存环境） · 恢复"; _tui_do lowmem_disable; _tui_page ;;
+            detail) _tui_clear; _tui_header "网络与进程保护（低内存环境） · 详情"; _tui_do lowmem_detail; _tui_page ;;
+            log) _tui_clear; _tui_header "网络与进程保护（低内存环境） · 取证记录"; _tui_do lowmem_log 30; _tui_page ;;
         esac
     done
 }
@@ -734,7 +819,7 @@ tui_manager_check() {
         tui_choose "up|更新到 $TUI_MGR_VER" "返回"
         [ "$TUI_KEY" != up ] || _tui_manager_confirm_update "$TUI_MGR_VER"
     else
-        _tui_pause
+        _tui_wait
     fi
 }
 
@@ -747,7 +832,7 @@ tui_manager_update() {
         printf '\n'
         _tui_manager_confirm_update "$TUI_MGR_VER"
     else
-        _tui_pause
+        _tui_wait
     fi
 }
 
@@ -765,7 +850,7 @@ help|查看帮助" "返回"
             update) tui_manager_update ;;
             help)
                 if command -v usage >/dev/null 2>&1; then _tui_do usage; else printf '帮助：proxy-manager help\n'; TUI_RC=0; fi
-                _tui_done
+                _tui_page
                 ;;
         esac
         [ "$TUI_EXIT" != 1 ] || return 0
@@ -810,7 +895,7 @@ keep|仅卸载程序：保留配置、证书、实例与 SOCKS Profile，便于�
             _tui_do singbox_cli uninstall
             ;;
     esac
-    _tui_done
+    _tui_page
 }
 
 _tui_core_uninstall() { # key
@@ -827,7 +912,7 @@ purge|完全卸载（同时删除配置、日志与证书，不可恢复）" "�
             _tui_do "$_cli" uninstall --purge
             ;;
     esac
-    _tui_done
+    _tui_page
 }
 
 _tui_core_lifecycle() { # key op
@@ -885,7 +970,7 @@ psk|修改 PSK" "返回"
                 ;;
             psk)
                 _tui_need_root || continue
-                tui_read_secret "新的 PSK（留空自动生成）：" || { _tui_pause; continue; }
+                tui_read_secret "新的 PSK（留空自动生成）：" || { _tui_wait; continue; }
                 _pw=$TUI_SECRET
                 TUI_SECRET=
                 if [ -z "$_pw" ]; then
@@ -905,7 +990,7 @@ _tui_snell_install() {
     _tui_need_root || return 0
     tui_ask "端口（留空随机选择）："
     _port=$TUI_IN
-    tui_read_secret "PSK（留空自动生成）：" || { _tui_pause; return 0; }
+    tui_read_secret "PSK（留空自动生成）：" || { _tui_wait; return 0; }
     _pw=$TUI_SECRET
     TUI_SECRET=
     set --
@@ -916,7 +1001,7 @@ _tui_snell_install() {
         _tui_do_secret "$_pw" snell_cli install "$@" --psk-stdin
     fi
     _pw=
-    _tui_done
+    _tui_page
 }
 
 # Snell 的客户端信息: 一步直达, 直接显示完整连接信息 (含 PSK), 不需要先设置客户端连接地址
@@ -959,7 +1044,7 @@ _tui_snn_enable() { # egress|access
     fi
     if [ "$_cur" != none ]; then
         printf '已启用 %s，它与 %s 互斥，两者不能同时启用\n请先在对应菜单里禁用 %s\n' "$(snn_mode_label "$_cur")" "$(snn_mode_label "$1")" "$(snn_mode_label "$_cur")"
-        _tui_pause
+        _tui_wait
         return 0
     fi
     _tui_need_root || return 0
@@ -979,7 +1064,7 @@ _tui_snn_enable() { # egress|access
     fi
     printf '%s\n' "$_txt"
     _tui_do snell_cli "$1" enable --yes
-    _tui_done
+    _tui_page
 }
 
 tui_snell_egress_menu() {
@@ -1000,7 +1085,7 @@ disable|禁用" "返回"
                 _srv=$TUI_SK_HOST
                 _tui_socks_port "上游端口："
                 _port=$TUI_SK_PORT
-                _tui_socks_auth "用户名（留空表示无认证）：" "密码（输入不回显）：" 1 || { _tui_socks_clear; _tui_pause; continue; }
+                _tui_socks_auth "用户名（留空表示无认证）：" "密码（输入不回显）：" 1 || { _tui_socks_clear; _tui_wait; continue; }
                 _user=$TUI_SK_USER
                 _pw=$TUI_SK_PASS
                 _tui_socks_clear
@@ -1075,7 +1160,7 @@ disable|禁用" "返回"
 tui_snell_net_menu() {
     while :; do
         _tui_clear
-        _tui_header "Snell · 网络功能"
+        _tui_header "Snell · SOCKS5 出口与目标访问限制"
         _tui_snn_status
         printf '两个功能互斥，各自可以单独启用与禁用；都关闭时 Snell 使用原来的启动方式，没有任何辅助进程\n\n'
         tui_choose "egress|SOCKS5 出口
@@ -1084,6 +1169,22 @@ access|目标访问限制" "返回"
             back) return 0 ;;
             egress) tui_snell_egress_menu ;;
             access) tui_snell_access_menu ;;
+        esac
+    done
+}
+
+# Snell 的网络相关入口: 网络功能 (SOCKS5 出口 目标访问限制) 与 网络与进程保护 (TCP 缓冲 SSH 的 OOM 优先级 内存取证)
+# 后者只调整网络参数与进程策略, 不是内存清理或回收工具
+tui_snell_netgroup_menu() {
+    while :; do
+        _tui_clear
+        _tui_header "Snell · 网络功能"
+        tui_choose "net|Snell 网络功能（SOCKS5 出口、目标访问限制）
+protect|网络与进程保护（低内存环境）" "返回"
+        case $TUI_KEY in
+            back) return 0 ;;
+            net) tui_snell_net_menu ;;
+            protect) tui_lowmem_menu ;;
         esac
     done
 }
@@ -1139,16 +1240,16 @@ uninstall|卸载"
         case $TUI_KEY in
             back) return 0 ;;
             install) _tui_snell_install ;;
-            info) _tui_do snell_cli info; _tui_done ;;
+            info) _tui_do snell_cli info; _tui_page ;;
             start|stop|restart) _tui_core_lifecycle snell "$TUI_KEY" ;;
             config) tui_snell_config_menu ;;
-            net) tui_snell_net_menu ;;
+            net) tui_snell_netgroup_menu ;;
             log) _tui_log snell ;;
-            client) _tui_do _tui_snell_info; _tui_done ;;
+            client) _tui_do _tui_snell_info; _tui_page ;;
             update)
                 _tui_need_root || continue
                 _tui_do snell_cli update
-                _tui_done
+                _tui_page
                 ;;
             uninstall) _tui_core_uninstall snell ;;
         esac
@@ -1171,7 +1272,7 @@ tui_agw_client_menu() {
         done
         if [ "$_n" = 0 ]; then
             printf '当前没有转发线路，请先在 转发线路管理 里添加\n'
-            _tui_pause
+            _tui_wait
             return 0
         fi
         if [ "$_n" = 1 ]; then
@@ -1212,7 +1313,7 @@ secret|查看 AnyTLS 密码" "返回"
                 _srv=$TUI_SK_HOST
                 _tui_socks_port "SOCKS5 出口端口："
                 _port=$TUI_SK_PORT
-                _tui_socks_auth "SOCKS5 用户名：" "SOCKS5 密码（输入不回显）：" 0 || { _tui_socks_clear; _tui_pause; continue; }
+                _tui_socks_auth "SOCKS5 用户名：" "SOCKS5 密码（输入不回显）：" 0 || { _tui_socks_clear; _tui_wait; continue; }
                 _user=$TUI_SK_USER
                 _pw=$TUI_SK_PASS
                 _tui_socks_clear
@@ -1220,7 +1321,7 @@ secret|查看 AnyTLS 密码" "返回"
                 [ -z "$_lp" ] || set -- "$@" --port "$_lp"
                 _tui_do_secret "$_pw" agw_cli listener add "$@"
                 _pw=
-                _tui_done
+                _tui_page
                 ;;
             delete)
                 _tui_need_root || continue
@@ -1246,7 +1347,7 @@ secret|查看 AnyTLS 密码" "返回"
                 fi
                 _user=$TUI_SK_USER
                 if [ "$TUI_SK_HASPASS" = 0 ]; then
-                    tui_read_secret "新的 SOCKS5 密码（留空保持）：" || { _tui_socks_clear; _tui_pause; continue; }
+                    tui_read_secret "新的 SOCKS5 密码（留空保持）：" || { _tui_socks_clear; _tui_wait; continue; }
                     TUI_SK_PASS=$TUI_SECRET
                     TUI_SECRET=
                 fi
@@ -1270,13 +1371,13 @@ secret|查看 AnyTLS 密码" "返回"
                 [ -n "$TUI_IN" ] || continue
                 tui_confirm "将生成新的 AnyTLS 密码并显示一次，旧密码立即失效" || { _tui_pause; continue; }
                 _tui_do agw_cli listener set "$TUI_IN" --new-password
-                _tui_done
+                _tui_page
                 ;;
             secret)
                 _tui_clear
                 _tui_header "AnyTLS Gateway · 查看 AnyTLS 密码"
                 _tui_do agw_export_secrets
-                _tui_done
+                _tui_page
                 ;;
         esac
     done
@@ -1297,7 +1398,7 @@ import|导入已有证书" "返回"
                 _tui_need_root || continue
                 tui_confirm "将重新生成自签证书，客户端需要更新指纹，服务会重启" || { _tui_pause; continue; }
                 _tui_do agw_cli cert generate
-                _tui_done
+                _tui_page
                 ;;
             import)
                 _tui_need_root || continue
@@ -1307,7 +1408,7 @@ import|导入已有证书" "返回"
                 tui_ask "私钥文件路径："
                 _k=$TUI_IN
                 _tui_do agw_cli cert import --cert-file "$_c" --key-file "$_k"
-                _tui_done
+                _tui_page
                 ;;
         esac
     done
@@ -1369,16 +1470,16 @@ uninstall|卸载"
                     _srv=$TUI_SK_HOST
                     _tui_socks_port "SOCKS5 出口端口："
                     _port=$TUI_SK_PORT
-                    _tui_socks_auth "SOCKS5 用户名：" "SOCKS5 密码（输入不回显）：" 0 || { _tui_socks_clear; _tui_pause; continue; }
+                    _tui_socks_auth "SOCKS5 用户名：" "SOCKS5 密码（输入不回显）：" 0 || { _tui_socks_clear; _tui_wait; continue; }
                     _user=$TUI_SK_USER
                     _pw=$TUI_SK_PASS
                     _tui_socks_clear
                     _tui_do_secret "$_pw" agw_cli install --socks-server "$_srv" --socks-port "$_port" --socks-username "$_user" --socks-password-stdin
                     _pw=
                 fi
-                _tui_done
+                _tui_page
                 ;;
-            info) _tui_do agw_cli info; _tui_done ;;
+            info) _tui_do agw_cli info; _tui_page ;;
             start|stop|restart) _tui_core_lifecycle anytlsgw "$TUI_KEY" ;;
             listener) tui_agw_listener_menu ;;
             cert) tui_agw_cert_menu ;;
@@ -1387,7 +1488,7 @@ uninstall|卸载"
             update)
                 _tui_need_root || continue
                 _tui_do agw_cli update
-                _tui_done
+                _tui_page
                 ;;
             uninstall) _tui_core_uninstall anytlsgw ;;
         esac
@@ -1555,7 +1656,7 @@ uninstall|卸载"
         case $TUI_KEY in
             back) return 0 ;;
             install) _tui_singbox_install ;;
-            info) _tui_do singbox_cli info; _tui_done ;;
+            info) _tui_do singbox_cli info; _tui_page ;;
             inst:*) tui_instance_menu "${TUI_KEY#inst:}" ;;
             add) _tui_add_menu ;;
             socks) tui_socks_menu ;;
@@ -1564,7 +1665,7 @@ uninstall|卸载"
             update)
                 _tui_need_root || continue
                 _tui_do singbox_cli update
-                _tui_done
+                _tui_page
                 ;;
             uninstall) _tui_singbox_uninstall ;;
         esac
@@ -1574,7 +1675,7 @@ uninstall|卸载"
 _tui_singbox_install() {
     _tui_need_root || return 0
     _tui_do singbox_cli install
-    _tui_done
+    _tui_page
 }
 
 _tui_sb_managed() {
@@ -1585,7 +1686,7 @@ _tui_sb_managed() {
         external) printf 'sing-box 是现有部署，未接管，本项目不会修改它\n' ;;
         *) printf 'sing-box 状态未确认，拒绝写操作\n' ;;
     esac
-    _tui_pause
+    _tui_wait
     return 1
 }
 
@@ -1613,7 +1714,7 @@ _tui_add_instance() { # 协议
         tui_ask "method（留空使用默认 $SB_SS_DEFAULT_METHOD）："
         [ -z "$TUI_IN" ] || set -- "$@" --method "$TUI_IN"
     fi
-    tui_read_secret "密码或密钥（留空自动生成）：" || { _tui_pause; return 0; }
+    tui_read_secret "密码或密钥（留空自动生成）：" || { _tui_wait; return 0; }
     _pw=$TUI_SECRET
     TUI_SECRET=
     if [ -z "$_pw" ]; then
@@ -1622,7 +1723,7 @@ _tui_add_instance() { # 协议
         _tui_do_secret "$_pw" singbox_cli add "$_t" "$@" --password-stdin
     fi
     _pw=
-    _tui_done
+    _tui_page
 }
 
 # ---- 实例页 ----
@@ -1674,11 +1775,11 @@ _tui_inst_edit() { # ID KEY
             _tui_need_root || return 0
             tui_ask "新的 UUID（留空自动生成）："
             if [ -z "$TUI_IN" ]; then _tui_do singbox_cli set "$1" uuid --generate; else _tui_do singbox_cli set "$1" uuid "$TUI_IN"; fi
-            _tui_done
+            _tui_page
             ;;
         password)
             _tui_need_root || return 0
-            tui_read_secret "新的密码（留空自动生成）：" || { _tui_pause; return 0; }
+            tui_read_secret "新的密码（留空自动生成）：" || { _tui_wait; return 0; }
             _pw=$TUI_SECRET
             TUI_SECRET=
             if [ -z "$_pw" ]; then
@@ -1687,14 +1788,14 @@ _tui_inst_edit() { # ID KEY
                 _tui_do_secret "$_pw" singbox_cli set "$1" password --stdin
             fi
             _pw=
-            _tui_done
+            _tui_page
             ;;
         method)
             _tui_need_root || return 0
             tui_ask "method（$SB_SS_METHODS，留空取消）："
             _m=$TUI_IN
             [ -n "$_m" ] || return 0
-            tui_read_secret "该 method 的密钥（留空自动生成）：" || { _tui_pause; return 0; }
+            tui_read_secret "该 method 的密钥（留空自动生成）：" || { _tui_wait; return 0; }
             _pw=$TUI_SECRET
             TUI_SECRET=
             if [ -z "$_pw" ]; then
@@ -1703,7 +1804,7 @@ _tui_inst_edit() { # ID KEY
                 _tui_do_secret "$_pw" singbox_cli set "$1" method "$_m" --stdin
             fi
             _pw=
-            _tui_done
+            _tui_page
             ;;
     esac
 }
@@ -1780,7 +1881,7 @@ delete|删除允许目标
 clear|清空允许目标" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            show) _tui_do singbox_cli access "$1" show; _tui_done ;;
+            show) _tui_do singbox_cli access "$1" show; _tui_page ;;
             unrestricted|allowlist|clear)
                 _tui_need_root || continue
                 _tui_sb_managed || continue
@@ -1817,7 +1918,7 @@ _tui_socks_add() {
     _port=$TUI_SK_PORT
     tui_ask "Profile 名称（留空自动编号）："
     _name=$TUI_IN
-    _tui_socks_auth "用户名（留空表示无认证）：" "密码（输入不回显）：" 1 || { _tui_socks_clear; _tui_pause; return 0; }
+    _tui_socks_auth "用户名（留空表示无认证）：" "密码（输入不回显）：" 1 || { _tui_socks_clear; _tui_wait; return 0; }
     _user=$TUI_SK_USER
     _pw=$TUI_SK_PASS
     _tui_socks_clear
@@ -1828,7 +1929,7 @@ _tui_socks_add() {
     else
         if [ -z "$_pw" ]; then
             printf '密码不能为空\n'
-            _tui_pause
+            _tui_wait
             return 0
         fi
         _tui_do_secret "$_pw" singbox_cli socks add "$@" --username "$_user" --password-stdin
@@ -1904,10 +2005,10 @@ delete|删除"
                 tui_ask "用户名（留空取消）："
                 [ -n "$TUI_IN" ] || continue
                 _u=$TUI_IN
-                tui_read_secret "密码（输入不回显）：" || { _tui_pause; continue; }
+                tui_read_secret "密码（输入不回显）：" || { _tui_wait; continue; }
                 _pw=$TUI_SECRET
                 TUI_SECRET=
-                [ -n "$_pw" ] || { printf '密码不能为空\n'; _tui_pause; continue; }
+                [ -n "$_pw" ] || { printf '密码不能为空\n'; _tui_wait; continue; }
                 _tui_do_secret "$_pw" singbox_cli socks set "$1" credential "$_u" --password-stdin
                 _pw=
                 _tui_done
@@ -1922,7 +2023,7 @@ delete|删除"
                 _u=$(_sb_socks_users "$1" "$(state_instances_dir)")
                 if [ -n "$_u" ]; then
                     printf '%s 仍被这些实例使用：%s\n请先在 分配实例出口 里把它们改成其他服务器或 DIRECT，不会自动改成 DIRECT\n' "$1" "$_u"
-                    _tui_pause
+                    _tui_wait
                     continue
                 fi
                 tui_confirm "即将删除 SOCKS5 服务器 $1" || { _tui_pause; continue; }
@@ -2064,7 +2165,7 @@ tui_assign_menu() {
         done
         if [ "$_n" -eq 0 ]; then
             printf '还没有协议实例，请先添加实例\n'
-            _tui_pause
+            _tui_wait
             return 0
         fi
         printf '选择要修改出口的实例：\n\n'
@@ -2113,7 +2214,7 @@ tui_health_menu() {
             profile:*)
                 if [ "$_mode" = all ]; then
                     printf '当前是全部监控模式，所有服务器都在监控，不能单独修改。\n请先选择 全部监控开关 切换到自定义监控，各服务器再单独设置。\n'
-                    _tui_pause
+                    _tui_wait
                     continue
                 fi
                 _tui_need_root || continue
@@ -2447,7 +2548,7 @@ pin|导出 sing-box JSON（嵌入证书固定校验，可选）"; fi
             redacted|pin)
                 _tui_need_endpoint "$2" "$1" || continue
                 if [ "$TUI_KEY" = redacted ]; then _tui_do _tui_cx_cli "$1" "$2" sing-box --redacted; else _tui_do _tui_cx_cli "$1" "$2" sing-box --embed-cert; fi
-                _tui_done
+                _tui_page
                 ;;
         esac
         [ "${TUI_EOF:-0}" != 1 ] || return 0
@@ -2514,7 +2615,7 @@ more|更多导出选项"
                     url) _tui_do _tui_cx_cli "$_k" "$1" url ;;
                     qr) _tui_do _tui_cx_cli "$_k" "$1" qr ;;
                 esac
-                _tui_done
+                _tui_page
                 ;;
         esac
         [ "${TUI_EOF:-0}" != 1 ] || return 0

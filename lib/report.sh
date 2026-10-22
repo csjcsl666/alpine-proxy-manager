@@ -151,7 +151,7 @@ report_status() {
     printf '\n功能\n────────────────\n'
     printf '  SOCKS5 出口：%s\n' "$(state_socks_summary)"
     printf '  目标访问限制：%s\n' "$(state_relay_summary)"
-    printf '  低内存保护：%s\n' "$(lowmem_summary)"
+    printf '  网络与进程保护：%s\n' "$(lowmem_summary)"
 }
 
 # ---- 展示用的公共函数: 把底层的 /proc 与 OpenRC 事实翻译成管理员能直接读懂的中文 ----
