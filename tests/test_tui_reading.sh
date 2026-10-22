@@ -107,13 +107,15 @@ EOD
         sleep 0.5
     }
     keys() { for _k in "$@"; do tmux send-keys -t "$S" -- "$_k"; sleep 0.4; done; }
+    # 菜单选择: 数字加 Enter (D154); 阅读暂停里的键用 keys 直接发
+    pick() { for _k in "$@"; do tmux send-keys -t "$S" -- "$_k"; sleep 0.3; tmux send-keys -t "$S" -- Enter; sleep 0.4; done; }
     pane() { tmux capture-pane -p -S -300 -t "$S"; }
     stop() { tmux kill-session -t "$S" 2>/dev/null; }
     pcount() { pane | grep -c -- "$1" || :; }
 
     # 状态总览: 按 4 1 后停在提示, 等 3 秒仍然没有菜单; 回车后才返回
     start
-    keys 4 1
+    pick 4 1
     sleep 3
     scr=$(pane)
     assert_contains "tmux 状态总览: 停在 按回车返回" "$scr" "按回车返回..."
@@ -126,7 +128,7 @@ EOD
 
     # Snell 详细信息: 连续进入, 未按回车时字符不会把菜单追加出来
     start
-    keys 1 1
+    pick 1 1
     sleep 3
     assert_contains "tmux Snell 详细信息: 停在提示" "$(pane)" "按回车返回..."
     assert_eq "tmux Snell 详细信息: 3 秒后菜单没有重复 (只有进入时的一次)" 1 "$(pcount '查看详细信息')"
@@ -138,14 +140,14 @@ EOD
     sleep 0.5
     assert_eq "tmux Snell 详细信息: 回车后回到 Snell 菜单" 2 "$(pcount '查看详细信息')"
     # 重复进入: 1 回车 1 回车
-    keys 1 Enter 1 Enter
+    pick 1; keys Enter; pick 1; keys Enter
     sleep 0.5
     assert_eq "tmux Snell 详细信息: 反复进入每次都要回车 (每次回车后各出现一次菜单)" 4 "$(pcount '查看详细信息')"
     stop
 
     # 单独 Esc 也可结束阅读暂停; Esc 返回菜单规则不变
     start
-    keys 4 1
+    pick 4 1
     sleep 1
     keys Escape
     sleep 0.6
@@ -159,8 +161,8 @@ EOD
 
     # 阅读暂停期间键入的字符 (包括粘贴) 不会结束暂停, 暂停前已到达的残余输入也不会跳过它
     start
-    keys 4
-    tmux send-keys -t "$S" -l -- "1xyz"
+    pick 4 1
+    tmux send-keys -t "$S" -l -- "xyz"
     sleep 1.5
     assert_contains "tmux 阅读暂停期间键入的字符不会结束暂停" "$(pane)" "按回车返回..."
     stop

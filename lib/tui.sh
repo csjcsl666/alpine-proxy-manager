@@ -460,8 +460,8 @@ _tui_now() {
     fi
 }
 
-# 单键选择: 真实终端里菜单按一个键就进入, 不再需要 Enter (多一次 Enter 等于按键数翻倍), 选项超过 9 个时只有可能是两位数开头的数字才需要再按一个键或 Enter
-# 需要交互终端 stty 与支持 read -n 的 shell, 缺一不可就保持整行输入, 输出与整行模式完全一致
+# 菜单输入模式: 真实终端里数字只进入输入行, Enter 提交 (D154), Backspace 可改, 单独的 Esc 立即返回, 方向键 粘贴 残留输入不会触发操作
+# 需要交互终端 stty 与支持 read -n 的 shell, 缺一不可就保持整行输入 (终端自己的行编辑), 提交规则一样: 数字加 Enter
 _tui_onekey_init() {
     TUI_ONEKEY=0
     [ "${APM_TUI_ONEKEY:-1}" = 1 ] || return 0
@@ -481,13 +481,19 @@ _tui_key_drain() {
     _snell_run stty min 1 time 0 2>/dev/null
 }
 
-# 读一个键: 空 Enter 静默忽略 (习惯性补按 Enter 不会报无效), Ctrl-D 视为 EOF, 终端模式在每次读取后立即恢复
+# 读一个菜单选择: 输入数字只更新输入行, 按 Enter 才提交 (D154 取代 D142 的单键立即执行)
+#   Backspace 修改, 空 Enter 静默忽略 (没有输入不会执行任何默认项), Ctrl-D 在输入为空时视为 EOF
+#   单独的 Esc 立即等同输入 0 返回, 方向键等 Esc 序列整体忽略; 提交后丢弃同批到达的字节 (粘贴 残留的 Enter 不会顺势变成下一个菜单的操作)
+#   输入行最多 8 个可见字符, 其余忽略; 主菜单刷新开启时, 等待输入期间照常刷新内存行, 已键入的字符保留
+#   终端模式在每次读取后立即恢复
 _tui_read_key() {
-    local _st _k _k2 _rc _t0
+    local _st _k _rc _t0 _buf
     _st=$(_snell_run stty -g 2>/dev/null) || return 2
     [ -n "$_st" ] || return 2
     TUI_STTY_SAVED=$_st
     _snell_run stty -icanon -echo min 1 time 0 2>/dev/null
+    _buf=
+    _rc=0
     while :; do
         _k=
         if [ "${TUI_TICK_ON:-0}" = 1 ]; then
@@ -506,36 +512,49 @@ _tui_read_key() {
             _rc=$?
         fi
         [ "$_rc" -eq 0 ] || break
-        # 单独的 Esc 等同返回, 方向键等 Esc 序列整体忽略 (等 0.2 秒看后面有没有字节, 有就是序列)
-        if [ "$_k" = "$(printf '\033')" ]; then
-            _snell_run stty min 0 time 2 2>/dev/null
-            _tui_getbyte
-            if [ -n "$TUI_K" ]; then _tui_key_drain; _k=; else _k=0; fi
-            _snell_run stty min 1 time 0 2>/dev/null
-        fi
-        [ -n "$_k" ] || continue
-        break
-    done
-    # 选项超过 9 个时, 第一个数字还可能是两位数的开头 (例如 10 个选项里的 1) 才继续等下一个键或 Enter, 其余数字立刻选中
-    if [ "$_rc" -eq 0 ]; then
         case $_k in
-            [1-9])
-                if [ "${TUI_NCH:-0}" -ge 10 ] && [ $((_k * 10)) -le "$TUI_NCH" ]; then
-                    _k2=
-                    # shellcheck disable=SC3045
-                    IFS= read -r -n 1 -t 1 _k2 || _k2=
-                    _k=$_k$_k2
+            '')
+                # Enter: 有输入才提交
+                [ -n "$_buf" ] || continue
+                break
+                ;;
+            "$(printf '\033')")
+                _snell_run stty min 0 time 2 2>/dev/null
+                _tui_getbyte
+                _snell_run stty min 1 time 0 2>/dev/null
+                if [ -n "$TUI_K" ]; then _tui_key_drain; continue; fi
+                _buf=0
+                break
+                ;;
+            "$(printf '\004')")
+                if [ -z "$_buf" ]; then _rc=1; break; fi
+                ;;
+            "$(printf '\177')"|"$(printf '\010')")
+                if [ -n "$_buf" ]; then
+                    _buf=${_buf%?}
+                    printf '\b \b'
                 fi
                 ;;
+            *)
+                # 可见 ASCII 才进入输入行 (无效输入在提交后统一提示)
+                case $_k in
+                    [!\ -~]) ;;
+                    *)
+                        if [ "${#_buf}" -lt 8 ]; then
+                            _buf=$_buf$_k
+                            printf '%s' "$_k"
+                        fi
+                        ;;
+                esac
+                ;;
         esac
-    fi
+    done
     [ "$_rc" -ne 0 ] || _tui_key_drain
     _snell_run stty "$_st" 2>/dev/null
     TUI_STTY_SAVED=
     [ "$_rc" -eq 0 ] || return 1
-    case $_k in "$(printf '\004')") return 1 ;; esac
-    printf '%s\n' "$_k"
-    _c=$_k
+    printf '\n'
+    _c=$_buf
     return 0
 }
 

@@ -139,16 +139,16 @@ EOD
         tmux capture-pane -p -S -200 -t apmflow$$
         tmux kill-session -t apmflow$$ 2>/dev/null
     }
-    scr=$(ptyrun 100 40 2 1 Enter 5 1)
-    assert_contains "真实终端 100 列: 选 2 再选 1 号实例 (等同 Enter) 后按 5 1 看到完整连接信息" "$scr" "密码：$APW"
-    scr=$(ptyrun 50 40 2 1 Enter 5 1)
+    scr=$(ptyrun 100 40 2 Enter 1 Enter 5 Enter 1 Enter)
+    assert_contains "真实终端 100 列: 每次选择都是数字加 Enter, 2 1 5 1 后看到完整连接信息" "$scr" "密码：$APW"
+    scr=$(ptyrun 50 40 2 Enter 1 Enter 5 Enter 1 Enter)
     assert_contains "真实终端 50 列: 同样可用" "$scr" "客户端连接信息 AnyTLS-01"
-    scr=$(ptyrun 100 40 2 1 Enter 5 2)
-    assert_contains "真实终端: 两次选择后得到 JSON" "$scr" '"type": "anytls"'
-    scr=$(ptyrun 100 40 2 2 1)
-    assert_contains "真实终端: 三次按键禁用实例且没有任何确认" "$scr" "实例 Hysteria2-01 已禁用"
+    scr=$(ptyrun 100 40 2 Enter 1 Enter 5 Enter 2 Enter)
+    assert_contains "真实终端: 同样的流程选 2 得到 JSON" "$scr" '"type": "anytls"'
+    scr=$(ptyrun 100 40 2 Enter 2 Enter 1 Enter)
+    assert_contains "真实终端: 三次选择 (数字加 Enter) 禁用实例且没有额外确认" "$scr" "实例 Hysteria2-01 已禁用"
     "$PM" sing-box enable Hysteria2-01 >/dev/null 2>&1
-    # 单键可靠性: 一次性到达的多个字符只取第一个, 其余丢弃, 不会顺势变成下一个菜单的操作
+    # 输入可靠性: 数字只进入输入行, Enter 才提交; 粘贴的多行只取第一行, 其余丢弃
     ptyburst() { # 字面字符串 (一次写入)
         tmux kill-session -t apmflow$$ 2>/dev/null
         tmux new-session -d -s apmflow$$ -x 100 -y 40 "sh $DRV" || return 1
@@ -160,14 +160,33 @@ EOD
         tmux capture-pane -p -S -200 -t apmflow$$
         tmux kill-session -t apmflow$$ 2>/dev/null
     }
+    scr=$(ptyrun 100 40 2)
+    assert_not_contains "只输入数字不跳转" "$scr" "管理 AnyTLS-01"
+    assert_contains "输入的数字显示在输入行" "$scr" "请选择：2"
+    scr=$(ptyrun 100 40 2 BSpace 1)
+    assert_contains "Backspace 能删掉输入再改" "$scr" "请选择：1"
+    scr=$(ptyrun 100 40 2 BSpace 2 Enter)
+    assert_contains "改正后 Enter 进入对应页" "$scr" "管理 AnyTLS-01"
+    scr=$(ptyrun 100 40 Enter Enter Enter)
+    assert_not_contains "没有输入时 Enter 不执行任何默认项" "$scr" "输入无效"
+    assert_eq "没有输入时 Enter 不进入任何菜单" 0 "$(printf '%s\n' "$scr" | grep -c '管理 AnyTLS-01')"
+    scr=$(ptyrun 100 40 9 Enter)
+    assert_contains "无效选项给出提示且不执行任何功能" "$scr" "输入无效"
+    scr=$(ptyrun 100 40 0)
+    assert_not_contains "0 也要 Enter 才返回: 只输入 0 不退出" "$scr" "已退出"
+    scr=$(ptyrun 100 40 0 Enter)
+    assert_eq "0 加 Enter 退出 (程序结束, 终端会话随之关闭)" "" "$(printf '%s' "$scr" | tr -d ' \n')"
     scr=$(ptyburst 21)
-    assert_contains "粘贴 21: 只进入 sing-box 页" "$scr" "管理 AnyTLS-01"
-    assert_not_contains "粘贴 21: 第二个字符没有变成下一页的操作" "$scr" "客户端连接信息"
-    assert_not_contains "粘贴 21: 丢弃的字符不产生无效输入提示" "$scr" "输入无效"
-    scr=$(ptyrun 100 40 Up Down 2 0)
+    assert_not_contains "粘贴 21 不带 Enter: 不跳转" "$scr" "管理 AnyTLS-01"
+    scr=$(ptyburst "$(printf '2\n1\n')")
+    assert_contains "粘贴 2 回车 1 回车: 只进入第一个菜单" "$scr" "管理 AnyTLS-01"
+    assert_not_contains "粘贴 2 回车 1 回车: 第二行被丢弃, 没有进入实例页" "$scr" "客户端配置 · AnyTLS-01"
+    assert_not_contains "粘贴的多行不产生无效输入提示" "$scr" "输入无效"
+    scr=$(ptyrun 100 40 Up Down 2 Enter)
     assert_not_contains "方向键: 不产生无效输入提示" "$scr" "输入无效"
+    assert_not_contains "方向键: 不进入输入行" "$scr" "请选择：^"
     assert_contains "方向键: 之后的选择照常" "$scr" "管理 AnyTLS-01"
-    scr=$(ptyrun 100 40 2 Escape)
+    scr=$(ptyrun 100 40 2 Enter Escape)
     assert_eq "单独 Esc 等同返回: 回到主菜单, sing-box 页只出现一次" 1 "$(printf '%s\n' "$scr" | grep -c '管理 AnyTLS-01')"
     assert_contains "单独 Esc 返回后仍在主菜单" "$scr" "状态与诊断"
     # 通用: 启动后先执行 PRE 命令 (例如改变窗口尺寸), 再按键, 每个按键之间的等待可指定
@@ -186,14 +205,17 @@ EOD
         tmux kill-session -t apmflow$$ 2>/dev/null
     }
     # 终端窗口在菜单等待输入时改变尺寸 (SIGWINCH 不能被当成输入结束或误选)
-    scr=$(ptyseq 0.4 "resize-window -t apmflow$$ -x 60 -y 24" 2)
+    scr=$(ptyseq 0.4 "resize-window -t apmflow$$ -x 60 -y 24" 2 Enter)
     assert_contains "窗口尺寸变化后按键仍然有效" "$scr" "管理 AnyTLS-01"
     assert_not_contains "窗口尺寸变化没有让程序退出" "$scr" "已退出"
-    # 慢速分批到达 (SSH 延迟): 10 项菜单里的 1 与 0 间隔超过 1 秒 = 先进入实例再返回, 间隔很短 = 第 10 项 (卸载, 有确认)
-    scr=$(ptyseq 2 - 2 1 0)
-    assert_not_contains "间隔 2 秒的 1 和 0 不会变成第 10 项卸载" "$scr" "完整卸载：删除 sing-box"
-    scr=$(ptyseq 0.1 - 2 1 0)
-    assert_contains "间隔很短的 1 0 是第 10 项, 进入卸载选择页 (未执行任何删除)" "$scr" "完整卸载：删除 sing-box"
+    # 10 项菜单里的 10: 输入 1 0 再 Enter 才是第 10 项 (卸载), 只输入 1 和 0 不提交, 输入间隔长也不会变成别的项
+    scr=$(ptyseq 2 - 2 Enter 1 0)
+    assert_not_contains "不按 Enter 的 1 0 不会进入卸载" "$scr" "完整卸载：删除 sing-box"
+    scr=$(ptyseq 0.1 - 2 Enter 1 0 Enter)
+    assert_contains "1 0 Enter 是第 10 项, 进入卸载选择页 (未执行任何删除)" "$scr" "完整卸载：删除 sing-box"
+    scr=$(ptyseq 2 - 2 Enter 1 Enter 0 Enter)
+    assert_contains "间隔很长的 1 Enter 0 Enter 是进入实例再返回, 不是第 10 项" "$scr" "管理 AnyTLS-01"
+    assert_not_contains "间隔很长的 1 Enter 0 Enter 不进入卸载" "$scr" "完整卸载：删除 sing-box"
     # 缺少 stty: 自动退回整行输入, 单独一个数字不会生效, 必须按 Enter
     rm -f "$A/usr/bin/stty"
     scr=$(ptyseq 0.5 - 2)

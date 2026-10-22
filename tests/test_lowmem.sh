@@ -536,7 +536,7 @@ EOD
         _i=0
         while [ "$_i" -lt 50 ] && ! tmux capture-pane -p -t lmpty$$ | grep -q '请选择：'; do sleep 0.1; _i=$((_i + 1)); done
         sleep 0.5
-        for _k in "$@"; do tmux send-keys -t lmpty$$ -- "$_k"; sleep 0.5; done
+        for _k in "$@"; do tmux send-keys -t lmpty$$ -- "$_k"; sleep 0.5; case $_k in [0-9]) tmux send-keys -t lmpty$$ -- Enter; sleep 0.5 ;; esac; done
         sleep 1
         tmux capture-pane -p -S -200 -t lmpty$$
         tmux kill-session -t lmpty$$ 2>/dev/null
