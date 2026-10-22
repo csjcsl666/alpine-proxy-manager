@@ -861,7 +861,7 @@ EOF
             if [ "$LMT_DAEMON" = yes ]; then LMT_SSH_S=ok; LMT_SSH_T="已启用（当前没有 sshd 进程，出现后自动设置）"; LMT_OK=$((LMT_OK + 1))
             else LMT_SSH_S=bad; LMT_SSH_T="未生效（常驻进程没有运行）"; LMT_BAD=$((LMT_BAD + 1)); fi
         elif [ "$LMT_SSH_OKN" -eq "$LMT_SSH_N" ]; then
-            LMT_SSH_S=ok; LMT_SSH_T="已生效（$LMT_SSH_N 个 sshd 进程，oom_score_adj 不高于 $LM_SSH_ADJ）"; LMT_OK=$((LMT_OK + 1))
+            LMT_SSH_S=ok; LMT_SSH_T="已生效（$LMT_SSH_N 个进程，oom_score_adj <= $LM_SSH_ADJ）"; LMT_OK=$((LMT_OK + 1))
         else
             LMT_SSH_S=part; LMT_SSH_T="部分生效（$LMT_SSH_OKN/$LMT_SSH_N 个进程，其余由常驻进程在数秒内设置）"; LMT_BAD=$((LMT_BAD + 1))
         fi
@@ -910,7 +910,7 @@ EOF
             if [ "$LMT_DAEMON" = yes ]; then LMT_SAC_S=ok; LMT_SAC_T="已启用（Snell 当前没有运行，启动后自动设置）"; LMT_OK=$((LMT_OK + 1))
             else LMT_SAC_S=bad; LMT_SAC_T="未生效（常驻进程没有运行）"; LMT_BAD=$((LMT_BAD + 1)); fi
         elif [ "$LMT_SAC_OKN" -eq "$LMT_SAC_N" ]; then
-            LMT_SAC_S=ok; LMT_SAC_T="已启用（$LMT_SAC_N 个 Snell 进程，oom_score_adj 不低于 $LM_SNELL_ADJ）"; LMT_OK=$((LMT_OK + 1))
+            LMT_SAC_S=ok; LMT_SAC_T="已启用（$LMT_SAC_N 个进程，oom_score_adj >= $LM_SNELL_ADJ）"; LMT_OK=$((LMT_OK + 1))
         else
             LMT_SAC_S=part; LMT_SAC_T="部分生效（$LMT_SAC_OKN/$LMT_SAC_N 个进程，其余由常驻进程在数秒内设置）"; LMT_BAD=$((LMT_BAD + 1))
         fi
@@ -931,7 +931,7 @@ EOF
     LMT_PER_S=off
     LMT_PER_T=
     if [ "$LMT_EN" = yes ]; then
-        if _lm_init_ours && [ -e "$(env_path "/etc/runlevels/default/$LM_SVC")" ]; then LMT_PER_S=ok; LMT_PER_T="已启用（OpenRC 服务 $LM_SVC，default 运行级别）"
+        if _lm_init_ours && [ -e "$(env_path "/etc/runlevels/default/$LM_SVC")" ]; then LMT_PER_S=ok; LMT_PER_T="已启用（OpenRC 服务 $LM_SVC）"
         else LMT_PER_S=bad; LMT_PER_T="未生效（OpenRC 服务缺失或没有加入开机启动）"; fi
     fi
     return 0
@@ -941,18 +941,18 @@ EOF
 _tui_lm_headline() {
     if [ "$LMT_EN" != yes ]; then printf '未启用'; return 0; fi
     if [ "$LMT_CONF" -eq 0 ]; then printf '已启用，但没有任何机制可用（见下）'; return 0; fi
-    printf '已启用（配置 %s 项，实际生效 %s 项' "$LMT_CONF" "$LMT_OK"
+    printf '已启用（配置 %s 项，生效 %s 项' "$LMT_CONF" "$LMT_OK"
     [ "$LMT_BAD" -eq 0 ] || printf '，%s 项未完全生效' "$LMT_BAD"
-    [ "$LMT_NA" -eq 0 ] || printf '；另有 %s 项因环境限制没有生效' "$LMT_NA"
+    [ "$LMT_NA" -eq 0 ] || printf '；环境限制 %s 项' "$LMT_NA"
     printf '）'
 }
 
 # 首页: 只显示状态. 不展开路径 原始参数 权限解释
 _tui_lm_home() {
     _tui_lm_collect
-    printf '调整 TCP 缓冲与进程的 OOM 优先级，并记录内存取证；不清理或回收内存\n\n'
+    printf '调整 TCP 缓冲与进程 OOM 优先级，并记录内存取证\n不清理或回收内存\n\n'
     printf '保护状态：%s\n' "$(_tui_lm_headline)"
-    if [ "$LMT_EN" = yes ]; then printf '  配置项 = 设置里启用的机制；生效项 = 实时检测确认；环境限制项另计\n'; fi
+    if [ "$LMT_EN" = yes ]; then printf '  配置项：设置里启用的机制；生效项：实时检测确认\n'; fi
     printf '\n'
     _tui_lm_row "$LMT_TCP_S" "TCP 缓冲优化" "$LMT_TCP_T"
     _tui_lm_row "$LMT_SSH_S" "SSH 进程保护" "$LMT_SSH_T"
@@ -960,7 +960,7 @@ _tui_lm_home() {
     _tui_lm_row "$LMT_SAC_S" "Snell 优先终止" "$LMT_SAC_T"
     [ "$LMT_EN" != yes ] || _tui_lm_row "$LMT_PER_S" "开机持久化" "$LMT_PER_T"
     if [ "$LMT_SAC_S" = ok ] || [ "$LMT_SAC_S" = part ]; then
-        printf '\n! Snell 优先终止不提高 Snell 的稳定性：内存不足时 Snell 会最先被终止\n'
+        printf '\n! Snell 优先终止不提高 Snell 的稳定性，\n  内存不足时 Snell 会最先被终止\n'
     fi
     if [ "$LMT_EN" = yes ] && [ $((LMT_BAD + LMT_NA)) -gt 0 ]; then
         printf '\n! 有 %s 项没有生效（含环境限制），原因见「查看保护详情」\n' "$((LMT_BAD + LMT_NA))"
@@ -986,7 +986,8 @@ EOF
 # 依据按 ， 拆成多行, 续行缩进
 _tui_lm_why() {
     printf '%s\n' "$1" | sed 's/，/\
-/g' | awk 'NR == 1 { print "    依据：" $0; next } { print "      " $0 }'
+/g; s/ 超过/\
+超过/g' | awk 'NR == 1 { print "    依据：" $0; next } { print "      " $0 }'
 }
 
 _tui_lm_tcp_block() { # rmem|wmem
@@ -1045,7 +1046,7 @@ _tui_lm_detail() {
     printf '  SSH 进程保护：%s\n' "$LMT_SSH_T"
     printf '    目标：sshd 的 oom_score_adj 降到 %s\n' "$LM_SSH_ADJ"
     _tui_lm_proc_list _lm_ssh_procs
-    printf '  Snell 优先终止（可选）：%s\n' "$LMT_SAC_T"
+    printf '  Snell 优先终止：%s\n' "$LMT_SAC_T"
     printf '    目标：Snell 进程的 oom_score_adj 提高到 %s\n' "$LM_SNELL_ADJ"
     _tui_lm_proc_list _lm_snell_procs
     printf '\nD. 取证与持久化\n'
@@ -1054,8 +1055,8 @@ _tui_lm_detail() {
     printf '  记录方式：每 5 分钟一条心跳；OOM 计数变化时详细记录\n'
     printf '  常驻进程：%s\n' "$([ "$LMT_DAEMON" = yes ] && printf '运行中' || printf '没有运行')"
     if [ "$LMT_EN" = yes ]; then printf '  开机持久化：%s\n' "$LMT_PER_T"; else printf '  开机持久化：未启用（保护启用后创建 OpenRC 服务 %s）\n' "$LM_SVC"; fi
-    printf '  设置文件：%s\n' "$(_lm_conf)"
-    printf '  原始设置：%s\n' "$(_lm_orig)"
+    printf '  设置文件：%s\n' "$(_lm_conf | sed "s|^${APM_SYSROOT:-}||")"
+    printf '  原始设置：%s\n' "$(_lm_orig | sed "s|^${APM_SYSROOT:-}||")"
     printf '\nE. 限制与风险\n'
     printf '  - TCP 参数影响整个网络命名空间，不只是 Snell\n'
     printf '  - 修改 OOM 优先级不能保证进程不被终止\n'
@@ -1344,7 +1345,7 @@ _tui_lm_disable() {
     _any=0
     while IFS='|' read -r _code _val; do
         case $_code in
-            tcp-restored-*) _any=1; printf '    tcp_%s：已恢复（%s）\n' "${_code#tcp-restored-}" "$_val" ;;
+            tcp-restored-*) _any=1; printf '    tcp_%s：已恢复\n      %s\n' "${_code#tcp-restored-}" "$_val" ;;
             tcp-same-*) _any=1; printf '    tcp_%s：当前已是原值 %s，无需恢复\n' "${_code#tcp-same-}" "$_val" ;;
             tcp-failed-*) _any=1; _bad=$((_bad + 1)); printf '! 写回原值失败：tcp_%s 当前仍是 %s\n' "${_code#tcp-failed-}" "$_val" ;;
             tcp-external-*) _any=1; _un=$((_un + 1)); printf '! tcp_%s：当前值 %s 已被外部修改，没有覆盖，未恢复\n' "${_code#tcp-external-}" "$_val" ;;

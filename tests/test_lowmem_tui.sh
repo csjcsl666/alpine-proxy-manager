@@ -155,8 +155,8 @@ assert_eq "实际: tcp_rmem 已改" "4096 87380 6291456" "$(tcp rmem)"
 assert_eq "实际: sshd 分数未动" 0 "$(cat "$A/proc/524/oom_score_adj")"
 assert_eq "实际: 服务已加入 default" 1 "$([ -e "$A/etc/runlevels/default/apm-lowmem" ] && echo 1 || echo 0)"
 out=$(V _tui_lm_home)
-assert_contains "已启用首页: 口径写明" "$out" "已启用（配置 2 项，实际生效 2 项；另有 1 项因环境限制没有生效）"
-assert_contains "已启用首页: 统计口径说明" "$out" "配置项 = 设置里启用的机制"
+assert_contains "已启用首页: 口径写明" "$out" "已启用（配置 2 项，生效 2 项；环境限制 1 项）"
+assert_contains "已启用首页: 统计口径说明" "$out" "配置项：设置里启用的机制"
 assert_contains "已启用首页: SSH 未生效标 !" "$out" "! SSH 进程保护：未生效（权限不足"
 assert_contains "已启用首页: TCP 已生效" "$out" "TCP 缓冲优化：已生效"
 assert_contains "已启用首页: 取证运行中" "$out" "内存取证：运行中"
@@ -169,14 +169,14 @@ mk_sys e2
 out=$(V _tui_lm_enable sac)
 assert_contains "sac: 预计启用 SSH" "$out" "- SSH 进程保护"
 assert_contains "sac: 预计启用 Snell 优先终止" "$out" "- Snell 优先终止（高级选项）"
-assert_contains "sac: SSH 已生效" "$out" "SSH 进程保护：已生效（1 个 sshd 进程"
-assert_contains "sac: Snell 已启用" "$out" "Snell 优先终止：已启用（1 个 Snell 进程"
+assert_contains "sac: SSH 已生效" "$out" "SSH 进程保护：已生效（1 个进程，oom_score_adj <= -500）"
+assert_contains "sac: Snell 已启用" "$out" "Snell 优先终止：已启用（1 个进程，oom_score_adj >= 300）"
 assert_contains "sac: 结论全部生效" "$out" "已配置的 4 项机制全部生效"
 assert_eq "实际: sshd 分数 -500" -500 "$(cat "$A/proc/524/oom_score_adj")"
 assert_eq "实际: Snell 进程 300" 300 "$(cat "$A/proc/801/oom_score_adj")"
 assert_eq "实际: supervise-daemon 没有被写入" 0 "$([ -e "$A/proc/800/oom_score_adj" ] && echo 1 || echo 0)"
 out=$(V _tui_lm_home)
-assert_contains "sac 首页: 代价警告" "$out" "! Snell 优先终止不提高 Snell 的稳定性"
+assert_contains "sac 首页: 代价警告" "$out" "! Snell 优先终止不提高 Snell 的稳定性，"
 out=$(V _tui_lm_enable sac)
 assert_contains "重复启用: 标明未改变" "$out" "TCP 缓冲：已生效（与之前相同，未改变）"
 assert_contains "重复启用: Snell 未改变" "$out" "Snell 优先终止：已生效（未改变）"
@@ -210,7 +210,7 @@ assert_contains "恢复: 标题" "$out" "恢复结果"
 assert_contains "恢复: TCP 分组" "$out" "TCP 参数"
 assert_contains "恢复: 进程保护分组" "$out" "进程保护"
 assert_contains "恢复: OpenRC 分组" "$out" "OpenRC 与配置"
-assert_contains "恢复: tcp_rmem 已恢复" "$out" "tcp_rmem：已恢复（4096 87380 6291456 -> 4096 87380 67108864）"
+assert_contains "恢复: tcp_rmem 已恢复" "$out" "4096 87380 6291456 -> 4096 87380 67108864"
 assert_contains "恢复: SSH 恢复" "$out" "SSH 进程保护：已把 1 个进程的 oom_score_adj 恢复为原值"
 assert_contains "恢复: Snell 恢复" "$out" "Snell 优先终止：已把 1 个进程恢复为原值"
 assert_contains "恢复: 服务删除" "$out" "apm-lowmem 服务和设置文件：已删除"
@@ -265,7 +265,8 @@ assert_contains "详情: 共享状态与依据分行" "$out" "网络命名空间
 assert_contains "详情: 影响范围" "$out" "TCP 参数影响范围：当前网络命名空间内的所有服务"
 assert_contains "详情: rmem 当前原始目标" "$out" "原始：4096 87380 67108864（上限 64 MiB）"
 assert_contains "详情: 目标" "$out" "目标：4096 87380 6291456（上限 6 MiB）"
-assert_contains "详情: 依据分行" "$out" "依据：单个连接的缓冲上限之和 128 MiB 超过内存上限 122 MiB 的四分之一"
+assert_contains "详情: 依据分行" "$out" "依据：单个连接的缓冲上限之和 128 MiB"
+assert_contains "详情: 依据续行" "$out" "超过内存上限 122 MiB 的四分之一"
 assert_contains "详情: wmem" "$out" "tcp_wmem（发送缓冲）"
 assert_contains "详情: SSH 实际 oom_score_adj" "$out" "PID 524（sshd）：oom_score_adj -500"
 assert_contains "详情: Snell 实际 oom_score_adj" "$out" "PID 801（ld-musl-x86_64.）：oom_score_adj 300"
@@ -358,13 +359,13 @@ mk_sys w1
 V _tui_lm_enable sac >/dev/null
 for f in _tui_lm_home _tui_lm_detail _tui_lm_forensics_summary _tui_lm_adv_info; do
     out=$(V "$f")
-    assert_eq "$f 最大行宽不超过 80" 1 "$([ "$(maxw "$out")" -le 80 ] && echo 1 || echo 0)"
+    assert_eq "$f 最大行宽不超过 60 (窄终端不折行)" 1 "$([ "$(maxw "$out")" -le 60 ] && echo 1 || echo 0)"
 done
 mk_sys w2 deny
 out=$(V _tui_lm_enable)
-assert_eq "启用页最大行宽不超过 80" 1 "$([ "$(maxw "$out")" -le 80 ] && echo 1 || echo 0)"
+assert_eq "启用页最大行宽不超过 60" 1 "$([ "$(maxw "$out")" -le 60 ] && echo 1 || echo 0)"
 out=$(V _tui_lm_disable)
-assert_eq "恢复页最大行宽不超过 80" 1 "$([ "$(maxw "$out")" -le 80 ] && echo 1 || echo 0)"
+assert_eq "恢复页最大行宽不超过 60" 1 "$([ "$(maxw "$out")" -le 60 ] && echo 1 || echo 0)"
 
 # ============ 10. 菜单路径 (管道) ============
 printf '== 菜单路径\n'
