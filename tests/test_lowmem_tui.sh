@@ -191,7 +191,7 @@ assert_contains "高级: 现有 oom_score_adj" "$out" "PID 801（ld-musl-x86_64.
 assert_contains "高级: 目标策略" "$out" "提高到 300"
 assert_contains "高级: 预期效果" "$out" "预期效果"
 assert_contains "高级: 代价不是稳定性" "$out" "这不会提高 Snell 的稳定性"
-assert_contains "高级: 范围边界" "$out" "不动"
+assert_contains "高级: 范围边界" "$out" "不动其监督进程"
 assert_contains "高级: 关闭方式如实说明" "$out" "目前没有单独关闭该选项的命令"
 mk_sys a1
 out=$(V _tui_lm_adv_info)
@@ -440,6 +440,8 @@ EOD
         sleep 0.5
     }
     vis() { tmux capture-pane -p -t "$S"; }
+    # 等待屏幕出现某段文字 (最多 15 秒): 操作耗时不固定, 提前发键会被输入丢弃机制清掉, 所以每步先确认画面
+    waitfor() { _w=0; while [ "$_w" -lt 150 ] && ! vis | grep -q -- "$1"; do sleep 0.1; _w=$((_w + 1)); done; }
     pick() { for _k in "$@"; do tmux send-keys -t "$S" -- "$_k"; sleep 0.3; tmux send-keys -t "$S" -- Enter; sleep 0.6; done; }
     key() { for _k in "$@"; do tmux send-keys -t "$S" -- "$_k"; sleep 0.5; done; }
     for dim in "80 24" "60 30" "100 50"; do
@@ -447,46 +449,47 @@ EOD
         set -- $dim
         start "$1" "$2"
         pick 1 "$nn" 2
+        waitfor "4. 启用保护"
         v=$(vis)
         assert_contains "tmux $dim: 进入保护首页" "$v" "Snell · 网络与进程保护"
         assert_contains "tmux $dim: 首页状态" "$v" "保护状态：未启用"
         assert_contains "tmux $dim: 菜单" "$v" "4. 启用保护"
-        pick 1; sleep 0.5
+        pick 1; waitfor "按回车返回"
         v=$(vis)
         assert_contains "tmux $dim: 详情页停在 按回车返回" "$v" "按回车返回..."
-        key Enter; sleep 0.5
+        key Enter; waitfor "4. 启用保护"
         assert_contains "tmux $dim: 回车后回到保护首页" "$(vis)" "4. 启用保护"
         stop() { tmux kill-session -t "$S" 2>/dev/null; }
         stop
     done
     start 80 24
-    pick 1 "$nn" 2 4; sleep 1.5
+    pick 1 "$nn" 2 4; waitfor "按回车返回"
     v=$(vis)
     assert_contains "tmux: 启用结果页停在 按回车返回" "$v" "按回车返回..."
     assert_contains "tmux: 启用结果" "$v" "启用结果"
     assert_eq "tmux: 启用实际改了 tcp_rmem" "4096 87380 6291456" "$(tcp rmem)"
-    key Enter; sleep 0.5
+    key Enter; waitfor "4. 停用保护并恢复设置"
     assert_contains "tmux: 回车后首页变成已启用" "$(vis)" "4. 停用保护并恢复设置"
-    pick 2; sleep 0.5
+    pick 2; waitfor "Snell · 取证记录"
     assert_contains "tmux: 取证摘要页" "$(vis)" "Snell · 取证记录"
-    pick 1; sleep 0.5
+    pick 1; waitfor "取证记录 · 原始记录"
     assert_contains "tmux: 原始记录页" "$(vis)" "取证记录 · 原始记录"
-    key Enter; sleep 0.5
+    key Enter; waitfor "查看原始记录"
     assert_contains "tmux: 原始记录读完回车返回取证页" "$(vis)" "Snell · 取证记录"
-    key Escape; sleep 0.6
+    key Escape; waitfor "4. 停用保护并恢复设置"
     assert_contains "tmux: Esc 回到保护首页" "$(vis)" "4. 停用保护并恢复设置"
-    pick 3; sleep 0.5
+    pick 3; waitfor "Snell · 高级保护选项"
     v=$(vis)
     assert_contains "tmux: 高级保护选项页" "$v" "Snell · 高级保护选项"
     assert_contains "tmux: 高级页说明代价" "$v" "这不会提高 Snell 的稳定性"
-    key Escape; sleep 0.6
+    key Escape; waitfor "4. 停用保护并恢复设置"
     assert_contains "tmux: Esc 回到保护首页 (高级页)" "$(vis)" "4. 停用保护并恢复设置"
-    pick 4; sleep 1.5
+    pick 4; waitfor "按回车返回"
     v=$(vis)
     assert_contains "tmux: 恢复结果页停在 按回车返回" "$v" "按回车返回..."
     assert_contains "tmux: 恢复结果" "$v" "最终状态：保护已停用"
     assert_eq "tmux: 恢复实际写回 tcp_rmem" "4096 87380 67108864" "$(tcp rmem)"
-    key Enter; sleep 0.5
+ key Enter; waitfor "4. 启用保护"
     assert_contains "tmux: 回车后首页变回未启用" "$(vis)" "4. 启用保护"
     tmux kill-session -t "$S" 2>/dev/null
 else

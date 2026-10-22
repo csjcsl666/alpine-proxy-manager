@@ -1412,8 +1412,8 @@ _tui_lm_adv_info() {
     printf '    - 这不会提高 Snell 的稳定性，而是让它更容易被终止\n'
     printf '    - Snell 即使不是内存压力的来源，也会最先被终止\n'
     printf '    - memory.oom.group 为 1 时调整无效\n'
-    printf '  只影响 Snell 的 supervise-daemon 的后代进程，不动\n'
-    printf '    supervise-daemon、sshd、sing-box 与 AnyTLS Gateway\n'
+    printf '  只影响 Snell 服务的 Snell 进程，不动其监督进程、\n'
+    printf '    sshd、sing-box 与 AnyTLS Gateway\n'
     if [ "$LMT_SAC_S" = ok ] || [ "$LMT_SAC_S" = part ] || [ "$LMT_SAC_S" = bad ]; then
         printf '  关闭方式：「停用保护并恢复设置」会一并关闭\n    （目前没有单独关闭该选项的命令）\n'
     fi
