@@ -182,6 +182,17 @@ EOD
     assert_contains "粘贴 2 回车 1 回车: 只进入第一个菜单" "$scr" "管理 AnyTLS-01"
     assert_not_contains "粘贴 2 回车 1 回车: 第二行被丢弃, 没有进入实例页" "$scr" "客户端配置 · AnyTLS-01"
     assert_not_contains "粘贴的多行不产生无效输入提示" "$scr" "输入无效"
+    # 长粘贴: 超过一次读取 (原来是 256 字节) 的残余不能变成下一个菜单的输入, 其中合法的编号也不能被执行
+    for _n in 300 3000; do
+        _junk=$(head -c "$_n" /dev/zero | tr '\0' x)
+        scr=$(ptyburst "$(printf '2\n%s\n1\n' "$_junk")")
+        assert_contains "长粘贴 $_n 字节: 只进入第一个菜单" "$scr" "管理 AnyTLS-01"
+        assert_not_contains "长粘贴 $_n 字节: 残余没有产生无效输入提示" "$scr" "输入无效"
+        assert_not_contains "长粘贴 $_n 字节: 残余里的 1 没有进入实例页" "$scr" "客户端配置 · AnyTLS-01"
+    done
+    # 两次分开的粘贴: 第二次在第一次处理完之后到达, 照常作为输入 (清理不会吞掉之后的正常输入)
+    scr=$(ptyrun 100 40 2 Enter 1 Enter)
+    assert_contains "清理之后的正常输入照常生效" "$scr" "AnyTLS-01 · AnyTLS"
     scr=$(ptyrun 100 40 Up Down 2 Enter)
     assert_not_contains "方向键: 不产生无效输入提示" "$scr" "输入无效"
     assert_not_contains "方向键: 不进入输入行" "$scr" "请选择：^"

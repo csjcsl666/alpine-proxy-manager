@@ -345,8 +345,8 @@ _tui_wait_flush() {
     local _st
     _st=$(_snell_run stty -g 2>/dev/null) || return 0
     [ -n "$_st" ] || return 0
-    _snell_run stty -icanon -echo min 0 time 0 2>/dev/null
-    dd bs=256 count=1 >/dev/null 2>&1
+    _snell_run stty -icanon -echo 2>/dev/null
+    _tui_drain_pending
     _snell_run stty "$_st" 2>/dev/null
 }
 
@@ -483,10 +483,23 @@ _tui_onekey_init() {
 
 # 丢弃已经到达但还没读的输入: 粘贴的多位数字 方向键的后续字节 都不能顺势变成下一个菜单的操作, 终端必须已处于 min 0 time 0 之外的原始模式
 _tui_key_drain() {
-    # 不用 read -n: bash 的 read 会自己把终端设成 min 1, 空缓冲会一直阻塞; dd 在 min 0 time 0 下立即返回
-    _snell_run stty min 0 time 0 2>/dev/null
-    dd bs=256 count=1 >/dev/null 2>&1
+    _tui_drain_pending
     _snell_run stty min 1 time 0 2>/dev/null
+}
+
+# 把已经到达的输入全部读掉: 原来只读一次 256 字节, 更长的粘贴会剩下一截, 变成下一个菜单的输入
+# 不用 read -n: bash 的 read 会自己把终端设成 min 1, 空缓冲会一直阻塞; dd 在 min 0 time 0 下立即返回
+# 读到过数据就改为 time 1 再等 0.1 秒: 终端里一次粘贴会分几批到达; 最多 64 轮 (256 KiB), 持续不断的输入也不会让这里卡住
+_tui_drain_pending() {
+    local _n _i
+    _snell_run stty min 0 time 0 2>/dev/null
+    _i=0
+    while [ "$_i" -lt 64 ]; do
+        _n=$(dd bs=4096 count=1 2>/dev/null | wc -c | tr -d ' ')
+        [ "${_n:-0}" -gt 0 ] || break
+        _snell_run stty min 0 time 1 2>/dev/null
+        _i=$((_i + 1))
+    done
 }
 
 # 读一个菜单选择: 输入数字只更新输入行, 按 Enter 才提交 (D154 取代 D142 的单键立即执行)
