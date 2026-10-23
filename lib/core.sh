@@ -83,7 +83,7 @@ _core_logical() {
     printf '%s' "$1"
 }
 
-_core_file_size() { wc -c < "$1" 2>/dev/null | tr -d ' '; }
+_core_file_size() { { wc -c < "$1"; } 2>/dev/null | tr -d ' '; }
 
 # ---- 文件类型识别 ----
 
@@ -341,16 +341,16 @@ core_svc_alive() { # 服务名
 }
 
 # 进程命令行的 argv 第一项与完整命令行 (NUL 换成空格)
-_core_cmdline() { tr '\0' ' ' < "$(env_path "/proc/$1/cmdline")" 2>/dev/null; }
+_core_cmdline() { { tr '\0' ' ' < "$(env_path "/proc/$1/cmdline")"; } 2>/dev/null; }
 
 # argv 中是否有一个元素恰好等于 PATH
 _core_argv_has() {
-    tr '\0' '\n' < "$(env_path "/proc/$1/cmdline")" 2>/dev/null | grep -Fxq -- "$2"
+    { tr '\0' '\n' < "$(env_path "/proc/$1/cmdline")"; } 2>/dev/null | grep -Fxq -- "$2"
 }
 
 _core_argv0_base() {
     local _a
-    _a=$(tr '\0' '\n' < "$(env_path "/proc/$1/cmdline")" 2>/dev/null | head -n 1)
+    _a=$({ tr '\0' '\n' < "$(env_path "/proc/$1/cmdline")"; } 2>/dev/null | head -n 1)
     printf '%s' "${_a##*/}"
 }
 

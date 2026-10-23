@@ -41,7 +41,7 @@ _lm_orig() { printf '%s/lowmem.orig' "$(state_var)"; }
 _lm_rc() { _snell_run rc-service "$LM_SVC" "$1"; }
 
 # 结构化事件: 只有设置了 LM_EVENTS_FILE (TUI 的结果页) 才写, 每行 "事件码|说明", 命令行输出不受影响
-_lm_ev() { [ -z "${LM_EVENTS_FILE:-}" ] || printf '%s|%s\n' "$1" "$2" >> "$LM_EVENTS_FILE" 2>/dev/null; return 0; }
+_lm_ev() { [ -z "${LM_EVENTS_FILE:-}" ] || { printf '%s|%s\n' "$1" "$2" >> "$LM_EVENTS_FILE"; } 2>/dev/null; return 0; }
 
 _lm_mib() { printf '%s MiB' "$(($1 / 1048576))"; }
 
@@ -174,10 +174,10 @@ _lm_ssh_procs() {
     for _p in "$(env_path /proc)"/[0-9]*; do
         [ -r "$_p/comm" ] || continue
         _c=
-        IFS= read -r _c < "$_p/comm" 2>/dev/null || continue
+        { IFS= read -r _c < "$_p/comm"; } 2>/dev/null || continue
         case $_c in sshd|sshd-session|sshd-auth) ;; *) continue ;; esac
         _a=
-        IFS= read -r _a < "$_p/oom_score_adj" 2>/dev/null || continue
+        { IFS= read -r _a < "$_p/oom_score_adj"; } 2>/dev/null || continue
         printf '%s %s %s\n' "${_p##*/}" "$_a" "$_c"
     done
 }
@@ -187,15 +187,15 @@ _lm_ssh_procs() {
 _lm_snell_procs() {
     local _sup _c _p _l _rest _pl _set _i _e _pid _pp _a
     _sup=
-    IFS= read -r _sup < "$(env_path /run/snell.pid)" 2>/dev/null || return 0
+    { IFS= read -r _sup < "$(env_path /run/snell.pid)"; } 2>/dev/null || return 0
     case $_sup in ''|*[!0-9]*) return 0 ;; esac
     _c=
-    IFS= read -r _c < "$(env_path "/proc/$_sup/comm")" 2>/dev/null || return 0
+    { IFS= read -r _c < "$(env_path "/proc/$_sup/comm")"; } 2>/dev/null || return 0
     case $_c in supervise-daemo*) ;; *) return 0 ;; esac
     _pl=
     for _p in "$(env_path /proc)"/[0-9]*; do
         _l=
-        IFS= read -r _l < "$_p/stat" 2>/dev/null || continue
+        { IFS= read -r _l < "$_p/stat"; } 2>/dev/null || continue
         _rest=${_l##*) }
         # shellcheck disable=SC2086
         set -- $_rest
@@ -214,10 +214,10 @@ _lm_snell_procs() {
     for _pid in $_set; do
         [ "$_pid" != "$_sup" ] || continue
         _c=
-        IFS= read -r _c < "$(env_path "/proc/$_pid/comm")" 2>/dev/null || continue
+        { IFS= read -r _c < "$(env_path "/proc/$_pid/comm")"; } 2>/dev/null || continue
         case $_c in sshd|sshd-session|sshd-auth|supervise-daemo*) continue ;; esac
         _a=
-        IFS= read -r _a < "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null || continue
+        { IFS= read -r _a < "$(env_path "/proc/$_pid/oom_score_adj")"; } 2>/dev/null || continue
         printf '%s %s %s\n' "$_pid" "$_a" "$_c"
     done
 }
@@ -458,7 +458,7 @@ _lm_snell_apply_now() {
     while read -r _pid _adj _c; do
         [ -n "$_pid" ] || continue
         [ "$_adj" -lt "$LM_SNELL_ADJ" ] 2>/dev/null || continue
-        if printf '%s\n' "$LM_SNELL_ADJ" > "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null; then
+        if { printf '%s\n' "$LM_SNELL_ADJ" > "$(env_path "/proc/$_pid/oom_score_adj")"; } 2>/dev/null; then
             printf '%s %s %s\n' "$_pid" "$_adj" "$_c" >> "$(env_path "$LM_RUN/snell.adj")"
         fi
     done <<EOF
@@ -486,7 +486,7 @@ _lm_ssh_apply_now() {
     while read -r _pid _adj _c; do
         [ -n "$_pid" ] || continue
         [ "$_adj" -gt "$LM_SSH_ADJ" ] 2>/dev/null || continue
-        if printf '%s\n' "$LM_SSH_ADJ" > "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null; then
+        if { printf '%s\n' "$LM_SSH_ADJ" > "$(env_path "/proc/$_pid/oom_score_adj")"; } 2>/dev/null; then
             printf '%s %s %s\n' "$_pid" "$_adj" "$_c" >> "$(env_path "$LM_RUN/ssh.adj")"
         fi
     done <<EOF
@@ -785,11 +785,11 @@ lowmem_disable() {
             [ -n "$_pid" ] || continue
             [ -r "$(env_path "/proc/$_pid/comm")" ] || continue
             _o=
-            IFS= read -r _o < "$(env_path "/proc/$_pid/comm")" 2>/dev/null
+            { IFS= read -r _o < "$(env_path "/proc/$_pid/comm")"; } 2>/dev/null
             [ "$_o" = "$_comm" ] || continue
-            IFS= read -r _t < "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null
+            { IFS= read -r _t < "$(env_path "/proc/$_pid/oom_score_adj")"; } 2>/dev/null
             [ "$_t" = "$(_lm_cget ssh_adj)" ] || continue
-            printf '%s\n' "$_adj" > "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null && _c=$((_c + 1))
+            { printf '%s\n' "$_adj" > "$(env_path "/proc/$_pid/oom_score_adj")"; } 2>/dev/null && _c=$((_c + 1))
         done < "$_f"
         if [ "$_c" -gt 0 ]; then
             printf '  SSH 保护：已把 %s 个进程的 oom_score_adj 恢复为原值\n' "$_c"
@@ -810,11 +810,11 @@ lowmem_disable() {
         while read -r _pid _adj _comm; do
             [ -n "$_pid" ] || continue
             _o=
-            IFS= read -r _o < "$(env_path "/proc/$_pid/comm")" 2>/dev/null || continue
+            { IFS= read -r _o < "$(env_path "/proc/$_pid/comm")"; } 2>/dev/null || continue
             [ "$_o" = "$_comm" ] || continue
-            IFS= read -r _t < "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null
+            { IFS= read -r _t < "$(env_path "/proc/$_pid/oom_score_adj")"; } 2>/dev/null
             [ "$_t" = "$(_lm_cget snell_adj)" ] || continue
-            if printf '%s\n' "$_adj" > "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null; then _c=$((_c + 1)); else _k=$((_k + 1)); fi
+            if { printf '%s\n' "$_adj" > "$(env_path "/proc/$_pid/oom_score_adj")"; } 2>/dev/null; then _c=$((_c + 1)); else _k=$((_k + 1)); fi
         done < "$_f"
         printf '  Snell 优先牺牲：已把 %s 个进程的 oom_score_adj 恢复为原值%s\n' "$_c" "$([ "$_k" -eq 0 ] || printf '，%s 个因权限无法降低，需在 Snell 下次重启后恢复' "$_k")"
         _lm_ev sac-restored "$_c $_k"
@@ -873,7 +873,7 @@ _lm_log_size() {
     local _f
     _f=$(env_path "$LM_LOG")
     [ -f "$_f" ] || { printf '0'; return 0; }
-    wc -c < "$_f" 2>/dev/null | tr -d ' '
+    { wc -c < "$_f"; } 2>/dev/null | tr -d ' '
 }
 
 # 输出一个模块的一行: 名称：状态

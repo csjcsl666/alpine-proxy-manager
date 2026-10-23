@@ -84,7 +84,20 @@ assert_not_contains "非 root lowmem: 不说无特权容器" "$out" "无特权�
 assert_not_contains "非 root lowmem: 不说只读" "$out" "（只读）"
 assert_contains "非 root lowmem: 作用范围写需要 root" "$out" "是否与宿主机共享：需要 root 才能判断"
 assert_contains "非 root lowmem: 保护状态写需要 root" "$out" "保护状态：需要 root 才能判断"
-assert_eq "非 root lowmem: 没有 stderr 噪声 (/proc/1/environ)" "" "$(NR lowmem status 2>&1 >/dev/null | grep -c 'environ' | sed 's/^0$//')"
+# 只取 stderr: 读不到的 /proc 项 文件消失 PID 1 的环境变量 都不能在页面上打出 shell 的报错
+NRE() {
+    if [ "$AS_ROOT" = 1 ]; then
+        su -s /bin/sh nobody -c "APM_SYSROOT='$A' APM_FAKE_RC_DIR='$K' APM_EUID=65534 APM_FAKE_NOROOT=1 APM_TUI_ANSI=0 LC_ALL=$LC_ALL APM_HOME='$T_ROOT' sh '$PM' $* 2>&1 >/dev/null"
+    else
+        ( APM_EUID=1000; APM_FAKE_NOROOT=1; export APM_EUID APM_FAKE_NOROOT; sh "$PM" "$@" 2>&1 >/dev/null )
+    fi
+}
+# 一个刚退出的进程: 目录还在, comm 等文件已经没有了 (扫描 /proc 时的真实竞争)
+mkdir -p "$A/proc/31999"
+for c in status "snell status" "sing-box status" "lowmem status" "lowmem detail" doctor; do
+    # shellcheck disable=SC2086
+    assert_eq "非 root: $c 没有 stderr" "" "$(NRE $c)"
+done
 
 printf '== TUI (管道)\n'
 if [ "$AS_ROOT" = 1 ]; then

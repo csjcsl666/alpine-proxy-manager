@@ -77,7 +77,7 @@ first_line() { # 文件 -> V
 
 LOGSZ=0
 log_line() {
-    printf '%s\n' "$1" >> "$LOG" 2>/dev/null || return 0
+    { printf '%s\n' "$1" >> "$LOG"; } 2>/dev/null || return 0
     LOGSZ=$((LOGSZ + ${#1} + 1))
     if [ "$LOGSZ" -gt "$LOGMAX" ]; then
         # 只保留一个旧文件, 总上限约 1 MiB
@@ -175,12 +175,12 @@ ssh_protect() {
     local _p _c _a
     for _p in "$R"/proc/[0-9]*; do
         [ -r "$_p/comm" ] || continue
-        IFS= read -r _c < "$_p/comm" 2>/dev/null || continue
+        { IFS= read -r _c < "$_p/comm"; } 2>/dev/null || continue
         case $_c in sshd|sshd-session|sshd-auth) ;; *) continue ;; esac
-        IFS= read -r _a < "$_p/oom_score_adj" 2>/dev/null || continue
+        { IFS= read -r _a < "$_p/oom_score_adj"; } 2>/dev/null || continue
         _is_uint "${_a#-}" || continue
         [ "$_a" -gt "$SSH_ADJ" ] || continue
-        if printf '%s\n' "$SSH_ADJ" > "$_p/oom_score_adj" 2>/dev/null; then
+        if { printf '%s\n' "$SSH_ADJ" > "$_p/oom_score_adj"; } 2>/dev/null; then
             printf '%s %s %s\n' "${_p##*/}" "$_a" "$_c" >> "$RUN/ssh.adj"
         fi
     done
@@ -222,7 +222,7 @@ snell_sacrifice() {
         _a=$V
         _is_uint "${_a#-}" || continue
         [ "$_a" -lt "$SNELL_ADJ" ] || continue
-        if printf '%s\n' "$SNELL_ADJ" > "$R/proc/$_pid/oom_score_adj" 2>/dev/null; then
+        if { printf '%s\n' "$SNELL_ADJ" > "$R/proc/$_pid/oom_score_adj"; } 2>/dev/null; then
             printf '%s %s %s\n' "$_pid" "$_a" "$_c" >> "$RUN/snell.adj"
         fi
     done
@@ -264,7 +264,7 @@ main() {
     find_cg || CG=
     if [ -f "$LOG" ]; then
         # shellcheck disable=SC2034
-        LOGSZ=$(wc -c < "$LOG" 2>/dev/null)
+        LOGSZ=$({ wc -c < "$LOG"; } 2>/dev/null)
         _is_uint "$LOGSZ" || LOGSZ=0
     fi
     : > "$RUN/ssh.adj" 2>/dev/null

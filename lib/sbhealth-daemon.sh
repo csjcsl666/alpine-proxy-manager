@@ -24,7 +24,7 @@ _sbh_reap_stale() {
     [ -f "$SBH_RUN/children" ] || return 0
     while read -r _p; do
         case $_p in ''|*[!0-9]*) continue ;; esac
-        _c=$(tr '\0' ' ' < "/proc/$_p/cmdline" 2>/dev/null) || continue
+        _c=$({ tr '\0' ' ' < "/proc/$_p/cmdline"; } 2>/dev/null) || continue
         case $_c in *sbhealth.awk*|"nc $SBH_API_HOST "*|sleep*) kill "$_p" 2>/dev/null ;; esac
     done < "$SBH_RUN/children"
     rm -f -- "$SBH_RUN/children"

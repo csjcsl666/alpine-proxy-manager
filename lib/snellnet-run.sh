@@ -34,14 +34,14 @@ pid_with_arg() { # STR
     for _d in /proc/[0-9]*; do
         _p=${_d#/proc/}
         [ "$_p" = "$$" ] && continue
-        tr '\0' '\n' < "$_d/cmdline" 2>/dev/null | grep -Fxq -- "$1" && { echo "$_p"; return 0; }
+        { tr '\0' '\n' < "$_d/cmdline"; } 2>/dev/null | grep -Fxq -- "$1" && { echo "$_p"; return 0; }
     done
     return 1
 }
 
 # 记录的 PID 是否仍是我们的进程 (命令行里有预期的参数), 防止 PID 被复用后误杀
 owned() { # PID ARG
-    alive "$1" && tr '\0' '\n' < "/proc/$1/cmdline" 2>/dev/null | grep -Fxq -- "$2"
+    alive "$1" && { tr '\0' '\n' < "/proc/$1/cmdline"; } 2>/dev/null | grep -Fxq -- "$2"
 }
 
 term() { # PID ARG
