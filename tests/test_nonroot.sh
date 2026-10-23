@@ -89,6 +89,8 @@ NRE() {
     if [ "$AS_ROOT" = 1 ]; then
         su -s /bin/sh nobody -c "APM_SYSROOT='$A' APM_FAKE_RC_DIR='$K' APM_EUID=65534 APM_FAKE_NOROOT=1 APM_TUI_ANSI=0 LC_ALL=$LC_ALL APM_HOME='$T_ROOT' sh '$PM' $* 2>&1 >/dev/null"
     else
+        # 先把 stderr 指到原来的 stdout, 再丢弃 stdout: 只留下 stderr (有意的顺序)
+        # shellcheck disable=SC2069
         ( APM_EUID=1000; APM_FAKE_NOROOT=1; export APM_EUID APM_FAKE_NOROOT; sh "$PM" "$@" 2>&1 >/dev/null )
     fi
 }

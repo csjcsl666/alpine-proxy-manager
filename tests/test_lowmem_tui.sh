@@ -254,6 +254,7 @@ printf '== 恢复: OpenRC 停止失败时不删除管理入口, 不恢复任何�
 mk_sys d4
 V _tui_lm_enable >/dev/null
 cp "$A/sbin/rc-service" "$A/sbin/rc-service.ok"
+# shellcheck disable=SC2016
 sed -i 's/^    stop) rm -f "\$r\/.svc-running" ;;/    stop) exit 1 ;;/' "$A/sbin/rc-service"
 out=$(V _tui_lm_disable)
 assert_contains "停止失败: 页面如实说明" "$out" "! 无法停止 OpenRC 服务 apm-lowmem，常驻进程仍在运行"
