@@ -193,6 +193,17 @@ OUT=$(gw export secret 99 2>&1)
 assert_eq "export secret 不存在的 listener" 2 "$?"
 
 # ---- listener 管理 ----
+# --bind 校验: 方括号里必须是合法 IPv6, 错误在写入转发线路记录与启动服务之前发现
+for _b in '[zzz]' '[]' '[::]]' '[1:2:3]' 'zzz' '::'; do
+    _before=$(snap)
+    OUT=$(printf '%s\n' "$SOCKSPW" | gw listener add --port 30009 --bind "$_b" --socks-server 192.0.2.1 --socks-port 1080 --socks-username u --socks-password-stdin 2>&1)
+    assert_eq "--bind $_b 被拒绝" 2 "$?"
+    assert_contains "--bind $_b 提示" "$OUT" "监听地址无效"
+    assert_eq "--bind $_b 没有任何改动" "$_before" "$(snap)"
+done
+for _b in '0.0.0.0:30009' '[::]:30009' '[::1]:30009' '[2001:db8::5]:30009' '[2001:DB8::5]:30009' '127.0.0.1:30009'; do
+    assert_eq "合法监听 $_b" 0 "$(_agw_listen_ok "$_b"; echo $?)"
+done
 OUT=$(printf '%s\n' "$SOCKSPW" | gw listener add --port 30002 --socks-server 2001:db8::1 --socks-port 1081 --socks-username u2 --socks-password-stdin 2>&1)
 assert_eq "add 第二个 listener" 0 "$?"
 assert_contains "重启并验证" "$OUT" "已重启并验证"

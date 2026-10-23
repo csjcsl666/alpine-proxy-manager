@@ -67,7 +67,8 @@ _agw_listen_ok() {
     _h=${1%:*}
     _snell_valid_port "$_p" || return 1
     case $_h in
-        \[*\]) _sb_valid_ipv6_dest "${_h#\[}" 2>/dev/null || [ -n "${_h#\[}" ] ;;
+        # 去掉一对方括号后必须是合法 IPv6; 原来只去掉左括号, 校验必然失败又被 || 放行, 任何方括号内容都会被接受
+        \[*\]) _h=${_h#\[}; _h=${_h%\]}; [ -n "$_h" ] && _sb_valid_ipv6_dest "$(printf '%s' "$_h" | tr A-F a-f)" >/dev/null 2>&1 ;;
         *) _sb_valid_ipv4_dest "$_h" ;;
     esac
 }
