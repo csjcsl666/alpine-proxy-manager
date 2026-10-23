@@ -676,7 +676,13 @@ _tui_core_kind() {
     case $CF_INSTALLED in
         no) TUI_CK=none ;;
         unverified) TUI_CK=unverified ;;
-        *) if [ "$CF_DEPLOYMENT" = managed ]; then TUI_CK=managed; else TUI_CK=external; fi ;;
+        *)
+            case $CF_DEPLOYMENT in
+                managed) TUI_CK=managed ;;
+                denied) TUI_CK=denied ;;
+                *) TUI_CK=external ;;
+            esac
+            ;;
     esac
 }
 
@@ -696,6 +702,7 @@ _tui_core_line() { # key
     case $TUI_CK in
         managed) printf '  已接管' ;;
         external) printf '  现有部署，未接管' ;;
+        denied) printf '  需要 root 才能判断归属' ;;
         unverified) printf '  未确认' ;;
     esac
     printf '\n'
@@ -810,8 +817,7 @@ _tui_lm_collect() {
     lm_plan_ssh
     lm_plan_forensics
     lm_plan_sac
-    LMT_EN=no
-    lm_enabled && LMT_EN=yes
+    LMT_EN=$(lm_enabled_state)
     _c_tcp=$(_lm_cget tcp); _c_ssh=$(_lm_cget ssh); _c_for=$(_lm_cget forensics); _c_sac=$(_lm_cget snell_sac)
     LMT_DAEMON=no
     _lm_daemon_running && LMT_DAEMON=yes
@@ -834,6 +840,7 @@ _tui_lm_collect() {
             fine) LMT_TCP_S=fine; LMT_TCP_T="无需调整（缓冲上限合理）" ;;
             unconfirmed) LMT_TCP_S=na; LMT_TCP_T="未启用（作用范围未确认，不自动修改）" ;;
             unknown) LMT_TCP_S=na; LMT_TCP_T="无法判断（内存上限或参数格式未知）" ;;
+            noroot) LMT_TCP_S=noroot; LMT_TCP_T="需要 root 才能判断" ;;
             *)
                 LMT_TCP_S=na
                 case $LM_P_TCP_NOTE in
@@ -870,6 +877,7 @@ EOF
         case $LM_P_SSH in
             plan) LMT_SSH_S=avail; LMT_SSH_T="可启用（把 sshd 的 oom_score_adj 降到 $LM_SSH_ADJ）" ;;
             fine) LMT_SSH_S=fine; LMT_SSH_T="可启用（sshd 的 oom_score_adj 已不高于 $LM_SSH_ADJ）" ;;
+            noroot) LMT_SSH_S=noroot; LMT_SSH_T="需要 root 才能判断" ;;
             *)
                 LMT_SSH_S=na
                 case $LM_P_SSH_NOTE in
@@ -940,6 +948,7 @@ EOF
 
 # 一句话总结, 统计口径写明: 配置项 = 设置文件里启用的机制; 生效项 = 实时检测确认生效
 _tui_lm_headline() {
+    if [ "$LMT_EN" = denied ]; then printf '需要 root 才能判断（当前用户无权读取设置）'; return 0; fi
     if [ "$LMT_EN" != yes ]; then printf '未启用'; return 0; fi
     if [ "$LMT_CONF" -eq 0 ]; then printf '已启用，但没有任何机制可用（见下）'; return 0; fi
     printf '已启用（配置 %s 项，生效 %s 项' "$LMT_CONF" "$LMT_OK"
@@ -1028,6 +1037,7 @@ _tui_lm_detail() {
     printf '  内存上限：%s（%s）\n' "$(_lm_mib "$LM_LIMIT")" "$(_lm_limit_src_text)"
     printf '  cgroup：%s%s\n' "${LM_CG_VER:-未知}" "$([ -z "$LM_CG_DIR" ] || printf '，%s' "${LM_CG_DIR#"${APM_SYSROOT:-}"}")"
     case $LM_NS_SCOPE in
+        noroot) printf '  网络命名空间：是否与宿主机共享需要 root 才能判断\n  判断依据：直接证据是能否写网络参数，当前用户本来就不能写\n' ;;
         own) printf '  网络命名空间：与宿主机不共享\n  判断依据：本进程在子用户命名空间里，并且能写网络参数\n' ;;
         *) printf '  网络命名空间：是否与宿主机共享未确认\n  判断依据：没有直接证据，不用容器标记推断\n' ;;
     esac
@@ -1500,7 +1510,11 @@ tui_lowmem_menu() {
         _tui_header "Snell · 网络与进程保护（低内存环境）"
         _tui_do _tui_lm_home
         printf '\n'
-        if lm_enabled; then _t="off|停用保护并恢复设置"; else _t="on|启用保护（自动检测，只调整需要调整的项目）"; fi
+        case $(lm_enabled_state) in
+            yes) _t="off|停用保护并恢复设置" ;;
+            denied) _t="on|启用或停用保护（需要 root）" ;;
+            *) _t="on|启用保护（自动检测，只调整需要调整的项目）" ;;
+        esac
         _items="detail|查看保护详情
 log|查看取证记录
 adv|高级保护选项
@@ -1931,6 +1945,7 @@ tui_snell_menu() {
             none) printf '管理：未安装\n' ;;
             unverified) printf '管理：未确认\n'; _tui_warn "检测到名为 snell 的入口，但它不是已确认的 ELF，拒绝写操作" ;;
             external) printf '管理：现有部署，未接管\n'; printf '本项目不会修改现有部署，只提供只读信息\n' ;;
+            denied) printf '管理：需要 root 才能判断（当前用户无权读取 Manager 元数据）\n' ;;
             managed)
                 printf '管理：已接管\n'
                 printf '版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
@@ -1944,7 +1959,7 @@ tui_snell_menu() {
         case $TUI_CK in
             none) _items="install|安装 Snell" ;;
             unverified) _items="info|查看详细信息" ;;
-            external) _items="info|查看详细信息
+            external|denied) _items="info|查看详细信息
 log|查看日志" ;;
             managed)
                 _items="info|查看详细信息"
@@ -2156,6 +2171,7 @@ tui_anytlsgw_menu() {
             none) printf '管理：未安装\n' ;;
             unverified) printf '管理：未确认\n'; _tui_warn "检测到名为 anytls-socks-gateway 的入口，但它不是已确认的 ELF，拒绝写操作" ;;
             external) printf '管理：现有部署，未接管\n'; printf '本项目不会修改现有部署，只提供只读信息\n' ;;
+            denied) printf '管理：需要 root 才能判断（当前用户无权读取 Manager 元数据）\n' ;;
             managed)
                 printf '管理：已接管\n'
                 printf '版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
@@ -2167,7 +2183,7 @@ tui_anytlsgw_menu() {
         case $TUI_CK in
             none) _items="install|安装 AnyTLS Gateway" ;;
             unverified) _items="info|查看详细信息" ;;
-            external) _items="info|查看详细信息
+            external|denied) _items="info|查看详细信息
 log|查看日志" ;;
             managed)
                 _items="info|查看详细信息"
@@ -2337,6 +2353,7 @@ tui_singbox_menu() {
             none) printf '管理：未安装\n' ;;
             unverified) printf '管理：未确认\n'; _tui_warn "检测到名为 sing-box 的入口，但它不是已确认的 ELF，拒绝写操作" ;;
             external) printf '管理：现有部署，未接管\n'; printf '本项目不会修改现有部署，只提供只读信息\n' ;;
+            denied) printf '管理：需要 root 才能判断（当前用户无权读取 Manager 元数据）\n' ;;
             managed)
                 printf '管理：已接管\n'
                 printf '版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
@@ -2356,7 +2373,7 @@ tui_singbox_menu() {
         case $TUI_CK in
             none) _items="install|安装 sing-box" ;;
             unverified) _items="info|诊断详情" ;;
-            external) _items="info|诊断详情
+            external|denied) _items="info|诊断详情
 log|查看日志" ;;
             managed)
                 _items=
@@ -2413,6 +2430,7 @@ _tui_sb_managed() {
     case $TUI_CK in
         none) printf 'sing-box 尚未安装，请先在 sing-box 菜单中安装\n' ;;
         external) printf 'sing-box 是现有部署，未接管，本项目不会修改它\n' ;;
+        denied) printf '需要 root 才能判断 sing-box 的归属，TUI 不会自动 sudo\n' ;;
         *) printf 'sing-box 状态未确认，拒绝写操作\n' ;;
     esac
     _tui_wait

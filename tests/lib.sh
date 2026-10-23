@@ -371,6 +371,8 @@ do_start() {
 }
 case $act in
     status)
+        # 真实 OpenRC 在非 root 下读不到服务依赖的配置时不给状态, 直接报错退出
+        if [ -e "$K/noroot_status" ] && [ "$(id -u)" != 0 -o -n "${APM_FAKE_NOROOT:-}" ]; then echo " * $svc: \`/etc/$svc/config' is not readable" >&2; exit 1; fi
         st=$(state)
         echo " * status: $st"
         case $st in started) exit 0 ;; crashed) exit 32 ;; *) exit 3 ;; esac

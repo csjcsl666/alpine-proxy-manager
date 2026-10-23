@@ -276,6 +276,17 @@ rm -f "$A/.svc-running"
 out=$(V _tui_lm_home)
 assert_contains "常驻进程停止: 取证标 ! 未运行" "$out" "! 内存取证：未运行"
 
+printf '== 查询不写系统: 状态 首页 详情 取证 高级页前后整个系统文件树不变\n'
+mk_sys q1
+V _tui_lm_enable >/dev/null
+sleep 1
+before=$(cd "$A" && find . -path ./.rc.log -prune -o -type f -print | sort | xargs stat -c '%n %s %Y'; cat "$A/proc/sys/net/ipv4/tcp_rmem" "$A/proc/sys/net/ipv4/tcp_wmem")
+lm status >/dev/null; lm detail >/dev/null
+for f in _tui_lm_home _tui_lm_detail _tui_lm_forensics_summary _tui_lm_adv_info; do V "$f" >/dev/null; done
+after=$(cd "$A" && find . -path ./.rc.log -prune -o -type f -print | sort | xargs stat -c '%n %s %Y'; cat "$A/proc/sys/net/ipv4/tcp_rmem" "$A/proc/sys/net/ipv4/tcp_wmem")
+assert_eq "查询前后文件 大小 时间 与 TCP 参数都不变" "$before" "$after"
+assert_eq "可写检查不含任何写入 (源码里没有重定向写入)" 0 "$(sed -n '/^_lm_tcp_writable()/,/^}/p' "$T_ROOT/lib/lowmem.sh" | grep -c '> *"')"
+
 # ============ 6. 详情页 ============
 printf '== 详情页: 五个分组\n'
 mk_sys t1
@@ -552,6 +563,8 @@ APM_TUI_ANSI=1
 LC_ALL=en_US.UTF-8
 TMPDIR=$TD
 export APM_SYSROOT APM_EUID APM_HOME APM_TUI_ANSI LC_ALL TMPDIR
+# 驱动脚本自己捕获 INT (不是忽略, 子进程仍按默认处理), 否则 BusyBox ash 会随 Ctrl-C 一起退出, 后面的 stty 记录就跑不到
+trap 'true' INT
 sh $T_ROOT/bin/proxy-manager tui
 stty -a > $T_TMP/stty.after 2>&1
 sleep 30
@@ -567,7 +580,8 @@ EOD
     rm -f "$T_TMP/stty.after"
     key C-c; _w=0; while [ "$_w" -lt 50 ] && [ ! -s "$T_TMP/stty.after" ]; do sleep 0.2; _w=$((_w + 1)); done
     assert_eq "Ctrl-C 后临时目录已删除" 0 "$(ls -d "$TD"/apm-lmlog.* 2>/dev/null | wc -l | tr -d ' ')"
-    assert_contains "Ctrl-C 后终端回显已恢复" "$(cat "$T_TMP/stty.after" 2>/dev/null)" " echo"
+    grep -o "[-]*echo[a-z]*\|[-]*icanon" "$T_TMP/stty.after" 2>/dev/null | tr "\n" " " > "$T_TMP/stty.flags"; true
+    assert_contains "Ctrl-C 后终端回显已恢复" " $(cat "$T_TMP/stty.flags" 2>/dev/null)" " echo "
     assert_not_contains "Ctrl-C 后终端不再停在原始模式" "$(cat "$T_TMP/stty.after" 2>/dev/null)" "-icanon"
     tmux kill-session -t "$S" 2>/dev/null
     start2

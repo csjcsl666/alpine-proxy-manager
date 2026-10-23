@@ -298,11 +298,11 @@ _core_service_state() {
         _r=$?
         _st=$(printf '%s\n' "$_out" | sed -n 's/.*status:[[:space:]]*\([a-z]*\).*/\1/p' | head -n 1)
         case $_st in
-            started|stopped|crashed) CF_SERVICE_STATE=$_st ;;
-            *) if [ "$_r" -eq 0 ]; then CF_SERVICE_STATE=started; else CF_SERVICE_STATE=stopped; fi ;;
+            started|stopped|crashed) CF_SERVICE_STATE=$_st; CF_SERVICE_SOURCE=rc-service; return 0 ;;
         esac
-        CF_SERVICE_SOURCE=rc-service
-        return 0
+        if [ "$_r" -eq 0 ]; then CF_SERVICE_STATE=started; CF_SERVICE_SOURCE=rc-service; return 0; fi
+        # 没有给出状态又失败 (例如非 root 读不到服务依赖的配置): 不能当成已停止, 改看 OpenRC 状态文件, 再没有就按进程判断
+        CF_SERVICE_STATE=unknown
     fi
     if [ -d "$(env_path /run/openrc)" ]; then
         if [ -e "$(env_path "/run/openrc/started/$CF_SERVICE")" ] || [ -L "$(env_path "/run/openrc/started/$CF_SERVICE")" ]; then
@@ -318,6 +318,16 @@ _core_service_state() {
 # ---- 进程 ----
 
 _core_pid_alive() { [ -d "$(env_path "/proc/$1")" ]; }
+
+# 非 root 时某一级目录没有进入 (x) 权限, 路径存在与否根本看不到: 这不能当成 不存在
+# 从路径向上找到第一个看得见的目录, 它存在却不能进入就是 权限不足
+_core_denied() { # 路径 (已含 sysroot)
+    local _d
+    env_is_root && return 1
+    _d=$(dirname -- "$1")
+    while [ ! -e "$_d" ] && [ "$_d" != / ] && [ "$_d" != . ]; do _d=$(dirname -- "$_d"); done
+    [ -d "$_d" ] && [ ! -x "$_d" ]
+}
 
 # 受 supervise-daemon 监督的 OpenRC 服务是否仍在运行: rc-service status 说在运行, 或者 pidfile 里的监督进程仍然存活
 # 只认 pidfile 指向的、argv0 是 supervise-daemon 且参数里是该服务名的进程, 不按名字匹配其他进程
@@ -428,7 +438,9 @@ _core_ownership() {
     CF_META_EXACT=
     CF_META_STATE=none
     _f=$(core_meta_file "$1")
-    if [ -e "$_f" ]; then
+    if [ ! -e "$_f" ] && _core_denied "$_f"; then
+        CF_META_STATE=denied
+    elif [ -e "$_f" ]; then
         CF_META_STATE=invalid
         if [ -f "$_f" ] && _core_can_read "$_f" && kv_check_syntax "$_f" 2>/dev/null \
             && [ "$(kv_get "$_f" core)" = "$1" ] && [ -n "$(kv_get "$_f" managed)" ]; then
@@ -452,6 +464,8 @@ _core_ownership() {
     if [ "$CF_INSTALLED" = no ]; then
         CF_MANAGED=no
         CF_DEPLOYMENT=none
+    elif [ "$CF_META_STATE" = denied ]; then
+        CF_DEPLOYMENT=denied
     elif [ "$CF_MANAGED" = yes ]; then
         CF_DEPLOYMENT=managed
     else
@@ -539,6 +553,10 @@ core_discover() {
     if command -v "core_${1}_discover_extra" >/dev/null 2>&1; then
         "core_${1}_discover_extra"
     fi
+    # 服务在运行却读不到进程的 socket (非 root): 监听是 需要 root 才能确认, 不是 没有监听
+    if [ -z "${CF_LISTEN:-}" ] && [ "$CF_STATE" = running ] && [ -n "$CF_PID" ] && ! env_is_root && [ -e "$(env_path "/proc/$CF_PID/fd")" ] && [ ! -r "$(env_path "/proc/$CF_PID/fd")" ]; then
+        CF_LISTEN_ATTRIB=denied
+    fi
 }
 
 core_installed() {
@@ -573,6 +591,7 @@ core_deployment_label() {
     case $1 in
         managed) printf 'Manager 部署' ;;
         external) printf '现有部署' ;;
+        denied) printf '需要 root 才能判断' ;;
         *) printf '-' ;;
     esac
 }
@@ -585,6 +604,7 @@ core_managed_label() {
     case $CF_DEPLOYMENT in
         managed) printf '已接管' ;;
         external) printf '未接管' ;;
+        denied) printf '无权读取 Manager 元数据' ;;
         *) printf '-' ;;
     esac
 }
@@ -711,8 +731,15 @@ core_snell_discover_extra() {
 "
             fi
         else
-            CF_NOTES="${CF_NOTES}配置路径 $CF_CONFIG 不存在
+            if _core_denied "$_fs"; then
+                CF_CONFIG_EXISTS=denied
+                CF_CONFIG_READABLE=no
+                CF_NOTES="${CF_NOTES}配置 $CF_CONFIG 所在目录当前用户无权进入, 配置与监听需要 root 才能确认
 "
+            else
+                CF_NOTES="${CF_NOTES}配置路径 $CF_CONFIG 不存在
+"
+            fi
         fi
     fi
 
@@ -837,8 +864,15 @@ core_singbox_discover_extra() {
             CF_CONFIG_PERM=$(stat -c '%a %U:%G' "$_fs" 2>/dev/null)
             if _core_can_read "$_fs"; then CF_CONFIG_READABLE=yes; else CF_CONFIG_READABLE=no; fi
         else
-            CF_NOTES="${CF_NOTES}配置路径 $CF_CONFIG 不存在
+            if _core_denied "$_fs"; then
+                CF_CONFIG_EXISTS=denied
+                CF_CONFIG_READABLE=no
+                CF_NOTES="${CF_NOTES}配置 $CF_CONFIG 所在目录当前用户无权进入, 配置与监听需要 root 才能确认
 "
+            else
+                CF_NOTES="${CF_NOTES}配置路径 $CF_CONFIG 不存在
+"
+            fi
         fi
     fi
     CF_LOG_OUT_EXISTS=no

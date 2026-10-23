@@ -112,7 +112,9 @@ _lm_uidmap_form() { # identity | userns | unknown
 # 容器标记 (只是辅助信息): PID 1 的 container= 环境变量，/.dockerenv，/run/.containerenv
 _lm_container_marker() {
     local _v
-    _v=$(tr '\0' '\n' < "$(env_path /proc/1/environ)" 2>/dev/null | sed -n 's/^container=//p' | head -n 1)
+    # 非 root 读不到 PID 1 的环境变量, 这时标记是 不可读 而不是 没有
+    [ -r "$(env_path /proc/1/environ)" ] || { printf '不可读'; return 0; }
+    _v=$({ tr '\0' '\n' < "$(env_path /proc/1/environ)"; } 2>/dev/null | sed -n 's/^container=//p' | head -n 1)
     if [ -n "$_v" ]; then printf '%s' "$_v"
     elif [ -e "$(env_path /.dockerenv)" ]; then printf 'docker'
     elif [ -e "$(env_path /run/.containerenv)" ]; then printf 'podman'
@@ -138,7 +140,10 @@ _lm_probe_ns() {
     _id=$(_lm_netns_id)
     LM_NS_ID=$_id
     LM_NS_AUX="容器标记 ${_mk}，uid_map ${_uid}，网络命名空间 ${_id:-不可读}"
-    if [ "$_uid" = userns ] && [ -w "$(_lm_tcp_path rmem)" ] && [ ! -e "$(env_path /.deny-sysctl-write)" ]; then
+    if ! env_is_root; then
+        LM_NS_SCOPE=noroot
+        LM_NS_TEXT="当前网络命名空间；是否与宿主机共享：需要 root 才能判断（直接证据是能否写网络参数，当前用户本来就不能写）"
+    elif [ "$_uid" = userns ] && [ -w "$(_lm_tcp_path rmem)" ] && [ ! -e "$(env_path /.deny-sysctl-write)" ]; then
         LM_NS_SCOPE=own
         LM_NS_TEXT="当前网络命名空间；是否与宿主机共享：不共享（本进程在子用户命名空间里并且能写网络参数，说明该命名空间归本容器所有）"
     else
@@ -156,19 +161,11 @@ _lm_adj_lower_ok() {
     sh -c 'echo -1 > /proc/self/oom_score_adj' 2>/dev/null
 }
 
-# 是否允许写 tcp_rmem/tcp_wmem (root 对只读文件 -w 也为真，所以真实系统上再用 "写回当前值" 试探一次，写入相同的值不改变任何设置)
+# 是否允许写 tcp_rmem/tcp_wmem: 只做不改变任何东西的检查 (access 的 -w, 只读挂载与没有权限都会失败)
+# 状态查询与只读页面绝不写系统参数; root 对个别只读文件 -w 也可能为真, 真正的写入在启用时进行并回读确认 (见 _lm_apply_tcp), 写不进去会如实报告并恢复
 _lm_tcp_writable() {
-    local _k _v
-    if [ -n "${APM_SYSROOT:-}" ]; then
-        [ ! -e "$(env_path /.deny-sysctl-write)" ] && [ -w "$(_lm_tcp_path rmem)" ] && [ -w "$(_lm_tcp_path wmem)" ]
-        return $?
-    fi
-    for _k in rmem wmem; do
-        [ -w "$(_lm_tcp_path "$_k")" ] || return 1
-        _v=$(cat "$(_lm_tcp_path "$_k")" 2>/dev/null)
-        { printf '%s\n' "$_v" > "$(_lm_tcp_path "$_k")"; } 2>/dev/null || return 1
-    done
-    return 0
+    if [ -n "${APM_SYSROOT:-}" ] && [ -e "$(env_path /.deny-sysctl-write)" ]; then return 1; fi
+    [ -w "$(_lm_tcp_path rmem)" ] && [ -w "$(_lm_tcp_path wmem)" ]
 }
 
 # sshd 相关进程: 每行 "pid adj comm"
@@ -305,6 +302,9 @@ lm_plan_tcp() {
     if ! _lm_triplet_ok "$LM_RMEM" || ! _lm_triplet_ok "$LM_WMEM"; then
         LM_P_TCP=unknown; LM_P_TCP_NOTE="读到的 tcp_rmem/tcp_wmem 格式异常，无法判断，不调整"; return 0
     fi
+    if ! env_is_root; then
+        LM_P_TCP=noroot; LM_P_TCP_NOTE="需要 root 才能判断能否调整（当前值 接收 $LM_RMEM，发送 $LM_WMEM）"; return 0
+    fi
     if ! _lm_tcp_writable; then
         LM_P_TCP=na; LM_P_TCP_NOTE="当前环境不允许修改 tcp_rmem/tcp_wmem（只读）"; return 0
     fi
@@ -380,6 +380,11 @@ lm_plan_ssh() {
     if [ "$LM_OOM_GROUP" = 1 ]; then
         LM_P_SSH=na
         LM_P_SSH_NOTE="所在 cgroup 的 memory.oom.group 为 1，OOM 时整个 cgroup 一起终止，调整 oom_score_adj 不起作用"
+        return 0
+    fi
+    if ! env_is_root; then
+        LM_P_SSH=noroot
+        LM_P_SSH_NOTE="需要 root 才能判断能否降低 sshd 的 oom_score_adj（普通用户本来就不能降低）"
         return 0
     fi
     if ! _lm_adj_lower_ok; then
@@ -502,6 +507,15 @@ _lm_begin() {
 _lm_cget() { [ -f "$(_lm_conf)" ] && kv_get "$(_lm_conf)" "$1"; }
 
 lm_enabled() { [ "$(_lm_cget enabled)" = true ]; }
+
+# 启用状态: yes | no | denied (设置文件或所在目录当前用户读不到, 普通用户看不到是否启用, 不能当成 未启用)
+lm_enabled_state() {
+    local _c
+    _c=$(_lm_conf)
+    if [ -e "$_c" ] && [ ! -r "$_c" ]; then printf 'denied'; return 0; fi
+    if [ ! -e "$_c" ] && _core_denied "$_c"; then printf 'denied'; return 0; fi
+    if lm_enabled; then printf 'yes'; else printf 'no'; fi
+}
 
 # 原子写一个 kv 文件 (候选 -> 语法检查 -> 替换), 内容来自标准输入
 _lm_write_kv() { # 目标 权限
@@ -844,7 +858,7 @@ EOF
 # 常驻进程是否在运行
 _lm_daemon_running() {
     _lm_init_ours || return 1
-    _lm_rc status >/dev/null 2>&1
+    core_svc_alive "$LM_SVC"
 }
 
 _lm_log_size() {
@@ -862,8 +876,7 @@ lowmem_status() {
     lm_plan_ssh
     lm_plan_forensics
     lm_plan_sac
-    _en=no
-    lm_enabled && _en=yes
+    _en=$(lm_enabled_state)
     _tcp=$(_lm_cget tcp); _ssh=$(_lm_cget ssh); _for=$(_lm_cget forensics)
     _total=0
     _ok=0
@@ -967,7 +980,9 @@ EOF
             printf '  开机持久化：未生效（OpenRC 服务缺失或没有加入开机启动）\n'
         fi
     fi
-    if [ "$_en" != yes ]; then
+    if [ "$_en" = denied ]; then
+        printf '  保护状态：需要 root 才能判断（当前用户无权读取设置）\n'
+    elif [ "$_en" != yes ]; then
         printf '  保护状态：未启用\n'
     elif [ "$_total" -eq 0 ]; then
         printf '  保护状态：已启用，但没有生效的项目\n'
@@ -1033,5 +1048,9 @@ lowmem_cli() {
 
 # 一行摘要 (状态总览用, 只读文件不探测)
 lowmem_summary() {
-    if lm_enabled; then printf '已启用'; else printf '未启用'; fi
+    case $(lm_enabled_state) in
+        yes) printf '已启用' ;;
+        denied) printf '需要 root 才能判断' ;;
+        *) printf '未启用' ;;
+    esac
 }

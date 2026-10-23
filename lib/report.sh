@@ -246,7 +246,8 @@ _rpt_port_purpose() { # 端口
 _rpt_listeners() {
     local _lines
     if [ -z "$CF_LISTEN" ]; then
-        if [ "$CF_STATE" = running ]; then printf '  监听：服务在运行, 但没有检测到监听端口\n'; else printf '  监听：无 (服务没有运行)\n'; fi
+        if [ "${CF_LISTEN_ATTRIB:-}" = denied ]; then printf '  监听：需要 root 才能确认 (当前用户无权读取服务进程的 socket)\n'
+        elif [ "$CF_STATE" = running ]; then printf '  监听：服务在运行, 但没有检测到监听端口\n'; else printf '  监听：无 (服务没有运行)\n'; fi
         return 0
     fi
     printf '  监听 (服务器内部, 不等于公网映射端口)：\n'
@@ -275,6 +276,7 @@ _rpt_listeners() {
 # 配置文件一行: 路径 权限 (没有找到就说没有找到)
 _rpt_config_line() {
     if [ -z "$CF_CONFIG" ]; then printf '  配置：未找到\n'; return 0; fi
+    if [ "$CF_CONFIG_EXISTS" = denied ]; then printf '  配置：%s (当前用户无权读取, 需要 root)\n' "$CF_CONFIG"; return 0; fi
     if [ "$CF_CONFIG_EXISTS" != yes ]; then printf '  配置：%s (文件不存在)\n' "$CF_CONFIG"; return 0; fi
     printf '  配置：%s%s\n' "$CF_CONFIG" "${CF_CONFIG_PERM:+ (权限 $CF_CONFIG_PERM)}"
 }
