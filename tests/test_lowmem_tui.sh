@@ -481,6 +481,19 @@ EOD
     assert_contains "tmux: 原始记录页" "$(vis)" "取证记录 · 原始记录"
     key Enter; waitfor "查看原始记录"
     assert_contains "tmux: 原始记录读完回车返回取证页" "$(vis)" "Snell · 取证记录"
+    # 多页原始记录: 真实终端里每页都要停住等键, 回车翻页, Esc 结束且不再追加一次暂停 (此前分页的输入接到了 /dev/null)
+    i=0; : > "$A/var/log/apm-lowmem.log"
+    while [ "$i" -lt 60 ]; do beat "$i" $((40000000 + i)) 38 >> "$A/var/log/apm-lowmem.log"; i=$((i + 1)); done
+    pick 1; waitfor "第 1/"
+    sleep 2
+    assert_contains "tmux: 多页原始记录停在第 1 页提示" "$(vis)" "回车下一页，Esc 结束"
+    assert_not_contains "tmux: 分页期间没有自行返回取证菜单" "$(vis)" "只看异常事件相关记录"
+    key Enter; waitfor "第 2/"
+    assert_contains "tmux: 回车翻到第 2 页" "$(vis)" "第 2/"
+    key Escape; waitfor "只看异常事件相关记录"
+    sleep 0.5
+    assert_contains "tmux: Esc 结束分页直接回到取证菜单" "$(vis)" "查看原始记录"
+    assert_not_contains "tmux: Esc 结束分页后没有多余的 按回车返回" "$(vis)" "按回车返回"
     key Escape; waitfor "4. 停用保护并恢复设置"
     assert_contains "tmux: Esc 回到保护首页" "$(vis)" "4. 停用保护并恢复设置"
     pick 3; waitfor "Snell · 高级保护选项"

@@ -1229,6 +1229,14 @@ _tui_lm_rawlog() { # all|events  返回 7 表示用户在分页中按 Esc 结束
     return "$_r"
 }
 
+# 分页要读键盘, 所以不能走 _tui_do (它把标准输入接到 /dev/null, 翻页会立刻读到 EOF): 在子 shell 里直接调用, 保留终端输入
+# 返回 7 表示用户在分页中按 Esc 结束, 不再追加一次 按回车返回
+_tui_lm_view() { # all|events
+    ( _tui_lm_rawlog "$1" )
+    TUI_RC=$?
+    [ "$TUI_RC" = 7 ] || _tui_wait
+}
+
 tui_lm_log_menu() {
     while :; do
         _tui_clear
@@ -1239,8 +1247,8 @@ tui_lm_log_menu() {
 events|只看异常事件相关记录（OOM、进程表、事件后采样）" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            raw) _tui_clear; _tui_header "取证记录 · 原始记录"; _tui_do _tui_lm_rawlog all; [ "$TUI_RC" = 7 ] || _tui_wait ;;
-            events) _tui_clear; _tui_header "取证记录 · 异常事件"; _tui_do _tui_lm_rawlog events; [ "$TUI_RC" = 7 ] || _tui_wait ;;
+            raw) _tui_clear; _tui_header "取证记录 · 原始记录"; _tui_lm_view all ;;
+            events) _tui_clear; _tui_header "取证记录 · 异常事件"; _tui_lm_view events ;;
         esac
         [ "${TUI_EOF:-0}" != 1 ] || return 0
     done
