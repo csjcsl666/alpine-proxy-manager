@@ -54,6 +54,13 @@ assert_eq "kill -9: 负载进程在 2 秒时限后自行退出" yes "$(wait_gone
 # 被杀掉的脚本没有机会回收其中的 sleep 命令 (命令是 sleep 30), 这里替它收尾, 只回收这一个已确认的 PID
 for _p in $(pgrep -P "$LP" 2>/dev/null); do kill -TERM "$_p" 2>/dev/null; done
 
+printf '== cpuload: 固定在一个 CPU 上\n'
+sh "$LOAD" --workers 1 --seconds 30 --pin 0 -- sh -c 'grep -i cpus_allowed_list /proc/self/status' > "$T_TMP/pin.out" 2> "$T_TMP/e6"
+assert_eq "被测命令只允许在指定 CPU 上运行" "Cpus_allowed_list:	0" "$(cat "$T_TMP/pin.out")"
+P=$(pids_of "$T_TMP/e6")
+assert_eq "固定 CPU 时负载进程也都已退出" yes "$(wait_gone "$P" 3 && echo yes || echo no)"
+assert_eq "--pin 超出范围时拒绝" 2 "$(sh "$LOAD" --pin 9999 -- true >/dev/null 2>&1; echo $?)"
+
 printf '== cpuload: 上限写死\n'
 sh "$LOAD" --workers 99 --seconds 9999 -- true 2> "$T_TMP/e5"
 n=$(pids_of "$T_TMP/e5" | wc -w | tr -d ' ')

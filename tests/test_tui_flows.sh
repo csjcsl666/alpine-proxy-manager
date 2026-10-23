@@ -127,8 +127,10 @@ LC_ALL=en_US.UTF-8
 export APM_SYSROOT APM_TUI_ANSI LC_ALL
 exec sh $T_ROOT/bin/proxy-manager tui
 EOD
-    # 等画面稳定下来再发下一个键: 固定睡眠在机器忙的时候来不及渲染, 下一个键就会错位 (在没有任何改动的 v0.9.2 上整机满载时同样大面积失败)
-    # 连续三次轮询 (0.1 秒一次) 画面不变才算稳定, 最多等 8 秒; 键间隔测试 (ptyseq) 本来就要精确控制时间, 不使用它
+    # 真实终端的节奏由画面决定, 不由睡眠决定:
+    #   按键写成 键=期望文字 时, 发完键必须等到期望的页面出现 (最多 15 秒, 超时记一行 PTY 超时 并停止后续按键, 防止按键错位), 再等画面稳定
+    #   没有写期望文字的键 (例如只输入数字) 只等画面稳定: 连续三次轮询 (0.1 秒一次) 不变才算, 最多 8 秒
+    #   键间隔测试 (ptyseq) 本来就要精确控制时间, 不使用它
     settle() {
         _sp=; _sn=0; _st=0
         while [ "$_st" -lt 80 ]; do
@@ -137,36 +139,56 @@ EOD
             if [ "$_sc" = "$_sp" ]; then _sn=$((_sn + 1)); [ "$_sn" -ge 3 ] && break; else _sn=0; _sp=$_sc; fi
         done
     }
-    ptyrun() { # 宽 高 按键...
-        _w=$1; _h=$2; shift 2
+    ptywait() { # 期望文字
+        _pw=0
+        while [ "$_pw" -lt 150 ]; do
+            tmux capture-pane -p -t apmflow$$ 2>/dev/null | grep -qF -- "$1" && return 0
+            sleep 0.1; _pw=$((_pw + 1))
+        done
+        return 1
+    }
+    ptystart() { # 宽 高
         tmux kill-session -t apmflow$$ 2>/dev/null
-        tmux new-session -d -s apmflow$$ -x "$_w" -y "$_h" "sh $DRV" || return 1
-        _i=0
-        while [ "$_i" -lt 50 ] && ! tmux capture-pane -p -t apmflow$$ | grep -q '请选择：'; do sleep 0.1; _i=$((_i + 1)); done
-        sleep 0.5
-        for _k in "$@"; do tmux send-keys -t apmflow$$ -- "$_k"; settle; done
-        sleep 1
+        tmux new-session -d -s apmflow$$ -x "$1" -y "$2" "sh $DRV" || return 1
+        ptywait '请选择：' || return 1
+        settle
+    }
+    ptyrun() { # 宽 高 按键[=期望文字]...
+        _w=$1; _h=$2; shift 2
+        ptystart "$_w" "$_h" || { echo "PTY 超时: 主菜单没有出现"; return 0; }
+        _bad=
+        for _k in "$@"; do
+            _key=${_k%%=*}
+            _exp=
+            case $_k in *=*) _exp=${_k#*=} ;; esac
+            tmux send-keys -t apmflow$$ -- "$_key"
+            if [ -n "$_exp" ]; then
+                ptywait "$_exp" || { _bad="PTY 超时: 按 $_key 后没有出现 [$_exp]"; break; }
+            fi
+            settle
+        done
+        sleep 0.3
         tmux capture-pane -p -S -200 -t apmflow$$
+        [ -z "$_bad" ] || echo "$_bad"
         tmux kill-session -t apmflow$$ 2>/dev/null
     }
-    scr=$(ptyrun 100 40 2 Enter 1 Enter 5 Enter 1 Enter)
+    scr=$(ptyrun 100 40 2 "Enter=管理 AnyTLS-01" 1 "Enter=AnyTLS-01 · AnyTLS" 5 "Enter=客户端配置 · AnyTLS-01" 1 "Enter=按回车返回")
     assert_contains "真实终端 100 列: 每次选择都是数字加 Enter, 2 1 5 1 后看到完整连接信息" "$scr" "密码：$APW"
-    scr=$(ptyrun 50 40 2 Enter 1 Enter 5 Enter 1 Enter)
+    scr=$(ptyrun 50 40 2 "Enter=管理 AnyTLS-01" 1 "Enter=AnyTLS-01 · AnyTLS" 5 "Enter=客户端配置 · AnyTLS-01" 1 "Enter=按回车返回")
     assert_contains "真实终端 50 列: 同样可用" "$scr" "客户端连接信息 AnyTLS-01"
-    scr=$(ptyrun 100 40 2 Enter 1 Enter 5 Enter 2 Enter)
+    scr=$(ptyrun 100 40 2 "Enter=管理 AnyTLS-01" 1 "Enter=AnyTLS-01 · AnyTLS" 5 "Enter=客户端配置 · AnyTLS-01" 2 "Enter=按回车返回")
     assert_contains "真实终端: 同样的流程选 2 得到 JSON" "$scr" '"type": "anytls"'
-    scr=$(ptyrun 100 40 2 Enter 2 Enter 1 Enter)
+    scr=$(ptyrun 100 40 2 "Enter=管理 AnyTLS-01" 2 "Enter=Hysteria2-01 · Hysteria2" 1 "Enter=已禁用")
     assert_contains "真实终端: 三次选择 (数字加 Enter) 禁用实例且没有额外确认" "$scr" "实例 Hysteria2-01 已禁用"
     "$PM" sing-box enable Hysteria2-01 >/dev/null 2>&1
     # 输入可靠性: 数字只进入输入行, Enter 才提交; 粘贴的多行只取第一行, 其余丢弃
-    ptyburst() { # 字面字符串 (一次写入)
-        tmux kill-session -t apmflow$$ 2>/dev/null
-        tmux new-session -d -s apmflow$$ -x 100 -y 40 "sh $DRV" || return 1
-        _i=0
-        while [ "$_i" -lt 50 ] && ! tmux capture-pane -p -t apmflow$$ | grep -q '请选择：'; do sleep 0.1; _i=$((_i + 1)); done
-        sleep 0.5
+    ptyburst() { # 字面字符串 [期望文字]  (一次写入; 有期望文字时等它出现, 再等画面稳定, 之后还有多余的跳转会被截图抓到)
+        ptystart 100 40 || { echo "PTY 超时: 主菜单没有出现"; return 0; }
         tmux send-keys -t apmflow$$ -l -- "$1"
-        sleep 1
+        if [ -n "${2:-}" ]; then ptywait "$2" || echo "PTY 超时: 粘贴后没有出现 [$2]"; fi
+        settle
+        sleep 0.5
+        settle
         tmux capture-pane -p -S -200 -t apmflow$$
         tmux kill-session -t apmflow$$ 2>/dev/null
     }
@@ -175,12 +197,12 @@ EOD
     assert_contains "输入的数字显示在输入行" "$scr" "请选择：2"
     scr=$(ptyrun 100 40 2 BSpace 1)
     assert_contains "Backspace 能删掉输入再改" "$scr" "请选择：1"
-    scr=$(ptyrun 100 40 2 BSpace 2 Enter)
+    scr=$(ptyrun 100 40 2 BSpace 2 "Enter=管理 AnyTLS-01")
     assert_contains "改正后 Enter 进入对应页" "$scr" "管理 AnyTLS-01"
     scr=$(ptyrun 100 40 Enter Enter Enter)
     assert_not_contains "没有输入时 Enter 不执行任何默认项" "$scr" "输入无效"
     assert_eq "没有输入时 Enter 不进入任何菜单" 0 "$(printf '%s\n' "$scr" | grep -c '管理 AnyTLS-01')"
-    scr=$(ptyrun 100 40 9 Enter)
+    scr=$(ptyrun 100 40 9 "Enter=输入无效")
     assert_contains "无效选项给出提示且不执行任何功能" "$scr" "输入无效"
     scr=$(ptyrun 100 40 0)
     assert_not_contains "0 也要 Enter 才返回: 只输入 0 不退出" "$scr" "已退出"
@@ -188,26 +210,26 @@ EOD
     assert_eq "0 加 Enter 退出 (程序结束, 终端会话随之关闭)" "" "$(printf '%s' "$scr" | tr -d ' \n')"
     scr=$(ptyburst 21)
     assert_not_contains "粘贴 21 不带 Enter: 不跳转" "$scr" "管理 AnyTLS-01"
-    scr=$(ptyburst "$(printf '2\n1\n')")
+    scr=$(ptyburst "$(printf '2\n1\n')" "管理 AnyTLS-01")
     assert_contains "粘贴 2 回车 1 回车: 只进入第一个菜单" "$scr" "管理 AnyTLS-01"
     assert_not_contains "粘贴 2 回车 1 回车: 第二行被丢弃, 没有进入实例页" "$scr" "客户端配置 · AnyTLS-01"
     assert_not_contains "粘贴的多行不产生无效输入提示" "$scr" "输入无效"
     # 长粘贴: 超过一次读取 (原来是 256 字节) 的残余不能变成下一个菜单的输入, 其中合法的编号也不能被执行
     for _n in 300 3000; do
         _junk=$(head -c "$_n" /dev/zero | tr '\0' x)
-        scr=$(ptyburst "$(printf '2\n%s\n1\n' "$_junk")")
+        scr=$(ptyburst "$(printf '2\n%s\n1\n' "$_junk")" "管理 AnyTLS-01")
         assert_contains "长粘贴 $_n 字节: 只进入第一个菜单" "$scr" "管理 AnyTLS-01"
         assert_not_contains "长粘贴 $_n 字节: 残余没有产生无效输入提示" "$scr" "输入无效"
         assert_not_contains "长粘贴 $_n 字节: 残余里的 1 没有进入实例页" "$scr" "客户端配置 · AnyTLS-01"
     done
     # 两次分开的粘贴: 第二次在第一次处理完之后到达, 照常作为输入 (清理不会吞掉之后的正常输入)
-    scr=$(ptyrun 100 40 2 Enter 1 Enter)
+    scr=$(ptyrun 100 40 2 "Enter=管理 AnyTLS-01" 1 "Enter=AnyTLS-01 · AnyTLS")
     assert_contains "清理之后的正常输入照常生效" "$scr" "AnyTLS-01 · AnyTLS"
-    scr=$(ptyrun 100 40 Up Down 2 Enter)
+    scr=$(ptyrun 100 40 Up Down 2 "Enter=管理 AnyTLS-01")
     assert_not_contains "方向键: 不产生无效输入提示" "$scr" "输入无效"
     assert_not_contains "方向键: 不进入输入行" "$scr" "请选择：^"
     assert_contains "方向键: 之后的选择照常" "$scr" "管理 AnyTLS-01"
-    scr=$(ptyrun 100 40 2 Enter Escape)
+    scr=$(ptyrun 100 40 2 "Enter=管理 AnyTLS-01" "Escape=6. Manager 管理")
     assert_eq "单独 Esc 等同返回: 回到主菜单, sing-box 页只出现一次" 1 "$(printf '%s\n' "$scr" | grep -c '管理 AnyTLS-01')"
     assert_contains "单独 Esc 返回后仍在主菜单" "$scr" "状态与诊断"
     # 通用: 启动后先执行 PRE 命令 (例如改变窗口尺寸), 再按键, 每个按键之间的等待可指定

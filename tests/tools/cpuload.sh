@@ -1,6 +1,7 @@
 #!/bin/sh
 # 受限的 CPU 负载: 在负载下运行一条命令, 用来验证时间敏感的测试 (真实终端按键 超时 竞态)
-# 用法  cpuload.sh [--workers N] [--seconds S] -- 命令 参数...
+# 用法  cpuload.sh [--workers N] [--seconds S] [--pin CPU] -- 命令 参数...
+#   --pin CPU  负载进程和被测命令都固定在这一个逻辑 CPU 上 (taskset), 只在这一个核上制造竞争, 其余 CPU 和桌面完全不受影响 (推荐)
 #
 # 为什么要有这个脚本: 临时手写的 while :; do :; done 没有退出条件 也没有受控的清理, 一旦清理那一步出错 (例如在 zsh 里 kill $PIDS
 # 不会按空格拆分, kill 报 illegal pid 被 2>/dev/null 吞掉) 空转进程就一直留在开发电脑上
@@ -18,10 +19,12 @@ here=$(cd "$(dirname "$0")" && pwd)
 
 W=1
 S=120
+PIN=
 while [ $# -gt 0 ]; do
     case $1 in
         --workers) W=$2; shift 2 ;;
         --seconds) S=$2; shift 2 ;;
+        --pin) PIN=$2; shift 2 ;;
         --) shift; break ;;
         *) echo "cpuload: 未知参数 $1" >&2; exit 2 ;;
     esac
@@ -37,6 +40,13 @@ CAP=$((CPUS / 4))
 [ "$W" -ge 1 ] || W=1
 if [ "$W" -gt "$CAP" ]; then echo "cpuload: 进程数 $W 超过上限 $CAP, 已降到 $CAP" >&2; W=$CAP; fi
 [ "$S" -ge 1 ] || S=1
+if [ -n "$PIN" ]; then
+    case $PIN in *[!0-9]*) echo "cpuload: --pin 必须是 CPU 编号" >&2; exit 2 ;; esac
+    [ "$PIN" -lt "$CPUS" ] || { echo "cpuload: --pin $PIN 超出范围 (共 $CPUS 个逻辑 CPU)" >&2; exit 2; }
+    command -v taskset >/dev/null 2>&1 || { echo "cpuload: 没有 taskset, 不能 --pin" >&2; exit 2; }
+fi
+PINCMD=
+[ -z "$PIN" ] || PINCMD="taskset -c $PIN"
 if [ "$S" -gt 600 ]; then echo "cpuload: 持续时间 $S 秒超过上限 600, 已降到 600" >&2; S=600; fi
 
 T_REG=$(mktemp -d)
@@ -53,9 +63,11 @@ trap 'cleanup' EXIT
 i=0
 while [ "$i" -lt "$W" ]; do
     if [ "${APM_CPULOAD_IDLE:-0}" = 1 ]; then
-        nice -n 19 timeout "$S" sleep "$S" &
+        # shellcheck disable=SC2086
+        nice -n 19 $PINCMD timeout "$S" sleep "$S" &
     else
-        nice -n 19 timeout "$S" sh -c 'while :; do :; done' &
+        # shellcheck disable=SC2086
+        nice -n 19 $PINCMD timeout "$S" sh -c 'while :; do :; done' &
     fi
     t_own_pid "$!"
     PIDS="$PIDS $!"
@@ -64,7 +76,8 @@ done
 # shellcheck disable=SC2086
 printf 'cpuload: %s 个进程 最长 %s 秒 (PID:%s)\n' "$W" "$S" "$PIDS" >&2
 
-"$@"
+# shellcheck disable=SC2086
+$PINCMD "$@"
 rc=$?
 
 # 先收尾再确认

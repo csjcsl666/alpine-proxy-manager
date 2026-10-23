@@ -505,8 +505,17 @@ EOD
     vis() { tmux capture-pane -p -t "$S"; }
     # 等待屏幕出现某段文字 (最多 15 秒): 操作耗时不固定, 提前发键会被输入丢弃机制清掉, 所以每步先确认画面
     waitfor() { _w=0; while [ "$_w" -lt 150 ] && ! vis | grep -q -- "$1"; do sleep 0.1; _w=$((_w + 1)); done; }
-    pick() { for _k in "$@"; do tmux send-keys -t "$S" -- "$_k"; sleep 0.3; tmux send-keys -t "$S" -- Enter; sleep 0.6; done; }
-    key() { for _k in "$@"; do tmux send-keys -t "$S" -- "$_k"; sleep 0.5; done; }
+    # 发完键等画面稳定 (连续三次轮询不变, 最多 8 秒), 不靠固定睡眠; 每一步之后调用方还要 waitfor 目标页面的特征文字再断言
+    settle() {
+        _sp=; _sn=0; _st=0
+        while [ "$_st" -lt 80 ]; do
+            sleep 0.1; _st=$((_st + 1))
+            _sc=$(tmux capture-pane -p -t "$S" 2>/dev/null | cksum)
+            if [ "$_sc" = "$_sp" ]; then _sn=$((_sn + 1)); [ "$_sn" -ge 3 ] && break; else _sn=0; _sp=$_sc; fi
+        done
+    }
+    pick() { for _k in "$@"; do tmux send-keys -t "$S" -- "$_k"; settle; tmux send-keys -t "$S" -- Enter; settle; done; }
+    key() { for _k in "$@"; do tmux send-keys -t "$S" -- "$_k"; settle; done; }
     for dim in "80 24" "60 30" "100 50"; do
         # shellcheck disable=SC2086
         set -- $dim

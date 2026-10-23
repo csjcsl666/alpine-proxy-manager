@@ -106,9 +106,17 @@ EOD
         while [ "$_i" -lt 50 ] && ! tmux capture-pane -p -t "$S" | grep -q '请选择：'; do sleep 0.1; _i=$((_i + 1)); done
         sleep 0.5
     }
-    keys() { for _k in "$@"; do tmux send-keys -t "$S" -- "$_k"; sleep 0.4; done; }
+    keys() { for _k in "$@"; do tmux send-keys -t "$S" -- "$_k"; settle; done; }
     # 菜单选择: 数字加 Enter (D154); 阅读暂停里的键用 keys 直接发
-    pick() { for _k in "$@"; do tmux send-keys -t "$S" -- "$_k"; sleep 0.3; tmux send-keys -t "$S" -- Enter; sleep 0.4; done; }
+    settle() {
+        _sp=; _sn=0; _st=0
+        while [ "$_st" -lt 80 ]; do
+            sleep 0.1; _st=$((_st + 1))
+            _sc=$(tmux capture-pane -p -t "$S" 2>/dev/null | cksum)
+            if [ "$_sc" = "$_sp" ]; then _sn=$((_sn + 1)); [ "$_sn" -ge 3 ] && break; else _sn=0; _sp=$_sc; fi
+        done
+    }
+    pick() { for _k in "$@"; do tmux send-keys -t "$S" -- "$_k"; settle; tmux send-keys -t "$S" -- Enter; settle; done; }
     pane() { tmux capture-pane -p -S -300 -t "$S"; }
     stop() { tmux kill-session -t "$S" 2>/dev/null; }
     pcount() { pane | grep -c -- "$1" || :; }
