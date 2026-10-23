@@ -240,6 +240,29 @@ assert_contains "无原值记录: 如实说没有可恢复的记录" "$out" "Sne
 assert_contains "无原值记录: 最终状态提示" "$out" "没有恢复到原始状态"
 assert_eq "无原值记录: Snell 分数保持" 300 "$(cat "$A/proc/801/oom_score_adj")"
 
+printf '== 恢复: OpenRC 停止失败时不删除管理入口, 不恢复任何设置\n'
+mk_sys d4
+V _tui_lm_enable >/dev/null
+cp "$A/sbin/rc-service" "$A/sbin/rc-service.ok"
+sed -i 's/^    stop) rm -f "\$r\/.svc-running" ;;/    stop) exit 1 ;;/' "$A/sbin/rc-service"
+out=$(V _tui_lm_disable)
+assert_contains "停止失败: 页面如实说明" "$out" "! 无法停止 OpenRC 服务 apm-lowmem，常驻进程仍在运行"
+assert_contains "停止失败: 最终状态仍是启用" "$out" "最终状态：保护仍处于启用状态"
+assert_not_contains "停止失败: 不写已恢复到启用前" "$out" "已恢复到启用前的状态"
+assert_eq "停止失败: 服务脚本保留" 1 "$([ -e "$A/etc/init.d/apm-lowmem" ] && echo 1 || echo 0)"
+assert_eq "停止失败: 设置文件保留" 1 "$([ -e "$A/etc/alpine-proxy-manager/lowmem.conf" ] && echo 1 || echo 0)"
+assert_eq "停止失败: 原始设置保留" 1 "$([ -e "$A/var/lib/alpine-proxy-manager/lowmem.orig" ] && echo 1 || echo 0)"
+assert_eq "停止失败: 开机启动链接保留" 1 "$([ -e "$A/etc/runlevels/default/apm-lowmem" ] && echo 1 || echo 0)"
+assert_eq "停止失败: TCP 仍是目标值 (没有半途恢复)" "4096 87380 6291456" "$(tcp rmem)"
+out=$(lm disable)
+assert_contains "停止失败: 命令行同样如实报错" "$out" "无法停止 OpenRC 服务 apm-lowmem"
+assert_eq "停止失败: 命令行返回非零" 1 "$(lm disable >/dev/null 2>&1; echo $?)"
+mv "$A/sbin/rc-service.ok" "$A/sbin/rc-service"
+out=$(V _tui_lm_disable)
+assert_contains "停止恢复正常后: 再次停用成功" "$out" "最终状态：保护已停用，已恢复到启用前的状态"
+assert_eq "停止恢复正常后: TCP 回到原值" "4096 87380 67108864" "$(tcp rmem)"
+assert_eq "停止恢复正常后: 服务脚本删除" 0 "$([ -e "$A/etc/init.d/apm-lowmem" ] && echo 1 || echo 0)"
+
 # ============ 5. 状态如实反映 ============
 printf '== 状态如实: 外部修改 常驻进程停止\n'
 mk_sys s1

@@ -205,10 +205,15 @@ sbh_follow() {
 }
 
 # 停止并移除监控服务与运行时状态, 保留 sbhealth.conf (启用设置与密钥)
+# 停不下来时保留服务脚本与运行目录并返回失败: 删掉它们会让仍在运行的监控进程失去管理入口, 以后无法再用 rc-service 停止
 sbh_remove() {
     env_is_root || return 0
     if [ -f "$(env_path "$SBH_INIT")" ]; then
         _sbh_rc stop >/dev/null 2>&1 || :
+        if core_svc_alive "$SBH_SVC"; then
+            apm_err "无法停止健康监控服务 $SBH_SVC, 监控进程仍在运行; 服务脚本与运行目录保留, 排查后可执行 rc-service $SBH_SVC stop"
+            return 1
+        fi
         _snell_run rc-update del "$SBH_SVC" default >/dev/null 2>&1 || :
         rm -f -- "$(env_path "$SBH_INIT")"
     fi

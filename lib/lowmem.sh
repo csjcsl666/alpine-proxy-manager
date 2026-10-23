@@ -749,8 +749,14 @@ lowmem_disable() {
         return 0
     fi
     # 先停服务: 常驻进程不再维护 sshd 的分数
+    # 停不下来就到此为止: 不恢复任何设置, 保留服务脚本与设置文件, 否则常驻进程会失去管理入口 (以后无法再用 rc-service 停止)
     if _lm_init_ours; then
         _lm_rc stop >/dev/null 2>&1 || :
+        if core_svc_alive "$LM_SVC"; then
+            apm_err "无法停止 OpenRC 服务 $LM_SVC, 常驻进程仍在运行; 没有恢复任何设置, 服务脚本与设置文件保留, 排查后可再次执行 lowmem disable"
+            _lm_ev stop-failed "$LM_SVC"
+            return 1
+        fi
         _snell_run rc-update del "$LM_SVC" default >/dev/null 2>&1 || :
     fi
     printf '恢复结果：\n'

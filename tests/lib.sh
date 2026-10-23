@@ -239,7 +239,7 @@ if [ "$svc" = apm-sbhealth ]; then
     sf=$K/state-apm-sbhealth
     case $act in
         start|restart) [ ! -e "$K/fail_start-apm-sbhealth" ] || exit 1; echo started > "$sf"; exit 0 ;;
-        stop) echo stopped > "$sf"; exit 0 ;;
+        stop) [ ! -e "$K/fail_stop-apm-sbhealth" ] || exit 1; echo stopped > "$sf"; exit 0 ;;
         status) st=$(cat "$sf" 2>/dev/null || echo stopped); echo " * status: $st"; [ "$st" = started ] && exit 0; exit 3 ;;
         *) echo "$*" >> "$K/violations"; exit 99 ;;
     esac

@@ -319,6 +319,17 @@ _core_service_state() {
 
 _core_pid_alive() { [ -d "$(env_path "/proc/$1")" ]; }
 
+# 受 supervise-daemon 监督的 OpenRC 服务是否仍在运行: rc-service status 说在运行, 或者 pidfile 里的监督进程仍然存活
+# 只认 pidfile 指向的、argv0 是 supervise-daemon 且参数里是该服务名的进程, 不按名字匹配其他进程
+core_svc_alive() { # 服务名
+    local _p
+    _snell_run rc-service "$1" status >/dev/null 2>&1 && return 0
+    _p=$(head -n 1 "$(env_path "/run/$1.pid")" 2>/dev/null | tr -d ' \r\n')
+    case $_p in ''|*[!0-9]*) return 1 ;; esac
+    _core_pid_alive "$_p" || return 1
+    [ "$(_core_argv0_base "$_p")" = supervise-daemon ] && _core_argv_has "$_p" "$1"
+}
+
 # 进程命令行的 argv 第一项与完整命令行 (NUL 换成空格)
 _core_cmdline() { tr '\0' ' ' < "$(env_path "/proc/$1/cmdline")" 2>/dev/null; }
 

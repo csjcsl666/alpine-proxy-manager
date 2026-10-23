@@ -1373,6 +1373,15 @@ _tui_lm_disable() {
     _file=$(mktemp "${TMPDIR:-/tmp}/apm-lmev.XXXXXX") || { printf '无法创建临时文件\n'; return 1; }
     LM_EVENTS_FILE=$_file lowmem_disable >/dev/null
     _rc=$?
+    if grep -q '^stop-failed|' "$_file"; then
+        rm -f -- "$_file"
+        printf '恢复结果\n\n'
+        printf '! 无法停止 OpenRC 服务 %s，常驻进程仍在运行\n' "$LM_SVC"
+        printf '  没有恢复任何设置，服务脚本与设置文件保留\n'
+        printf '  排查后可以再次选择「停用保护并恢复设置」\n'
+        printf '\n最终状态：保护仍处于启用状态\n'
+        return 1
+    fi
     printf '恢复结果\n'
     _bad=0
     _un=0

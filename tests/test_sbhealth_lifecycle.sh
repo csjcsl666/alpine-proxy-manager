@@ -86,6 +86,22 @@ assert_eq "运行时状态目录被清除" no "$([ -e "$(RUND)" ] && echo yes ||
 assert_eq "重新绑定: 使用同一个密钥" "$SEC" "$(kv_get "$(CONF)" secret)"
 assert_eq "重新绑定: 监控服务重新安装并启动" started "$(hstate)"
 
+# ---- 停止失败: 不删除服务脚本与运行目录, 如实报错, 之后可以再次清理 ----
+touch "$K/fail_stop-apm-sbhealth"
+OUT=$("$PM" sing-box egress AnyTLS-01 direct 2>&1)
+assert_contains "停止失败: 如实报错" "$OUT" "无法停止健康监控服务"
+assert_eq "停止失败: 服务脚本保留 (仍能用 rc-service 管理)" yes "$([ -e "$(INITF)" ] && echo yes || echo no)"
+assert_eq "停止失败: 运行目录保留" yes "$([ -e "$(RUND)" ] && echo yes || echo no)"
+assert_eq "停止失败: 监控服务仍在运行" started "$(hstate)"
+assert_eq "停止失败: sing-box 出口仍已改为直连" 0 "$(CFG | grep -c apm-socks)"
+rm -f "$K/fail_stop-apm-sbhealth"
+"$PM" sing-box egress AnyTLS-01 socks SOCKS-01 >/dev/null 2>&1
+"$PM" sing-box egress AnyTLS-01 direct >/dev/null 2>&1
+assert_eq "停止恢复正常后: 服务脚本被移除" no "$([ -e "$(INITF)" ] && echo yes || echo no)"
+assert_eq "停止恢复正常后: 监控服务已停止" stopped "$(hstate)"
+"$PM" sing-box egress AnyTLS-01 socks SOCKS-01 >/dev/null 2>&1
+assert_eq "再次绑定后监控服务运行" started "$(hstate)"
+
 # ---- 关闭与启用 ----
 OUT=$("$PM" sing-box health disable 2>&1)
 assert_eq "关闭成功" 0 "$?"
