@@ -273,7 +273,16 @@ knob() { { [ "$svc" = snell ] && [ -e "$K/$1" ]; } || [ -e "$K/$1-$svc" ]; }
 state() { cat "$statef" 2>/dev/null || echo stopped; }
 ports_of() { # 输出 "协议 端口" 每行一个
     case $svc in
-        snell) sed -n 's/^listen[[:space:]]*=[[:space:]]*//p' "$1" | tr ',' '\n' | sed -n 's/.*:\([0-9][0-9]*\)$/tcp \1 00000000/p' ;;
+        # 第三列是 /proc/net 的地址十六进制; 以 6: 开头的写入 tcp6 与 udp6 (与真实内核一样, IPv6 监听不出现在 tcp 表里)
+        snell) sed -n 's/^listen[[:space:]]*=[[:space:]]*//p' "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | awk '
+            { n = split($0, x, ":"); port = x[n]; if (port !~ /^[0-9]+$/) next
+              addr = substr($0, 1, length($0) - length(port) - 1)
+              if (addr ~ /:/) {
+                  gsub(/[][]/, "", addr)
+                  if (addr == "::1") h = "6:00000000000000000000000001000000"; else h = "6:00000000000000000000000000000000"
+              } else if (split(addr, o, ".") == 4) h = sprintf("%02X%02X%02X%02X", o[4], o[3], o[2], o[1])
+              else h = "00000000"
+              print "tcp", port, h }' ;;
         anytls-socks-gateway)
             sed -n 's/.*"listen": *"[^":]*:\([0-9][0-9]*\)".*/tcp \1 00000000/p' "$1" ;;
         sing-box)
@@ -292,6 +301,8 @@ rebuild_net() {
     mkdir -p "$R/proc/net"
     : > "$K/tcp.rows"
     : > "$K/udp.rows"
+    : > "$K/tcp6.rows"
+    : > "$K/udp6.rows"
     for s in snell sing-box anytls-socks-gateway; do
         case $s in
             anytls-socks-gateway) sf=$K/state-anytls-socks-gateway; c=$R/etc/anytls-socks-gateway/config.json; base=70000; w=43755; ng=no_listen-anytls-socks-gateway ;;
@@ -311,10 +322,12 @@ rebuild_net() {
             if [ "$pr" = udp ] && [ -e "$K/no_udp-$svc_name" ]; then
                 continue
             fi
+            f6=
+            case $ha in 6:*) ha=${ha#6:}; f6=6 ;; esac
             if [ "$pr" = udp ]; then
-                printf '   %s: %s:%04X 00000000:0000 07 00000000:00000000 00:00000000 00000000   100        0 %s 2 0\n' "$i" "${ha:-00000000}" "$p" "$((base + i))" >> "$K/udp.rows"
+                printf '   %s: %s:%04X 00000000:0000 07 00000000:00000000 00:00000000 00000000   100        0 %s 2 0\n' "$i" "${ha:-00000000}" "$p" "$((base + i))" >> "$K/udp$f6.rows"
             else
-                printf '   %s: %s:%04X 00000000:0000 0A 00000000:00000000 00:00000000 00000000   100        0 %s 1 0\n' "$i" "${ha:-00000000}" "$p" "$((base + i))" >> "$K/tcp.rows"
+                printf '   %s: %s:%04X 00000000:0000 0A 00000000:00000000 00:00000000 00000000   100        0 %s 1 0\n' "$i" "${ha:-00000000}" "$p" "$((base + i))" >> "$K/tcp$f6.rows"
             fi
             mkdir -p "$R/proc/$w/fd"
             ln -sf "socket:[$((base + i))]" "$R/proc/$w/fd/$((10 + i))"
@@ -328,6 +341,18 @@ rebuild_net() {
             # 其他进程的监听 (旋钮文件 foreign.tcp 与 foreign.udp), 重建时保留
             cat "$K/foreign.$f" 2>/dev/null
         } > "$R/proc/net/$f"
+    done
+    # IPv6 表只在有 IPv6 监听时出现, 没有时不留文件 (测试里自己写入的 tcp6 与 udp6 不受影响)
+    for f in tcp6 udp6; do
+        if [ -s "$K/$f.rows" ]; then
+            {
+                printf '  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n'
+                cat "$K/$f.rows"
+            } > "$R/proc/net/$f"
+            : > "$K/$f.ours"
+        elif [ -e "$K/$f.ours" ]; then
+            rm -f "$R/proc/net/$f" "$K/$f.ours"
+        fi
     done
 }
 stop_proc() {

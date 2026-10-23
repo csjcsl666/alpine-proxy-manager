@@ -1068,7 +1068,8 @@ snell_export() { # show | secret | info [--secret]
             _ip=$(client_public_ip_auto) || _ip=
             printf 'Snell 连接信息\n'
             printf '公网 IP：%s\n' "${_ip:-获取失败}"
-            printf '监听端口：%s\n' "$(_snell_ports_of "$CX_LISTEN" | sed 's/ /, /g')"
+            # 双栈配置 (0.0.0.0:P,[::]:P) 同一端口只写一次
+            printf '监听端口：%s\n' "$(_snell_ports_of "$CX_LISTEN" | tr ' ' '\n' | sort -un | tr '\n' ' ' | sed 's/ $//; s/ /, /g')"
             printf 'Snell 版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
             if [ "$_sec" = yes ]; then _cx_warn_secret; printf 'PSK：%s\n' "$CX_PASS"; else printf 'PSK：已配置\n'; fi
             ;;

@@ -1669,18 +1669,71 @@ _tui_core_lifecycle() { # key op
     _tui_done
 }
 
-# 配置里的 地址:端口 翻译成 范围加端口 (这是配置里写的监听地址, 不是实际检测结果)
+# 地址与端口的列表 (标准输入每行 地址 端口) 汇总成 每个端口一段 的说明: 同一端口的 0.0.0.0 与 [::] 合并为 IPv4 + IPv6
+# 地址可以带方括号, 也可以是 Snell 官方写法 ::0 这类不带方括号的 IPv6
+_tui_listen_summary() {
+    awk '
+        function cls(a) {
+            gsub(/[][]/, "", a)
+            if (a == "::" || a == "::0" || a == "0:0:0:0:0:0:0:0") return "v6"
+            if (a == "0.0.0.0") return "v4"
+            if (a ~ /^127\./) return "lo4"
+            if (a == "::1") return "lo6"
+            return "x " a
+        }
+        NF >= 2 && $2 ~ /^[0-9]+$/ {
+            p = $2 + 0; c = cls($1)
+            if (!(p in seen)) { seen[p] = 1; ports[++n] = p }
+            if (c ~ /^x /) { a = substr(c, 3); if (index(sp[p], " " a " ") == 0) sp[p] = sp[p] " " a " " }
+            else f[p, c] = 1
+        }
+        END {
+            for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) if (ports[j] < ports[i]) { t = ports[i]; ports[i] = ports[j]; ports[j] = t }
+            out = ""
+            for (i = 1; i <= n; i++) {
+                p = ports[i]; t = ""
+                if (f[p, "v4"] && f[p, "v6"]) t = "IPv4 + IPv6"
+                else if (f[p, "v4"]) t = "所有 IPv4 地址"
+                else if (f[p, "v6"]) t = "所有 IPv6 地址"
+                if (f[p, "lo4"] && !f[p, "v4"]) t = t (t != "" ? " + " : "") "仅本机 (IPv4)"
+                if (f[p, "lo6"] && !f[p, "v6"]) t = t (t != "" ? " + " : "") "仅本机 (IPv6)"
+                m = split(sp[p], z, " ")
+                for (k = 1; k <= m; k++) if (z[k] != "") t = t (t != "" ? " + " : "") "指定地址 " z[k]
+                out = out (out != "" ? "；" : "") t "，端口 " p
+            }
+            printf "%s", out
+        }'
+}
+
+# 配置里 listen 的逗号列表 -> 每行 地址 端口
+_tui_listen_cfg_rows() {
+    printf '%s\n' "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | awk '
+        { n = split($0, x, ":"); p = x[n]; if (n < 2 || p !~ /^[0-9]+$/) next; print substr($0, 1, length($0) - length(p) - 1), p }'
+}
+
+# 配置里的监听地址的说明 (这是配置, 不是实际检测结果)
 _tui_listen_text() {
-    local _a _p
-    case $1 in
-        -|'') printf '未配置'; return 0 ;;
-        *:*) ;;
-        *) printf '%s' "$1"; return 0 ;;
-    esac
-    _p=${1##*:}
-    _a=${1%:*}
-    case $_p in ''|*[!0-9]*) printf '%s' "$1"; return 0 ;; esac
-    printf '%s，端口 %s' "$(_rpt_scope "$_a")" "$_p"
+    case $1 in -|'') printf '未配置'; return 0 ;; esac
+    _tui_listen_cfg_rows "$1" | _tui_listen_summary
+}
+
+# Snell 页的监听行: 运行中且能确认进程 socket 时显示实际监听, 否则明确标注是配置, 两者端口不一致时说明
+_tui_snell_listen_line() {
+    local _cfg _act _ap _cp
+    _cfg=$(_tui_listen_text "${CF_SNELL_LISTEN:--}")
+    if [ "$CF_STATE" = running ] && [ -n "$CF_LISTEN" ] && [ "$CF_LISTEN_ATTRIB" = pid ]; then
+        _act=$(printf '%s\n' "$CF_LISTEN" | awk '{ n = split($2, a, ":"); p = a[n]; print substr($2, 1, length($2) - length(p) - 1), p }' | _tui_listen_summary)
+        printf '监听：%s（实际）\n' "$_act"
+        _ap=$(printf '%s\n' "$CF_LISTEN" | sed -n 's/.*:\([0-9][0-9]*\) .*/\1/p' | sort -un | tr '\n' ' ')
+        _cp=$(_snell_ports_of "${CF_SNELL_LISTEN:-}" | tr ' ' '\n' | sort -un | tr '\n' ' ')
+        [ "$_ap" = "$_cp" ] || printf '  与配置不一致，配置为：%s\n' "$_cfg"
+    elif [ "$CF_STATE" = running ] && [ "$CF_LISTEN_ATTRIB" = denied ]; then
+        printf '监听：需要 root 才能确认；配置为：%s\n' "$_cfg"
+    elif [ "$CF_STATE" = running ]; then
+        printf '监听：没有检测到；配置为：%s\n' "$_cfg"
+    else
+        printf '监听配置：%s（服务未运行）\n' "$_cfg"
+    fi
 }
 
 # Release 与二进制自报的版本只在不一样时才多显示一行 (例如 v6.0.0rc2 与 v6.0.0)
@@ -1950,7 +2003,7 @@ tui_snell_menu() {
                 printf '管理：已接管\n'
                 printf '版本：%s\n' "${CF_VERSION_REPORTED:-未知}"
                 _tui_release_line
-                printf '监听：%s\n' "$(_tui_listen_text "${CF_SNELL_LISTEN:--}")"
+                _tui_snell_listen_line
                 ;;
         esac
         case $CF_STATE in crashed|broken) _tui_warn "Snell 状态异常，详情见详细信息与日志" ;; esac
