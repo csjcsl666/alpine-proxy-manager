@@ -1054,7 +1054,7 @@ _tui_lm_detail() {
     printf '  记录文件：%s（%s 字节）\n' "$LM_LOG" "$(_lm_log_size)"
     printf '  记录方式：每 5 分钟一条心跳；OOM 计数变化时详细记录\n'
     printf '  常驻进程：%s\n' "$([ "$LMT_DAEMON" = yes ] && printf '运行中' || printf '没有运行')"
-    if [ "$LMT_EN" = yes ]; then printf '  开机持久化：%s\n' "$LMT_PER_T"; else printf '  开机持久化：未启用（保护启用后创建 OpenRC 服务 %s）\n' "$LM_SVC"; fi
+    if [ "$LMT_EN" = yes ]; then printf '  开机持久化：%s\n' "$LMT_PER_T"; else printf '  开机持久化：未启用（启用后创建 OpenRC 服务）\n'; fi
     printf '  设置文件：%s\n' "$(_lm_conf | sed "s|^${APM_SYSROOT:-}||")"
     printf '  原始设置：%s\n' "$(_lm_orig | sed "s|^${APM_SYSROOT:-}||")"
     printf '\nE. 限制与风险\n'
@@ -1204,14 +1204,14 @@ _tui_lm_pager() { # 文件
         printf -- '-- 第 %s/%s 页，回车下一页，Esc 结束 --' "$_p" "$_tot"
         _tui_wait_enter
         printf '\n'
-        [ "$TUI_WAITKEY" = enter ] || break
+        [ "$TUI_WAITKEY" = enter ] || { rm -f -- "$1.paged"; return 7; }
     done
     rm -f -- "$1.paged"
 }
 
 # 原始记录: 最近 N 行, 保留原始时间戳和数据; FILTER=events 时只看异常事件相关行
-_tui_lm_rawlog() { # all|events
-    local _f _t
+_tui_lm_rawlog() { # all|events  返回 7 表示用户在分页中按 Esc 结束 (不再追加一次 按回车返回)
+    local _f _t _r
     _f=$(env_path "$LM_LOG")
     if [ ! -s "$_f" ]; then printf '还没有取证记录（%s）\n' "$LM_LOG"; return 0; fi
     _t=$(mktemp "${TMPDIR:-/tmp}/apm-lmlog.XXXXXX") || { printf '无法创建临时文件\n'; return 1; }
@@ -1224,8 +1224,9 @@ _tui_lm_rawlog() { # all|events
         printf '原始记录（最近 100 行；完整日志 %s）\n\n' "$LM_LOG"
     fi
     _tui_lm_pager "$_t"
+    _r=$?
     rm -f -- "$_t"
-    return 0
+    return "$_r"
 }
 
 tui_lm_log_menu() {
@@ -1238,8 +1239,8 @@ tui_lm_log_menu() {
 events|只看异常事件相关记录（OOM、进程表、事件后采样）" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            raw) _tui_clear; _tui_header "取证记录 · 原始记录"; _tui_do _tui_lm_rawlog all; _tui_wait ;;
-            events) _tui_clear; _tui_header "取证记录 · 异常事件"; _tui_do _tui_lm_rawlog events; _tui_wait ;;
+            raw) _tui_clear; _tui_header "取证记录 · 原始记录"; _tui_do _tui_lm_rawlog all; [ "$TUI_RC" = 7 ] || _tui_wait ;;
+            events) _tui_clear; _tui_header "取证记录 · 异常事件"; _tui_do _tui_lm_rawlog events; [ "$TUI_RC" = 7 ] || _tui_wait ;;
         esac
         [ "${TUI_EOF:-0}" != 1 ] || return 0
     done

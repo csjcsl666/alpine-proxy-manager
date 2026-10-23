@@ -342,6 +342,10 @@ assert_contains "分页: 有页码提示" "$out" "-- 第 1/"
 assert_contains "分页: 最后一页的内容也能看到" "$out" "BEAT 2026-10-22 14:55:00 up=59"
 out=$(printf 'q\n' | ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; LINES=14; COLUMNS=80; export APM_SYSROOT APM_EUID APM_HOME LINES COLUMNS; _tui_lm_rawlog all ) 2>&1)
 assert_not_contains "分页: q 结束后不再显示后面的页" "$out" "BEAT 2026-10-22 14:55:00 up=59"
+rc7=$(printf 'q\n' | ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; LINES=14; COLUMNS=80; export APM_SYSROOT APM_EUID APM_HOME LINES COLUMNS; _tui_lm_rawlog all >/dev/null 2>&1; echo $? ))
+assert_eq "分页: 中途结束返回 7 (调用方不再追加 按回车返回)" 7 "$rc7"
+rc0=$(printf '\n\n\n\n\n\n\n\n\n\n' | ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; LINES=14; COLUMNS=80; export APM_SYSROOT APM_EUID APM_HOME LINES COLUMNS; _tui_lm_rawlog all >/dev/null 2>&1; echo $? ))
+assert_eq "分页: 翻到最后一页返回 0 (调用方再停一次读完)" 0 "$rc0"
 assert_eq "分页: 临时文件已清理" 0 "$(ls "${TMPDIR:-/tmp}"/apm-lmlog.* 2>/dev/null | wc -l | tr -d ' ')"
 
 # ============ 8. 无 cgroup v2 ============
