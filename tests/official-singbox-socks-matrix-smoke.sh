@@ -21,7 +21,8 @@ ASSET="sing-box-$VER-linux-$ARCH-musl.tar.gz"
 URL="https://github.com/SagerNet/sing-box/releases/download/v$VER/$ASSET"
 W=$(mktemp -d)
 # shellcheck disable=SC2046
-cleanup() { kill $(jobs -p) 2>/dev/null || true; pkill -f "$W/" 2>/dev/null || true; rm -rf "$W"; }
+# 只回收本脚本自己启动的后台进程 (jobs -p), 不按进程名或命令行匹配其他进程
+cleanup() { kill $(jobs -p) 2>/dev/null || true; rm -rf "$W"; }
 trap cleanup EXIT
 
 if [ -n "${SB_BIN:-}" ]; then
@@ -98,6 +99,8 @@ mkup() { # 名称 监听地址 端口 [用户]
 {"log":{"level":"debug"},"inbounds":[{"type":"socks","tag":"s","listen":"$2","listen_port":$3,$us"sniff":false}],"outbounds":[{"type":"direct","tag":"direct","inet4_bind_address":"127.0.0.77"}]}
 J
     "$B" run -c "up-$1.json" > "up-$1.log" 2>&1 &
+    # 记下 PID, 故障阶段只停这一个进程
+    eval "UP_PID_$1=\$!"
 }
 mkup U1 127.0.0.1 26001 upuser
 [ "$HAVE_PRIV" != yes ] || mkup U2 10.99.0.9 26002
@@ -243,7 +246,8 @@ expect "上游不支持 UDP 时目标没有收到 Shadowsocks-02 的 UDP 包 (�
 case $(getr Shadowsocks-03 udp) in "UDP_OK "*) ok "对照: 没有绑定出口的实例 UDP 直连可用" ;; *) bad "对照 UDP 不可用" ;; esac
 
 echo "== 阶段 2 故障: 停止上游 U1 后, 绑定它的实例不能回落直连"
-pkill -f "up-U1.json"
+kill "$UP_PID_U1" 2>/dev/null || true
+wait "$UP_PID_U1" 2>/dev/null || true
 sleep 1
 n0=$(wc -l < target.log)
 for k in "AnyTLS-01 tcp" "AnyTLS-01 dom" "AnyTLS-06 tcp" "Shadowsocks-01 tcp"; do

@@ -127,6 +127,16 @@ LC_ALL=en_US.UTF-8
 export APM_SYSROOT APM_TUI_ANSI LC_ALL
 exec sh $T_ROOT/bin/proxy-manager tui
 EOD
+    # 等画面稳定下来再发下一个键: 固定睡眠在机器忙的时候来不及渲染, 下一个键就会错位 (在没有任何改动的 v0.9.2 上整机满载时同样大面积失败)
+    # 连续三次轮询 (0.1 秒一次) 画面不变才算稳定, 最多等 8 秒; 键间隔测试 (ptyseq) 本来就要精确控制时间, 不使用它
+    settle() {
+        _sp=; _sn=0; _st=0
+        while [ "$_st" -lt 80 ]; do
+            sleep 0.1; _st=$((_st + 1))
+            _sc=$(tmux capture-pane -p -t apmflow$$ 2>/dev/null | cksum)
+            if [ "$_sc" = "$_sp" ]; then _sn=$((_sn + 1)); [ "$_sn" -ge 3 ] && break; else _sn=0; _sp=$_sc; fi
+        done
+    }
     ptyrun() { # 宽 高 按键...
         _w=$1; _h=$2; shift 2
         tmux kill-session -t apmflow$$ 2>/dev/null
@@ -134,7 +144,7 @@ EOD
         _i=0
         while [ "$_i" -lt 50 ] && ! tmux capture-pane -p -t apmflow$$ | grep -q '请选择：'; do sleep 0.1; _i=$((_i + 1)); done
         sleep 0.5
-        for _k in "$@"; do tmux send-keys -t apmflow$$ -- "$_k"; sleep 0.4; done
+        for _k in "$@"; do tmux send-keys -t apmflow$$ -- "$_k"; settle; done
         sleep 1
         tmux capture-pane -p -S -200 -t apmflow$$
         tmux kill-session -t apmflow$$ 2>/dev/null

@@ -123,7 +123,8 @@ printf '== 首页: 未启用\n'
 mk_sys h1
 out=$(V _tui_lm_home)
 assert_contains "未启用: 状态" "$out" "保护状态：未启用"
-assert_contains "未启用: TCP 一行" "$out" "TCP 缓冲优化：可调整"
+assert_contains "未启用: TCP 一行写初步检查 不写可调整" "$out" "TCP 缓冲优化：初步检查通过"
+assert_not_contains "未启用: 不把权限初检写成实际可写" "$out" "可调整"
 assert_contains "未启用: SSH 一行" "$out" "SSH 进程保护：可启用"
 assert_contains "未启用: 取证一行" "$out" "内存取证：可启用"
 assert_contains "未启用: Snell 优先终止一行" "$out" "Snell 优先终止：未启用"
@@ -239,6 +240,17 @@ assert_not_contains "无原值记录: 不写成已恢复" "$out" "Snell 优先�
 assert_contains "无原值记录: 如实说没有可恢复的记录" "$out" "Snell 优先终止：没有可恢复的进程记录"
 assert_contains "无原值记录: 最终状态提示" "$out" "没有恢复到原始状态"
 assert_eq "无原值记录: Snell 分数保持" 300 "$(cat "$A/proc/801/oom_score_adj")"
+
+printf '== 启用: TCP 写入没有成功时如实报告并确认恢复\n'
+mk_sys w5
+enable_write_fails() { _lm_tcp_write() { :; }; _tui_lm_enable; }
+out=$(V enable_write_fails)
+assert_contains "写入失败: 环境检查只写初步检查通过" "$out" "TCP 缓冲：初步检查通过"
+assert_contains "写入失败: 结果如实报告未应用" "$out" "! TCP 缓冲：未应用（写入没有成功，已确认系统参数仍是修改前的值）"
+assert_not_contains "写入失败: 不写成功" "$out" "TCP 缓冲：成功"
+assert_not_contains "写入失败: 不写已生效" "$out" "TCP 缓冲：已生效"
+assert_eq "写入失败: tcp_rmem 仍是原值" "4096 87380 67108864" "$(tcp rmem)"
+assert_eq "写入失败: tcp_wmem 仍是原值" "4096 65536 67108864" "$(tcp wmem)"
 
 printf '== 恢复: 从未启用 SSH 保护时不写 已恢复 0 个\n'
 mk_sys d5 deny

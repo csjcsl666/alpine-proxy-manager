@@ -8,7 +8,26 @@ export APM_HOME
 T_PASS=0
 T_FAIL=0
 T_TMP=$(mktemp -d)
-trap 'rm -rf "$T_TMP"' EXIT
+# 登记目录: 整次运行共用 (run.sh 导出 APM_TEST_REG) 或者只属于本测试文件
+if [ -n "${APM_TEST_REG:-}" ] && [ -d "$APM_TEST_REG" ]; then T_REG=$APM_TEST_REG; else T_REG=$T_TMP/owned; mkdir -p "$T_REG"; fi
+# shellcheck source=tests/reap.sh
+. "$T_ROOT/tests/reap.sh"
+# 正常退出 失败退出 被 INT TERM HUP 中断都先回收自己登记的进程与 tmux 会话, 再删除临时目录
+# 测试正常走到结尾时仍有登记的进程或会话在运行 = 测试自己没有收尾: 回收并让这个测试文件失败
+t_exit() {
+    local _rc _n
+    _rc=$?
+    _n=$(t_reap_dir "$T_REG")
+    rm -rf "$T_TMP"
+    if [ "${_n:-0}" -gt 0 ]; then
+        printf '  FAIL 测试结束时仍有 %s 个登记的进程或 tmux 会话在运行, 已回收 (测试应该自己清理)\n' "$_n"
+        exit 1
+    fi
+    exit "$_rc"
+}
+t_signal() { trap - EXIT; t_reap_dir "$T_REG" >/dev/null; rm -rf "$T_TMP"; exit 130; }
+trap 't_exit' EXIT
+trap 't_signal' INT TERM HUP
 
 t_pass() { T_PASS=$((T_PASS + 1)); printf '  ok   %s\n' "$1"; }
 t_fail() { T_FAIL=$((T_FAIL + 1)); printf '  FAIL %s\n' "$1"; shift; [ $# -eq 0 ] || printf '       %s\n' "$@"; }

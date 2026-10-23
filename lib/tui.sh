@@ -849,7 +849,7 @@ _tui_lm_collect() {
         else LMT_TCP_S=bad; LMT_TCP_T="未生效（当前值与设置不一致，可能被外部修改）"; LMT_BAD=$((LMT_BAD + 1)); fi
     else
         case $LM_P_TCP in
-            plan) LMT_TCP_S=avail; LMT_TCP_T="可调整（缓冲上限偏大，启用后降到内核默认值）" ;;
+            plan) LMT_TCP_S=avail; LMT_TCP_T="初步检查通过（缓冲偏大；启用时验证写入）" ;;
             fine) LMT_TCP_S=fine; LMT_TCP_T="无需调整（缓冲上限合理）" ;;
             unconfirmed) LMT_TCP_S=na; LMT_TCP_T="未启用（作用范围未确认，不自动修改）" ;;
             unknown) LMT_TCP_S=na; LMT_TCP_T="无法判断（内存上限或参数格式未知）" ;;
@@ -1317,10 +1317,12 @@ _tui_lm_tcp_changed() { # 来自原始设置的 原值 -> 目标
 
 # 启用 (含可选的 Snell 优先终止): 执行前显示环境检查与预计启用项, 执行后只显示真正发生的结果
 _tui_lm_enable() { # [sac]
-    local _sac _rc _will _before_en _b_tcp _b_ssh _b_for _b_sac
+    local _sac _rc _will _before_en _b_tcp _b_ssh _b_for _b_sac _pre_r _pre_w
     _sac=${1:-}
     _tui_lm_collect
     _before_en=$LMT_EN; _b_tcp=$LMT_TCP_S; _b_ssh=$LMT_SSH_S; _b_for=$LMT_FOR_S; _b_sac=$LMT_SAC_S
+    _pre_r=$LM_RMEM
+    _pre_w=$LM_WMEM
     printf '环境检查\n'
     _tui_lm_row "$LMT_TCP_S" "TCP 缓冲" "$LMT_TCP_T"
     _tui_lm_row "$LMT_SSH_S" "SSH 进程保护" "$LMT_SSH_T"
@@ -1350,6 +1352,14 @@ _tui_lm_enable() { # [sac]
         ok) if [ "$_before_en" = yes ] && [ "$_b_tcp" = ok ]; then _tui_lm_row ok "TCP 缓冲" "已生效（与之前相同，未改变）"; else _tui_lm_row ok "TCP 缓冲" "成功"; _tui_lm_tcp_changed; fi ;;
         bad) _tui_lm_row bad "TCP 缓冲" "$LMT_TCP_T" ;;
         fine) _tui_lm_row fine "TCP 缓冲" "未调整（缓冲上限合理）" ;;
+        avail)
+            # 计划调整却没有生效: 启用时写入或读回失败, 已回滚; 回读当前值确认恢复, 不把初检通过当成结果
+            if [ "$LM_RMEM" = "$_pre_r" ] && [ "$LM_WMEM" = "$_pre_w" ]; then
+                _tui_lm_row bad "TCP 缓冲" "未应用（写入没有成功，已确认系统参数仍是修改前的值）"
+            else
+                _tui_lm_row bad "TCP 缓冲" "未应用，且当前值与修改前不同（接收 $LM_RMEM，发送 $LM_WMEM；修改前 接收 $_pre_r，发送 $_pre_w），请检查"
+            fi
+            ;;
         *) _tui_lm_row "$LMT_TCP_S" "TCP 缓冲" "未应用（${LMT_TCP_T}）" ;;
     esac
     case $LMT_SSH_S in
