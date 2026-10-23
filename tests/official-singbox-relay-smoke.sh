@@ -115,9 +115,11 @@ echo "Manager 生成的四协议八实例配置 check 通过 $VER"
 } > "$W/client.json"
 "$B" check -c "$W/client.json"
 
-( while :; do echo TARGET_A | nc -l -p "$TA" -s 127.0.0.1 >/dev/null 2>&1 || sleep 1; done ) &
+# 持续监听的目标服务 (-ll 配 -e 每个连接各起一个处理进程): 原来的 while 循环每服务完一个连接要重新绑定端口,
+# 紧接着到来的下一个探测恰好落在重新绑定之前就会被拒绝, 表现为 期望 ok 实际 空 的偶发失败 (2026-10-23 在 Hysteria2-01 目标 A 上出现过一次)
+nc -ll -p "$TA" -s 127.0.0.1 -e /bin/echo TARGET_A >/dev/null 2>&1 &
 PIDS="$!"
-( while :; do echo TARGET_B | nc -l -p "$TB" -s 127.0.0.1 >/dev/null 2>&1 || sleep 1; done ) &
+nc -ll -p "$TB" -s 127.0.0.1 -e /bin/echo TARGET_B >/dev/null 2>&1 &
 PIDS="$PIDS $!"
 "$B" run -c "$W/server.json" > "$W/server.log" 2>&1 &
 PIDS="$PIDS $!"
