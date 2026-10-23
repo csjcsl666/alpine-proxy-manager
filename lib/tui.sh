@@ -1412,6 +1412,7 @@ _tui_lm_disable() {
         case $_code in
             ssh-restored) _any=1; printf '    SSH 进程保护：已把 %s 个进程的 oom_score_adj 恢复为原值\n' "$_val" ;;
             ssh-none) _any=1; printf '    SSH 进程保护：没有需要恢复的进程\n' ;;
+            ssh-never) _any=1; printf '    SSH 进程保护：没有启用过，不需要恢复\n' ;;
             sac-restored)
                 _any=1
                 _a=${_val%% *}; _b=${_val##* }

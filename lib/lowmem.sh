@@ -774,8 +774,11 @@ lowmem_disable() {
         _snell_run rc-update del "$LM_SVC" default >/dev/null 2>&1 || :
     fi
     printf '恢复结果：\n'
-    # sshd: 只恢复仍然等于 APM 设置值的进程
-    if [ -f "$(env_path "$LM_RUN/ssh.adj")" ]; then
+    # sshd: 只恢复仍然等于 APM 设置值的进程; 没有启用过 SSH 保护时 (常驻进程仍会建一个空的登记文件) 不能写成 已恢复 0 个
+    if [ "$(_lm_cget ssh)" != on ]; then
+        printf '  SSH 保护：没有启用过，不需要恢复\n'
+        _lm_ev ssh-never ""
+    elif [ -f "$(env_path "$LM_RUN/ssh.adj")" ]; then
         _f=$(env_path "$LM_RUN/ssh.adj")
         _c=0
         while read -r _pid _adj _comm; do
@@ -788,8 +791,13 @@ lowmem_disable() {
             [ "$_t" = "$(_lm_cget ssh_adj)" ] || continue
             printf '%s\n' "$_adj" > "$(env_path "/proc/$_pid/oom_score_adj")" 2>/dev/null && _c=$((_c + 1))
         done < "$_f"
-        printf '  SSH 保护：已把 %s 个进程的 oom_score_adj 恢复为原值\n' "$_c"
-        _lm_ev ssh-restored "$_c"
+        if [ "$_c" -gt 0 ]; then
+            printf '  SSH 保护：已把 %s 个进程的 oom_score_adj 恢复为原值\n' "$_c"
+            _lm_ev ssh-restored "$_c"
+        else
+            printf '  SSH 保护：没有需要恢复的进程\n'
+            _lm_ev ssh-none ""
+        fi
     else
         printf '  SSH 保护：没有需要恢复的进程\n'
         _lm_ev ssh-none ""

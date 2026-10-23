@@ -240,6 +240,16 @@ assert_contains "无原值记录: 如实说没有可恢复的记录" "$out" "Sne
 assert_contains "无原值记录: 最终状态提示" "$out" "没有恢复到原始状态"
 assert_eq "无原值记录: Snell 分数保持" 300 "$(cat "$A/proc/801/oom_score_adj")"
 
+printf '== 恢复: 从未启用 SSH 保护时不写 已恢复 0 个\n'
+mk_sys d5 deny
+V _tui_lm_enable >/dev/null
+out=$(V _tui_lm_disable)
+assert_contains "SSH 没启用过: 页面如实说明" "$out" "SSH 进程保护：没有启用过，不需要恢复"
+assert_not_contains "SSH 没启用过: 不写已恢复 0 个" "$out" "已把 0 个"
+mk_sys d6 deny
+V _tui_lm_enable >/dev/null
+out=$(lm disable)
+assert_contains "SSH 没启用过: 命令行同样" "$out" "SSH 保护：没有启用过，不需要恢复"
 printf '== 恢复: OpenRC 停止失败时不删除管理入口, 不恢复任何设置\n'
 mk_sys d4
 V _tui_lm_enable >/dev/null

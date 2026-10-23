@@ -204,12 +204,23 @@ archive_commit() {
     gzip -dc < "$1" 2>/dev/null | head -c 4096 | grep -a -o 'comment=[0-9a-f]\{40\}' | head -n 1 | sed 's/^comment=//'
 }
 
+# A 是否低于 B: 按 主.次.修订 的数值比较, 带 -dev 等后缀的预发布版本低于同号正式版
+ver_lt() { # A B
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        sa = (index(a, "-") > 0); sb = (index(b, "-") > 0)
+        sub(/[-+].*/, "", a); sub(/[-+].*/, "", b)
+        split(a, x, "."); split(b, y, ".")
+        for (i = 1; i <= 3; i++) { if (x[i] + 0 < y[i] + 0) exit 0; if (x[i] + 0 > y[i] + 0) exit 1 }
+        exit !(sa && !sb) }'
+}
+
 # 下载并解压归档, 设置 SRC_DIR FULL_SHA ARCHIVE_SHA256 ARCHIVE_BYTES SRC_DESC
 obtain_archive() {
     local _f _list _tops _got
     _f=$STAGING/src.tar.gz
     _list=$STAGING/src.list
-    say "正在下载 $REPO@$REF"
+    # 指定了归档地址时下载的就是这个地址 (例如 Release 资产), 不是 REF 对应的源码归档
+    if [ -n "${APM_ARCHIVE_URL:-}" ]; then say "正在下载 $ARCHIVE_URL"; else say "正在下载 $REPO@$REF"; fi
     fetch "$ARCHIVE_URL" "$_f" || die "下载失败: $ARCHIVE_URL (请检查网络, 以及 busybox wget 的 https 支持: apk add ssl_client ca-certificates)"
     ARCHIVE_BYTES=$(wc -c < "$_f" | tr -d ' ')
     gzip -t "$_f" 2>/dev/null || die "归档已损坏, 未安装任何内容"
@@ -456,6 +467,9 @@ do_install() {
                 say "$INST_BUILD → $NEW_BUILD"
             elif [ "$INST_VERSION" = "$NEW_VERSION" ]; then
                 say "重新安装 $NEW_VERSION (Build: $NEW_BUILD)"
+            elif ver_lt "$NEW_VERSION" "$INST_VERSION"; then
+                say "降级: $INST_VERSION ($INST_BUILD) → $NEW_VERSION ($NEW_BUILD)"
+                say "提示: 安装的版本低于当前版本, 配置与数据保留, 如果不是有意降级请改用新版本的安装命令"
             else
                 say "更新: $INST_VERSION ($INST_BUILD) → $NEW_VERSION ($NEW_BUILD)"
             fi

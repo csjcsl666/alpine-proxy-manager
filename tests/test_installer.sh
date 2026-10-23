@@ -173,6 +173,24 @@ run_install
 assert_eq "版本升级成功" 0 "$RC"
 assert_contains "提示版本变化" "$OUT" "更新: 0.1.0-dev.0 ($OLD) → 0.2.0 ($SHORT)"
 assert_eq "版本升级后输出" "$(want_out 0.2.0 "$SHORT")" "$(ver_out)"
+assert_not_contains "升级不写降级" "$OUT" "降级"
+
+# ---- 降级: 明确写 降级, 不写成普通更新 ----
+OLD=$SHORT
+commit_src 0.1.5 downgrade
+run_install
+assert_eq "降级安装成功 (安装器允许显式指定旧版本)" 0 "$RC"
+assert_contains "降级: 提示写降级" "$OUT" "降级: 0.2.0 ($OLD) → 0.1.5 ($SHORT)"
+assert_not_contains "降级: 不写成更新" "$OUT" "更新: 0.2.0"
+assert_contains "降级: 说明配置保留" "$OUT" "安装的版本低于当前版本"
+commit_src 0.2.0 back-to-0.2.0
+run_install
+assert_contains "回到 0.2.0: 写更新" "$OUT" "更新: 0.1.5"
+assert_contains "没有指定归档地址: 写仓库与 ref" "$OUT" "正在下载 csjcsl666/alpine-proxy-manager@"
+commit_src 0.2.0 archive-url
+OUT=$(APM_ARCHIVE_URL=https://example.invalid/releases/x.tar.gz sh -c "$(cat "$INSTALLER")" -- 2>&1); RC=$?
+assert_contains "指定归档地址: 写实际下载的地址" "$OUT" "正在下载 https://example.invalid/releases/x.tar.gz"
+assert_not_contains "指定归档地址: 不再写 @main" "$OUT" "@main"
 GOOD_SHORT=$SHORT
 GOOD_SNAP=$(snapshot)
 
