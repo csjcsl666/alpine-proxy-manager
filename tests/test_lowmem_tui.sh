@@ -104,7 +104,7 @@ mk_sys() {
     [ "${2:-}" != deny ] || : > "$A/.deny-oom-lower"
 }
 # 在子 shell 里以该系统的环境运行函数或命令
-V() { ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; export APM_SYSROOT APM_EUID APM_HOME; "$@" ) 2>&1; }
+V() { ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; export APM_SYSROOT APM_EUID APM_HOME; "$@" ) </dev/null 2>&1; }
 # 按键驱动整个 TUI (管道, 不开阅读暂停)
 TUI() { printf '%b' "$1" | ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; APM_TUI_ANSI=0; export APM_SYSROOT APM_EUID APM_HOME APM_TUI_ANSI; tui_run ) 2>&1; }
 # 显示宽度: ASCII 1 列, 中日韩 2 列 (UTF-8 里 3 字节), 最大行宽
@@ -115,6 +115,7 @@ maxw() {
         printf '%s\n' $((c + (b - c) / 2))
     done | sort -n | tail -n 1
 }
+VW() { ( LINES=60; COLUMNS=200; export LINES COLUMNS; V "$@" ); }
 nl_count() { printf '%s\n' "$1" | grep -c -- "$2" || :; }
 
 # ============ 1. 首页: 未启用 ============
@@ -319,10 +320,10 @@ out=$(V _tui_lm_forensics_summary)
 assert_contains "有 OOM: 事件记录与时间" "$out" "异常事件：1 次 OOM 事件记录，最近一次 2026-10-22 11:12:00"
 assert_contains "有 OOM: 窗口内新增 1 次" "$out" "38 -> 39（新增 1 次）"
 sum0=$(cksum "$LOGF")
-out=$(V _tui_lm_rawlog all)
+out=$(VW _tui_lm_rawlog all)
 assert_contains "原始记录: 保留原始时间戳和数据" "$out" "BEAT 2026-10-22 10:05:00 up=1 cur=41000000 sock=100 anon=200 oom_kill=38"
 assert_contains "原始记录: 含事件行" "$out" "OOM 2026-10-22 11:12:00"
-out=$(V _tui_lm_rawlog events)
+out=$(VW _tui_lm_rawlog events)
 assert_contains "异常事件视图: OOM" "$out" "OOM 2026-10-22 11:12:00"
 assert_contains "异常事件视图: PROCS" "$out" "PROCS 2026-10-22 11:12:00 snell=2000"
 assert_contains "异常事件视图: BURST" "$out" "BURST 2026-10-22 11:12:02"
@@ -332,19 +333,19 @@ assert_eq "查看记录不改日志" "$sum0" "$(cksum "$LOGF")"
 printf 'garbage line one\n\200\201 not a log\n' > "$LOGF"
 out=$(V _tui_lm_forensics_summary)
 assert_contains "无法解析: 说明没有可识别的采样" "$out" "没有可识别的采样行"
-out=$(V _tui_lm_rawlog all)
+out=$(VW _tui_lm_rawlog all)
 assert_contains "无法解析: 原始记录仍可看" "$out" "garbage line one"
 # 分页: 长日志在矮终端分多页, 回车下一页, q 结束
 i=0; : > "$LOGF"
 while [ "$i" -lt 60 ]; do beat "$i" $((40000000 + i)) 38 >> "$LOGF"; i=$((i + 1)); done
-out=$(printf '\n\n\n\n\n\n\n\n' | ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; LINES=14; COLUMNS=80; export APM_SYSROOT APM_EUID APM_HOME LINES COLUMNS; _tui_lm_rawlog all ) 2>&1)
+out=$(printf '\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n' | ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; LINES=14; COLUMNS=80; export APM_SYSROOT APM_EUID APM_HOME LINES COLUMNS; _tui_lm_rawlog all ) 2>&1)
 assert_contains "分页: 有页码提示" "$out" "-- 第 1/"
 assert_contains "分页: 最后一页的内容也能看到" "$out" "BEAT 2026-10-22 14:55:00 up=59"
 out=$(printf 'q\n' | ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; LINES=14; COLUMNS=80; export APM_SYSROOT APM_EUID APM_HOME LINES COLUMNS; _tui_lm_rawlog all ) 2>&1)
 assert_not_contains "分页: q 结束后不再显示后面的页" "$out" "BEAT 2026-10-22 14:55:00 up=59"
 rc7=$(printf 'q\n' | ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; LINES=14; COLUMNS=80; export APM_SYSROOT APM_EUID APM_HOME LINES COLUMNS; _tui_lm_rawlog all >/dev/null 2>&1; echo $? ))
 assert_eq "分页: 中途结束返回 7 (调用方不再追加 按回车返回)" 7 "$rc7"
-rc0=$(printf '\n\n\n\n\n\n\n\n\n\n' | ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; LINES=14; COLUMNS=80; export APM_SYSROOT APM_EUID APM_HOME LINES COLUMNS; _tui_lm_rawlog all >/dev/null 2>&1; echo $? ))
+rc0=$(printf '\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n' | ( APM_SYSROOT="$A"; APM_EUID=0; APM_HOME="$T_ROOT"; LINES=14; COLUMNS=80; export APM_SYSROOT APM_EUID APM_HOME LINES COLUMNS; _tui_lm_rawlog all >/dev/null 2>&1; echo $? ))
 assert_eq "分页: 翻到最后一页返回 0 (调用方再停一次读完)" 0 "$rc0"
 assert_eq "分页: 临时文件已清理" 0 "$(ls "${TMPDIR:-/tmp}"/apm-lmlog.* 2>/dev/null | wc -l | tr -d ' ')"
 
@@ -509,6 +510,14 @@ EOD
     assert_eq "tmux: 恢复实际写回 tcp_rmem" "4096 87380 67108864" "$(tcp rmem)"
  key Enter; waitfor "4. 启用保护"
     assert_contains "tmux: 回车后首页变回未启用" "$(vis)" "4. 启用保护"
+    # 窄矮终端 (60x24): 一页内容加提示必须放进一屏, 第一行不能被滚出去 (页高按终端实际大小估算, 脚本里 LINES 与 COLUMNS 没有导出)
+    start 60 24
+    pick 1 "$nn" 2 2; waitfor "查看原始记录"
+    pick 1; waitfor "第 1/"
+    v=$(vis)
+    assert_contains "tmux 60x24: 分页提示在屏幕上" "$v" "回车下一页，Esc 结束"
+    assert_contains "tmux 60x24: 页标题没有被滚出屏幕" "$v" "取证记录 · 原始记录"
+    key Escape; waitfor "只看异常事件相关记录"
     tmux kill-session -t "$S" 2>/dev/null
 else
     t_skip "没有 tmux, 保护页的真实终端测试跳过"

@@ -1184,29 +1184,38 @@ _tui_lm_forensics_summary() {
 
 # 分页显示一个文件: 每页按终端高度估算 (折行的长记录占多行), 回车下一页, Esc 或 q 结束
 _tui_lm_pager() { # 文件
-    local _rows _cols _tot _p
-    _rows=${LINES:-24}
-    _cols=${COLUMNS:-80}
-    [ "$_rows" -ge 10 ] 2>/dev/null || _rows=24
+    local _rows _cols _tot _p _sz _file
+    _file=$1
+    _rows=${LINES:-}
+    _cols=${COLUMNS:-}
+    # 交互 shell 才导出 LINES 与 COLUMNS, 脚本里要向终端问
+    if [ -z "$_rows" ] || [ -z "$_cols" ]; then
+        _sz=$(_snell_run stty size 2>/dev/null) || _sz=
+        # shellcheck disable=SC2086
+        set -- $_sz
+        [ -n "$_rows" ] || _rows=${1:-24}
+        [ -n "$_cols" ] || _cols=${2:-80}
+    fi
+    [ "$_rows" -ge 14 ] 2>/dev/null || _rows=24
     [ "$_cols" -ge 40 ] 2>/dev/null || _cols=80
-    awk -v rows=$((_rows - 4)) -v cols="$_cols" '
+    awk -v rows=$((_rows - 9)) -v cols="$_cols" '
         BEGIN { page = 0; used = 0 }
         { r = int((length($0) + cols - 1) / cols); if (r < 1) r = 1
           if (used + r > rows && used > 0) { page++; used = 0 }
-          used += r; print page "\t" $0 }' "$1" > "$1.paged"
-    _tot=$(tail -n 1 "$1.paged" | cut -f1)
+          used += r; print page "\t" $0 }' "$_file" > "$_file.paged"
+    _tot=$(tail -n 1 "$_file.paged" | cut -f1)
     _tot=$((_tot + 1))
     _p=0
     while [ "$_p" -lt "$_tot" ]; do
-        awk -F'\t' -v p="$_p" '$1 == p { sub(/^[0-9]+\t/, ""); print }' "$1.paged"
+        awk -F'\t' -v p="$_p" '$1 == p { sub(/^[0-9]+\t/, ""); print }' "$_file.paged"
         _p=$((_p + 1))
         [ "$_p" -lt "$_tot" ] || break
         printf -- '-- 第 %s/%s 页，回车下一页，Esc 结束 --' "$_p" "$_tot"
         _tui_wait_enter
         printf '\n'
-        [ "$TUI_WAITKEY" = enter ] || { rm -f -- "$1.paged"; return 7; }
+        [ "$TUI_WAITKEY" = enter ] || { rm -f -- "$_file.paged"; return 7; }
     done
-    rm -f -- "$1.paged"
+    rm -f -- "$_file.paged"
 }
 
 # 原始记录: 最近 N 行, 保留原始时间戳和数据; FILTER=events 时只看异常事件相关行
