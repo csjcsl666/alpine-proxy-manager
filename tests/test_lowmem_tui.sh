@@ -243,7 +243,7 @@ assert_eq "无原值记录: Snell 分数保持" 300 "$(cat "$A/proc/801/oom_scor
 
 printf '== 启用: TCP 写入没有成功时如实报告并确认恢复\n'
 mk_sys w5
-# shellcheck disable=SC2317
+# shellcheck disable=SC2317,SC2329
 enable_write_fails() { _lm_tcp_write() { :; }; _tui_lm_enable; }
 out=$(V enable_write_fails)
 assert_contains "写入失败: 环境检查只写初步检查通过" "$out" "TCP 缓冲：初步检查通过"
