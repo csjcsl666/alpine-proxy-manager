@@ -222,6 +222,8 @@ mk_net() {
 mk_sim_system() {
     local _r
     _r=$1
+    # 内核启用了 IPv6 (与绝大多数系统一样); 测试内核禁用 IPv6 时删除这个文件
+    mkdir -p "$_r/proc/net"; : > "$_r/proc/net/if_inet6"
     mkdir -p "$_r/sbin" "$_r/etc/runlevels/default" "$_r/run" "$_r/var/tmp" "$_r/var/lib" "$_r/var/log" "$_r/etc/init.d" "$_r/proc/net" "$_r/usr/local/bin"
     : > "$_r/etc/passwd"
     : > "$_r/etc/group"

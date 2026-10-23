@@ -208,6 +208,8 @@ assert_not_contains "自动生成不再确认" "$out" "将自动生成密码"
 assert_contains "监听端口的提示不再写死 AnyTLS" "$out" "监听端口（留空随机选择）"
 assert_eq "实例文件存在" yes "$([ -f "$(INST AnyTLS-01)" ] && echo yes)"
 assert_eq "端口" 20443 "$(kv_get "$(INST AnyTLS-01)" listen_port)"
+assert_eq "内核启用 IPv6 时 TUI 默认监听 :: (不变)" "::" "$(kv_get "$(INST AnyTLS-01)" listen)"
+assert_not_contains "内核启用 IPv6 时没有只监听 IPv4 的提示" "$out" "内核没有启用 IPv6"
 PWV=TuiUserPasswordNeverEcho0123456789
 out=$(T "2\n2\n2\n20500\n\n$PWV\n0\n0\n")
 assert_eq "Hysteria2 使用用户提供的密码" "$PWV" "$(kv_get "$(INST Hysteria2-01)" credential.password)"
@@ -217,6 +219,18 @@ out=$(T '2\n3\n3\n20600\n\n\nbbr\n\n0\n0\n')
 assert_eq "TUIC 拥塞控制" bbr "$(kv_get "$(INST TUIC-01)" transport.congestion_control)"
 out=$(T '2\n4\n4\n20700\n\n\n0\n0\n')
 assert_eq "Shadowsocks 默认 method" 2022-blake3-aes-128-gcm "$(kv_get "$(INST Shadowsocks-01)" credential.method)"
+
+# 内核禁用 IPv6 (没有 /proc/net/if_inet6): TUI 添加的实例只监听 IPv4, 命令行的默认值不变
+mv "$A/proc/net/if_inet6" "$A/proc/net/if_inet6.off"
+_addn=$(T '2\n0\n0\n' | sed -n 's/^\([0-9]*\)\. 添加实例$/\1/p' | head -n 1)
+out=$(T "2\n$_addn\n1\n20800\n\n\n0\n0\n")
+assert_contains "无 IPv6 内核: 提示只监听 IPv4" "$out" "提示：内核没有启用 IPv6，实例只监听 IPv4"
+assert_contains "无 IPv6 内核: 添加成功" "$out" "已添加实例 AnyTLS-02"
+assert_eq "无 IPv6 内核: 监听 0.0.0.0" 0.0.0.0 "$(kv_get "$(INST AnyTLS-02)" listen)"
+"$PM" sing-box add anytls --port 20801 >/dev/null 2>&1
+assert_eq "无 IPv6 内核: 命令行默认值不变" "::" "$(kv_get "$(INST AnyTLS-03)" listen)"
+"$PM" sing-box delete AnyTLS-02 >/dev/null 2>&1; "$PM" sing-box delete AnyTLS-03 >/dev/null 2>&1
+mv "$A/proc/net/if_inet6.off" "$A/proc/net/if_inet6"
 
 # 主页面: 实例一览, 用户需要的信息, 没有底层噪声
 out=$(T '2\n0\n0\n')

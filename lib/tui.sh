@@ -2512,6 +2512,12 @@ _tui_add_instance() { # 协议
     set --
     tui_ask "监听端口（留空随机选择）："
     [ -z "$TUI_IN" ] || set -- "$@" --port "$TUI_IN"
+    # 默认监听 :: (IPv4 与 IPv6); 内核没有启用 IPv6 时 (ipv6.disable=1, /proc/net/if_inet6 不存在) 建不了 IPv6 套接字, 只监听 IPv4
+    # 只看内核能力, 不看服务器有没有公网 IPv6 地址; 不修改任何 IPv6 设置
+    if [ ! -e "$(env_path /proc/net/if_inet6)" ]; then
+        printf '提示：内核没有启用 IPv6，实例只监听 IPv4\n'
+        set -- "$@" --listen 0.0.0.0
+    fi
     case $_t in
         anytls|hysteria2|tuic)
             tui_ask "TLS 服务名（SNI，留空使用默认）："
