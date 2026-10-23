@@ -518,6 +518,42 @@ EOD
     assert_contains "tmux 60x24: 分页提示在屏幕上" "$v" "回车下一页，Esc 结束"
     assert_contains "tmux 60x24: 页标题没有被滚出屏幕" "$v" "取证记录 · 原始记录"
     key Escape; waitfor "只看异常事件相关记录"
+    # 中断: 分页中 Ctrl-C 与会话断开 (SIGHUP) 都要删除临时目录并恢复终端; 查看期间临时目录 700 文件 600
+    TD=$T_TMP/tmpd; mkdir -p "$TD"
+    DRV2=$T_TMP/lmtui-drv2.sh
+    cat > "$DRV2" <<EOD
+APM_SYSROOT=$A
+APM_EUID=0
+APM_HOME=$T_ROOT
+APM_TUI_ANSI=1
+LC_ALL=en_US.UTF-8
+TMPDIR=$TD
+export APM_SYSROOT APM_EUID APM_HOME APM_TUI_ANSI LC_ALL TMPDIR
+sh $T_ROOT/bin/proxy-manager tui
+stty -a > $T_TMP/stty.after 2>&1
+sleep 30
+EOD
+    start2() { tmux kill-session -t "$S" 2>/dev/null; tmux new-session -d -s "$S" -x 60 -y 24 "sh $DRV2" || return 1; waitfor "请选择："; sleep 0.5; }
+    start2
+    pick 1 "$nn" 2 2; waitfor "查看原始记录"
+    pick 1; waitfor "第 1/"
+    assert_eq "中断前: 有一个临时目录" 1 "$(ls -d "$TD"/apm-lmlog.* 2>/dev/null | wc -l | tr -d ' ')"
+    assert_eq "临时目录只有自己能进 (700)" drwx------ "$(ls -ld "$TD"/apm-lmlog.* | cut -c1-10)"
+    assert_eq "目录里的文件都是 600" 0 "$(find "$TD" -type f ! -perm 600 | wc -l | tr -d ' ')"
+    assert_eq "目录里有日志副本与分页文件" 2 "$(find "$TD" -type f | wc -l | tr -d ' ')"
+    rm -f "$T_TMP/stty.after"
+    key C-c; _w=0; while [ "$_w" -lt 50 ] && [ ! -s "$T_TMP/stty.after" ]; do sleep 0.2; _w=$((_w + 1)); done
+    assert_eq "Ctrl-C 后临时目录已删除" 0 "$(ls -d "$TD"/apm-lmlog.* 2>/dev/null | wc -l | tr -d ' ')"
+    assert_contains "Ctrl-C 后终端回显已恢复" "$(cat "$T_TMP/stty.after" 2>/dev/null)" " echo"
+    assert_not_contains "Ctrl-C 后终端不再停在原始模式" "$(cat "$T_TMP/stty.after" 2>/dev/null)" "-icanon"
+    tmux kill-session -t "$S" 2>/dev/null
+    start2
+    pick 1 "$nn" 2 2; waitfor "查看原始记录"
+    pick 1; waitfor "第 1/"
+    assert_eq "断线前: 有一个临时目录" 1 "$(ls -d "$TD"/apm-lmlog.* 2>/dev/null | wc -l | tr -d ' ')"
+    tmux kill-session -t "$S" 2>/dev/null
+    _w=0; while [ "$_w" -lt 50 ] && ls -d "$TD"/apm-lmlog.* >/dev/null 2>&1; do sleep 0.2; _w=$((_w + 1)); done
+    assert_eq "会话断开 (SIGHUP) 后临时目录已删除" 0 "$(ls -d "$TD"/apm-lmlog.* 2>/dev/null | wc -l | tr -d ' ')"
     tmux kill-session -t "$S" 2>/dev/null
 else
     t_skip "没有 tmux, 保护页的真实终端测试跳过"

@@ -23,6 +23,7 @@ TUI_SECRET=
 TUI_PICK=
 TUI_STTY_SAVED=
 TUI_EOF=0
+TUI_LM_TMPD=
 TUI_WAITKEY=enter
 TUI_RC=0
 TUI_EXIT=0
@@ -1220,21 +1221,37 @@ _tui_lm_pager() { # 文件
 
 # 原始记录: 最近 N 行, 保留原始时间戳和数据; FILTER=events 时只看异常事件相关行
 _tui_lm_rawlog() { # all|events  返回 7 表示用户在分页中按 Esc 结束 (不再追加一次 按回车返回)
+    # 取证日志只有 root 可读: 副本放进只有自己能进的临时目录, 文件都是 600
+    # 在子 shell 里运行 (见 _tui_lm_view), 这里的 trap 只作用于本次查看: 正常结束 Ctrl-C SSH 断线都删除目录并恢复终端
+    # kill -9 之类无法捕获的终止会留下目录, 但目录是 700 文件是 600, 其他用户读不到
+    # trap 里用全局变量: 函数返回后 local 变量已经不在作用域内
     local _f _t _r
     _f=$(env_path "$LM_LOG")
     if [ ! -s "$_f" ]; then printf '还没有取证记录（%s）\n' "$LM_LOG"; return 0; fi
-    _t=$(mktemp "${TMPDIR:-/tmp}/apm-lmlog.XXXXXX") || { printf '无法创建临时文件\n'; return 1; }
+    umask 077
+    TUI_LM_TMPD=$(mktemp -d "${TMPDIR:-/tmp}/apm-lmlog.XXXXXX") || { TUI_LM_TMPD=; printf '无法创建临时目录\n'; return 1; }
+    trap '[ -z "$TUI_LM_TMPD" ] || rm -rf -- "$TUI_LM_TMPD"; _tui_restore' EXIT
+    trap '[ -z "$TUI_LM_TMPD" ] || rm -rf -- "$TUI_LM_TMPD"; _tui_restore; exit 130' INT TERM HUP
+    _t=$TUI_LM_TMPD/log
+    _r=0
     if [ "$1" = events ]; then
         grep -a -E '^(OOM|PROCS|BURST|START) ' "$_f" | tail -n 100 > "$_t"
-        [ -s "$_t" ] || { printf '没有 OOM、进程表或事件后加密采样记录\n'; rm -f -- "$_t"; return 0; }
-        printf '异常事件相关记录（OOM、PROCS、BURST、START，最近 100 行）\n\n'
+        if [ -s "$_t" ]; then
+            printf '异常事件相关记录（OOM、PROCS、BURST、START，最近 100 行）\n\n'
+            _tui_lm_pager "$_t"
+            _r=$?
+        else
+            printf '没有 OOM、进程表或事件后加密采样记录\n'
+        fi
     else
         tail -n 100 "$_f" > "$_t"
         printf '原始记录（最近 100 行；完整日志 %s）\n\n' "$LM_LOG"
+        _tui_lm_pager "$_t"
+        _r=$?
     fi
-    _tui_lm_pager "$_t"
-    _r=$?
-    rm -f -- "$_t"
+    rm -rf -- "$TUI_LM_TMPD"
+    TUI_LM_TMPD=
+    trap - EXIT INT TERM HUP
     return "$_r"
 }
 
