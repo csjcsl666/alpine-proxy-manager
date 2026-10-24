@@ -15,8 +15,7 @@ if [ -n "${APM_TEST_REG:-}" ] && [ -d "$APM_TEST_REG" ]; then T_REG=$APM_TEST_RE
 # 正常退出 失败退出 被 INT TERM HUP 中断都先回收自己登记的进程与 tmux 会话, 再删除临时目录
 # 测试正常走到结尾时仍有登记的进程或会话在运行 = 测试自己没有收尾: 回收并让这个测试文件失败
 t_exit() {
-    local _rc _n
-    _rc=$?
+    local _rc=$? _n
     _n=$(t_reap_dir "$T_REG")
     rm -rf "$T_TMP"
     if [ "${_n:-0}" -gt 0 ]; then

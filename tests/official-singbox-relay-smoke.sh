@@ -18,9 +18,11 @@ URL="https://github.com/SagerNet/sing-box/releases/download/v$VER/$ASSET"
 W=$(mktemp -d)
 PIDS=
 cleanup() {
-    local p i n
+    local p c i n
     # 先收 nc -e 派生的处理进程, 再终止自己启动的进程本体, 限时等待后 KILL 并回收, 不留后台进程
-    for p in $PIDS; do pkill -P "$p" 2>/dev/null || :; done
+    for p in $PIDS; do
+        for c in $(ps -o pid=,ppid= | while read -r cp pp; do [ "$pp" = "$p" ] && echo "$cp"; done); do kill "$c" 2>/dev/null || :; done
+    done
     for p in $PIDS; do kill "$p" 2>/dev/null || :; done
     i=0
     while [ "$i" -lt 50 ]; do

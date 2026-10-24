@@ -155,4 +155,15 @@ G=$(grep -nE '(^|[^[:alnum:]_])(pkill|killall)([[:space:]]|$)|kill-server' "$T_R
 assert_eq "测试脚本里没有 pkill killall tmux kill-server" "" "$G"
 G=$(grep -nE 'while :; do :; done|while true; do :; done' "$T_ROOT"/tests/*.sh "$T_ROOT"/tests/e2e/* 2>/dev/null | grep -v 'test_testinfra.sh')
 assert_eq "测试脚本里没有无限空转 (负载只通过 tools/cpuload.sh)" "" "$G"
+printf '== run.sh 的退出码如实反映测试文件的失败\n'
+RX=$T_TMP/rx; mkdir -p "$RX/tests"
+cp "$T_ROOT/tests/run.sh" "$T_ROOT/tests/lib.sh" "$T_ROOT/tests/reap.sh" "$RX/tests/"
+# shellcheck disable=SC2016
+printf '. "$(dirname "$0")/lib.sh"\nassert_eq x 1 2\nt_done\n' > "$RX/tests/test_zfail.sh"
+( cd "$RX/tests" && sh run.sh >/dev/null 2>&1 ); rc_f=$?
+assert_eq "测试文件有失败时 run.sh 返回 1" 1 "$rc_f"
+# shellcheck disable=SC2016
+printf '. "$(dirname "$0")/lib.sh"\nassert_eq x 1 1\nt_done\n' > "$RX/tests/test_zfail.sh"
+( cd "$RX/tests" && sh run.sh >/dev/null 2>&1 ); rc_p=$?
+assert_eq "测试文件全部通过时 run.sh 返回 0" 0 "$rc_p"
 t_done
