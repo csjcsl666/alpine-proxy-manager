@@ -18,11 +18,24 @@ URL="https://github.com/SagerNet/sing-box/releases/download/v$VER/$ASSET"
 W=$(mktemp -d)
 PIDS=
 cleanup() {
-    local p
-    for p in $PIDS; do kill "$p" 2>/dev/null; done
+    local p i n
+    # 先收 nc -e 派生的处理进程, 再终止自己启动的进程本体, 限时等待后 KILL 并回收, 不留后台进程
+    for p in $PIDS; do pkill -P "$p" 2>/dev/null || :; done
+    for p in $PIDS; do kill "$p" 2>/dev/null || :; done
+    i=0
+    while [ "$i" -lt 50 ]; do
+        n=0
+        for p in $PIDS; do kill -0 "$p" 2>/dev/null && n=1; done
+        [ "$n" -eq 0 ] && break
+        sleep 0.1
+        i=$((i + 1))
+    done
+    for p in $PIDS; do kill -9 "$p" 2>/dev/null || :; done
+    for p in $PIDS; do wait "$p" 2>/dev/null || :; done
     rm -rf "$W"
 }
 trap cleanup EXIT
+trap 'exit 130' INT TERM HUP
 
 n=1
 while [ "$n" -le 3 ]; do
