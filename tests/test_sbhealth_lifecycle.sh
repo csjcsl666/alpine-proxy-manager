@@ -180,7 +180,7 @@ mkdir -p "$A/proc/777"
 "$PM" sing-box stop >/dev/null 2>&1
 mkdir -p "$D"; printf '777\n' > "$D/daemon.pid"; date +%s > "$D/connected"; mkst SOCKS-01 healthy "" "$NOW" 0
 OUT=$("$PM" sing-box health status 2>&1)
-assert_contains "sing-box 停止: 不显示上游健康" "$OUT" "sing-box 未运行"
+assert_contains "sing-box 停止: 不显示上游健康" "$OUT" "sing-box 已停止"
 assert_not_contains "sing-box 停止: 不显示正常" "$OUT" "健康状态：正常"
 assert_not_contains "状态输出不含用户名" "$OUT" fictuser
 assert_not_contains "状态输出不含 SOCKS 密码" "$OUT" FictSocksPass

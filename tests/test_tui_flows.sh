@@ -230,7 +230,8 @@ EOD
     assert_not_contains "方向键: 不进入输入行" "$scr" "请选择：^"
     assert_contains "方向键: 之后的选择照常" "$scr" "管理 AnyTLS-01"
     scr=$(ptyrun 100 40 2 "Enter=管理 AnyTLS-01" "Escape=6. Manager 管理")
-    assert_eq "单独 Esc 等同返回: 回到主菜单, sing-box 页只出现一次" 1 "$(printf '%s\n' "$scr" | grep -c '管理 AnyTLS-01')"
+    # 备用屏幕没有回滚历史: 返回之后 sing-box 页已被主菜单取代, 屏幕上不再有它
+    assert_eq "单独 Esc 等同返回: 回到主菜单, sing-box 页已被取代" 0 "$(printf '%s\n' "$scr" | grep -c '管理 AnyTLS-01')"
     assert_contains "单独 Esc 返回后仍在主菜单" "$scr" "状态与诊断"
     # 通用: 启动后先执行 PRE 命令 (例如改变窗口尺寸), 再按键, 每个按键之间的等待可指定
     ptyseq() { # 等待秒数 PRE 按键...  (PRE 为 - 表示不做)

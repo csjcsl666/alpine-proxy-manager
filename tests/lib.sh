@@ -353,6 +353,18 @@ rebuild_net() {
             ln -sf "socket:[$((base + i))]" "$R/proc/$w/fd/$((10 + i))"
             i=$((i + 1))
         done < "$K/ports.tmp"
+        # 旋钮 relay_udp6 (内容是端口): Snell 转发 UDP 期间临时开的出站 socket, 未连接的 [::]:临时端口, 在 udp6 表里是 07 状态, 归 Snell 进程
+        # 与真实 Snell v6.0.0 在隔离网络命名空间里观察到的一致 (配置只监听 IPv4 时也出现, association 结束就消失)
+        # 旋钮 listen_udp (内容是端口): Snell 在配置的端口上真的监听 UDP (0.0.0.0, 07 状态)
+        if [ "$s" = snell ] && [ -s "$K/listen_udp" ]; then
+            printf '   %s: 00000000:%04X 00000000:0000 07 00000000:00000000 00:00000000 00000000   100        0 %s 2 0\n' "$i" "$(cat "$K/listen_udp")" "$((base + i))" >> "$K/udp.rows"
+            ln -sf "socket:[$((base + i))]" "$R/proc/$w/fd/$((10 + i))"
+            i=$((i + 1))
+        fi
+        if [ "$s" = snell ] && [ -s "$K/relay_udp6" ]; then
+            printf '   %s: 00000000000000000000000000000000:%04X 00000000000000000000000000000000:0000 07 00000000:00000000 00:00000000 00000000   100        0 %s 2 0\n' "$i" "$(cat "$K/relay_udp6")" "$((base + i))" >> "$K/udp6.rows"
+            ln -sf "socket:[$((base + i))]" "$R/proc/$w/fd/$((10 + i))"
+        fi
     done
     for f in tcp udp; do
         {

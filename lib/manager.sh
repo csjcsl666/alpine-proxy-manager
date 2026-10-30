@@ -165,7 +165,7 @@ _mgr_core_report() { # 名称 key 更新前 PID
     _now=$(_mgr_core_before "$2")
     if [ "$3" = - ] && [ "$_now" = - ]; then
         core_discover "$2"
-        if [ "$CF_INSTALLED" = yes ]; then printf '%s：未运行\n' "$1"; else printf '%s：未安装\n' "$1"; fi
+        if [ "$CF_INSTALLED" = yes ]; then printf '%s：已停止\n' "$1"; else printf '%s：未安装\n' "$1"; fi
     elif [ "$3" = "$_now" ]; then
         printf '%s：未重启 (PID %s)\n' "$1" "$_now"
     else

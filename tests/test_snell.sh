@@ -213,7 +213,7 @@ core_discover snell
 assert_eq "external stopped" stopped "$CF_STATE"
 assert_eq "stopped 时不报告监听" "" "$CF_LISTEN"
 out=$("$PM" snell status)
-assert_contains "stopped: snell status" "$out" "状态：未运行"
+assert_contains "stopped: snell status" "$out" "状态：已停止"
 printf 'crashed' > "$APM_FAKE_RC_DIR/snell"
 core_discover snell
 assert_eq "external crashed" crashed "$CF_STATE"

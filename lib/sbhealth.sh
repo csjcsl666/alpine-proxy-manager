@@ -279,7 +279,7 @@ sbh_view() {
     esac
     core_discover singbox
     if [ "$CF_STATE" != running ]; then
-        SBH_V_STATE=stopped; SBH_V_NOTE="sing-box 未运行"; SBH_V_EXIT=socks; return 0
+        SBH_V_STATE=stopped; SBH_V_NOTE="sing-box 已停止"; SBH_V_EXIT=socks; return 0
     fi
     if ! sbh_monitor_up; then
         SBH_V_STATE=down; SBH_V_NOTE="监控服务没有运行，上游状态无法更新，sing-box 的转发不受影响"; SBH_V_EXIT=socks
@@ -331,7 +331,7 @@ sbh_summary() { # 名称
         recovering) printf '● 恢复中' ;;
         off) printf '%s' '- 监控已关闭' ;;
         down) printf '%s' '! 监控异常' ;;
-        stopped) printf '%s' '○ sing-box 未运行' ;;
+        stopped) printf '%s' '○ sing-box 已停止' ;;
         *) printf '● 正常' ;;
     esac
 }
@@ -346,7 +346,7 @@ sbh_print_profile() { # 名称
         recovering) printf '健康状态：恢复中\n原因：%s\n' "$(_sbh_reason_text "$SBH_V_REASON")" ;;
         off) printf '健康状态：监控已关闭\n' ;;
         down) printf '健康状态：监控异常\n' ;;
-        stopped) printf '健康状态：sing-box 未运行\n' ;;
+        stopped) printf '健康状态：sing-box 已停止\n' ;;
     esac
     [ -z "$SBH_V_NOTE" ] || printf '说明：%s\n' "$SBH_V_NOTE"
     printf '首选出口：SOCKS5\n'

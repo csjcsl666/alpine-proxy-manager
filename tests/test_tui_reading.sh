@@ -146,11 +146,14 @@ EOD
     assert_eq "tmux Snell 详细信息: 数字与方向键不会返回也不会追加菜单" 1 "$(pcount '查看详细信息')"
     keys Enter
     sleep 0.5
-    assert_eq "tmux Snell 详细信息: 回车后回到 Snell 菜单" 2 "$(pcount '查看详细信息')"
+    # 备用屏幕没有回滚: 回车后详细信息页被 Snell 菜单取代, 屏幕上只有菜单这一份, 且不再有提示
+    assert_eq "tmux Snell 详细信息: 回车后回到 Snell 菜单" 1 "$(pcount '查看详细信息')"
+    assert_eq "tmux Snell 详细信息: 回车后提示已消失" 0 "$(pcount '按回车返回')"
     # 重复进入: 1 回车 1 回车
     pick 1; keys Enter; pick 1; keys Enter
     sleep 0.5
-    assert_eq "tmux Snell 详细信息: 反复进入每次都要回车 (每次回车后各出现一次菜单)" 4 "$(pcount '查看详细信息')"
+    assert_eq "tmux Snell 详细信息: 反复进入每次都要回车 (回车后回到菜单, 菜单不叠加)" 1 "$(pcount '查看详细信息')"
+    assert_eq "tmux Snell 详细信息: 反复进入后没有停在提示" 0 "$(pcount '按回车返回')"
     stop
 
     # 单独 Esc 也可结束阅读暂停; Esc 返回菜单规则不变

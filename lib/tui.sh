@@ -31,6 +31,7 @@ TUI_TICK_ON=0
 TUI_KEEP=0
 TUI_ONEKEY=0
 TUI_NCH=99
+TUI_ALT=0
 
 # ---- 终端能力 ----
 
@@ -87,13 +88,43 @@ _tui_rule() { printf -- '--------------------------------\n'; }
 _tui_dot() { # run | stop | err | na
     case $1 in
         run) _tui_c green; if [ "$TUI_UTF8" = 1 ]; then printf '● 运行中'; else printf '[RUNNING]'; fi; _tui_c off ;;
-        stop) if [ "$TUI_UTF8" = 1 ]; then printf '○ 未运行'; else printf '[STOPPED]'; fi ;;
+        stop) if [ "$TUI_UTF8" = 1 ]; then printf '○ 已停止'; else printf '[STOPPED]'; fi ;;
         err) _tui_c red; if [ "$TUI_UTF8" = 1 ]; then printf '! 异常'; else printf '[ERROR]'; fi; _tui_c off ;;
         *) if [ "$TUI_UTF8" = 1 ]; then printf '%s' '- 未安装'; else printf '[N/A]'; fi ;;
     esac
 }
 
 _tui_warn() { _tui_c yellow; printf '警告：%s\n' "$1"; _tui_c off; }
+
+# ---- 备用屏幕 ----
+# 交互终端里 TUI 在备用屏幕缓冲区 (xterm 的 1049) 中运行: 所有菜单都画在这一屏里, 终端的滚动历史里不会混进菜单,
+# 退出时切回原来的屏幕, shell 里已有的内容和滚动记录原样保留, 不需要靠清屏转义序列去掩盖历史
+# 只在 stdout 是终端 ANSI 可用 TERM 不在不支持的名单里时启用; APM_TUI_ALTSCREEN=1 强制启用 (测试用管道驱动), 0 关闭
+# 不启用时行为与之前一致 (清屏重绘), 不会输出任何缓冲区切换序列
+_tui_alt_wanted() {
+    case ${APM_TUI_ALTSCREEN:-auto} in
+        0) return 1 ;;
+        1) [ "$TUI_ANSI" = 1 ] ;;
+        *)
+            [ "$TUI_ANSI" = 1 ] && [ -t 1 ] || return 1
+            case ${TERM:-} in ''|dumb|linux|vt52|vt100|vt102|unknown) return 1 ;; esac
+            ;;
+    esac
+}
+
+_tui_alt_enter() {
+    [ "$TUI_ALT" != 1 ] || return 0
+    _tui_alt_wanted || return 0
+    TUI_ALT=1
+    printf '\033[?1049h\033[H\033[2J'
+}
+
+# 幂等: 可以从正常退出 信号 EXIT 陷阱多处调用. 先恢复光标与属性, 再切回原屏幕
+_tui_alt_leave() {
+    [ "$TUI_ALT" = 1 ] || return 0
+    TUI_ALT=0
+    printf '\033[0m\033[?25h\033[?1049l'
+}
 
 _tui_restore() {
     if [ -n "$TUI_STTY_SAVED" ]; then
@@ -102,10 +133,16 @@ _tui_restore() {
     fi
 }
 
-_tui_on_int() {
+# 终端状态一并恢复: 回显与行模式, 光标, 原屏幕
+_tui_cleanup() {
     _tui_restore
+    _tui_alt_leave
+}
+
+_tui_on_int() { # 退出码
+    _tui_cleanup
     printf '\n已退出\n'
-    exit 130
+    exit "${1:-130}"
 }
 
 _tui_in_tty() { [ -t 0 ] || [ "${APM_TUI_TEST_TTY:-}" = 1 ]; }
@@ -674,6 +711,86 @@ _tui_page() {
     _tui_wait
 }
 
+# ---- 长内容查看 (备用屏幕里没有终端的滚动历史) ----
+# 备用屏幕没有回滚, 超过一屏的报告与日志会把开头顶掉, 所以在备用屏幕里: 报告先收集到变量 (只读报告, 不含秘密, 不写文件),
+# 一屏放得下就原样输出, 放不下就分页: 回车下一页, Esc 或 q 结束. 不在备用屏幕时 (管道 测试 不支持的终端) 完全沿用 _tui_do
+# 含秘密的页面 (PSK 客户端信息) 不走这里, 保持直接输出, 不进变量
+
+TUI_ROWS=24
+TUI_COLS=80
+TUI_VIEW_ESC=0
+
+# 终端尺寸放在 TUI_ROWS TUI_COLS, 每次分页现问一次 (终端尺寸会变), 问不到用环境变量, 再不行 24x80
+_tui_term_size() {
+    local _sz
+    _sz=$(_snell_run stty size 2>/dev/null) || _sz=
+    # shellcheck disable=SC2086
+    set -- $_sz
+    TUI_ROWS=${1:-${LINES:-24}}
+    TUI_COLS=${2:-${COLUMNS:-80}}
+    case $TUI_ROWS in ''|*[!0-9]*) TUI_ROWS=24 ;; esac
+    case $TUI_COLS in ''|*[!0-9]*) TUI_COLS=80 ;; esac
+    [ "$TUI_ROWS" -ge 8 ] || TUI_ROWS=24
+    [ "$TUI_COLS" -ge 20 ] || TUI_COLS=80
+}
+
+# 按终端宽度给每一行估占几行, 输出 "页号<TAB>行". 宽度按字节估: ANSI 颜色序列不占宽, 非 ASCII 的 3 字节算 2 列 (中文), 偏保守
+_tui_paginate() { # 每页行数 列数
+    LC_ALL=C awk -v rows="$1" -v cols="$2" '
+        function w(s,   n) {
+            gsub(/\033\[[0-9;?]*[A-Za-z]/, "", s)
+            n = gsub(/[^\001-\177]/, "", s)
+            return length(s) + int(n * 2 / 3 + 0.5)
+        }
+        BEGIN { page = 0; used = 0 }
+        { r = int((w($0) + cols - 1) / cols); if (r < 1) r = 1
+          if (used + r > rows && used > 0) { page++; used = 0 }
+          used += r; print page "\t" $0 }'
+}
+
+# 显示一段已收集的文本. 放得下一屏原样输出; 否则分页. Esc 结束置 TUI_VIEW_ESC=1
+_tui_view_text() { # 标题 文本
+    local _paged _tot _p
+    TUI_VIEW_ESC=0
+    _tui_term_size
+    # 留 3 行: 标题行, 页脚, 光标行
+    _paged=$(printf '%s\n' "$2" | _tui_paginate $((TUI_ROWS - 3)) "$TUI_COLS")
+    _tot=$(printf '%s\n' "$_paged" | tail -n 1 | cut -f1)
+    _tot=$((_tot + 1))
+    if [ "$_tot" -le 1 ]; then printf '%s\n' "$2"; return 0; fi
+    _p=0
+    while [ "$_p" -lt "$_tot" ]; do
+        _tui_clear_hard
+        printf '%s（第 %s/%s 页）\n' "$1" $((_p + 1)) "$_tot"
+        printf '%s\n' "$_paged" | awk -F'\t' -v p="$_p" '$1 == p { sub(/^[0-9]+\t/, ""); print }'
+        _p=$((_p + 1))
+        [ "$_p" -lt "$_tot" ] || break
+        printf -- '-- 第 %s/%s 页，回车下一页，Esc 结束 --' "$_p" "$_tot"
+        _tui_wait_enter
+        printf '\n'
+        [ "$TUI_WAITKEY" = enter ] || { TUI_VIEW_ESC=1; return 0; }
+    done
+}
+
+# 只读报告: 备用屏幕里收集后分页显示, 否则等同 _tui_do. 命令的退出码在 TUI_RC
+_tui_do_view() { # 标题 命令...
+    local _t _out
+    _t=$1
+    shift
+    TUI_VIEW_ESC=0
+    if [ "$TUI_ALT" != 1 ]; then _tui_do "$@"; return 0; fi
+    _out=$( ( "$@" ) </dev/null 2>&1 )
+    TUI_RC=$?
+    _tui_view_text "$_t" "$_out"
+}
+
+# 报告页: 显示并读完再返回. 在分页中按 Esc 结束就直接返回, 不再追加一次 按回车返回
+_tui_report() { # 标题 命令...
+    _tui_do_view "$@"
+    if [ "$TUI_VIEW_ESC" = 1 ]; then TUI_KEEP=0; return 0; fi
+    _tui_page
+}
+
 _tui_need_root() {
     if env_is_root; then return 0; fi
     printf '此操作需要 root, TUI 不会自动 sudo\n'
@@ -733,8 +850,7 @@ _tui_core_notes() {
 _tui_log() { # key
     local _n
     _n=30
-    case $1 in snell) _tui_do snell_cli log "$_n" ;; anytlsgw) _tui_do agw_cli log "$_n" ;; *) _tui_do singbox_cli log "$_n" ;; esac
-    _tui_page
+    case $1 in snell) _tui_report "日志" snell_cli log "$_n" ;; anytlsgw) _tui_report "日志" agw_cli log "$_n" ;; *) _tui_report "日志" singbox_cli log "$_n" ;; esac
 }
 
 tui_log_menu() {
@@ -798,8 +914,8 @@ tui_status_menu() {
 doctor|doctor 环境检查" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            overview) _tui_do _tui_overview; _tui_page ;;
-            doctor) _tui_do report_doctor; _tui_page ;;
+            overview) _tui_report "状态总览" _tui_overview ;;
+            doctor) _tui_report "doctor 环境检查" report_doctor ;;
         esac
     done
 }
@@ -1238,6 +1354,8 @@ _tui_lm_pager() { # 文件
         _tui_wait_enter
         printf '\n'
         [ "$TUI_WAITKEY" = enter ] || { rm -f -- "$_file.paged"; return 7; }
+        # 备用屏幕没有回滚: 翻页时换屏, 不让上一页留在下一页上面把屏幕挤满
+        [ "$TUI_ALT" != 1 ] || _tui_clear_hard
     done
     rm -f -- "$_file.paged"
 }
@@ -1546,7 +1664,7 @@ $_t"
         tui_choose "$_items" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            detail) _tui_clear; _tui_header "保护详情"; _tui_do _tui_lm_detail; _tui_page ;;
+            detail) _tui_clear; _tui_header "保护详情"; _tui_report "保护详情" _tui_lm_detail ;;
             log) tui_lm_log_menu ;;
             adv) tui_lm_adv_menu ;;
             on) _tui_need_root || continue; _tui_clear; _tui_header "启用保护"; _tui_do _tui_lm_enable; _tui_page ;;
@@ -1741,22 +1859,64 @@ _tui_listen_text() {
     _tui_listen_cfg_rows "$1" | _tui_listen_summary
 }
 
-# Snell 页的监听行: 运行中且能确认进程 socket 时显示实际监听, 否则明确标注是配置, 两者端口不一致时说明
+# 监听行的统一写法: 协议 + IP 版本 + 地址:端口, 一个监听一行, 不依赖终端宽度. 输入每行 "协议 地址 端口" (地址 IPv6 不带方括号)
+_tui_listen_rows_fmt() {
+    awk '
+        NF >= 3 && $3 ~ /^[0-9]+$/ {
+            a = $2; gsub(/[][]/, "", a)
+            if (a == "::0" || a == "0:0:0:0:0:0:0:0") a = "::"
+            if (a ~ /:/) printf "    %s  IPv6  [%s]:%s\n", toupper($1), a, $3
+            else printf "    %s  IPv4  %s:%s\n", toupper($1), a, $3
+        }' | sort -u
+}
+
+# Snell 页的监听块: 配置要求 / 实际监听 / 状态说明 分开写
+# 实际监听只来自服务进程自己的 socket (CF_LISTEN); Snell 转发 UDP 时临时开的出站 UDP socket 单列 (CF_LISTEN_RELAY), 不算监听也不算异常
+# 只有端口集合与配置不同才提示配置异常, 并写清是哪个端口
 _tui_snell_listen_line() {
-    local _cfg _act _ap _cp
-    _cfg=$(_tui_listen_text "${CF_SNELL_LISTEN:--}")
-    if [ "$CF_STATE" = running ] && [ -n "$CF_LISTEN" ] && [ "$CF_LISTEN_ATTRIB" = pid ]; then
-        _act=$(printf '%s\n' "$CF_LISTEN" | awk '{ n = split($2, a, ":"); p = a[n]; print substr($2, 1, length($2) - length(p) - 1), p }' | _tui_listen_summary)
-        printf '监听：%s（实际）\n' "$_act"
-        _ap=$(printf '%s\n' "$CF_LISTEN" | sed -n 's/.*:\([0-9][0-9]*\) .*/\1/p' | sort -un | tr '\n' ' ')
-        _cp=$(_snell_ports_of "${CF_SNELL_LISTEN:-}" | tr ' ' '\n' | sort -un | tr '\n' ' ')
-        [ "$_ap" = "$_cp" ] || printf '  与配置不一致，配置为：%s\n' "$_cfg"
-    elif [ "$CF_STATE" = running ] && [ "$CF_LISTEN_ATTRIB" = denied ]; then
-        printf '监听：需要 root 才能确认；配置为：%s\n' "$_cfg"
-    elif [ "$CF_STATE" = running ]; then
-        printf '监听：没有检测到；配置为：%s\n' "$_cfg"
+    local _cfg_rows _act_rows _cp _ap _miss _extra _p
+    _cfg_rows=$(_tui_listen_cfg_rows "${CF_SNELL_LISTEN:-}" | awk '{ print "tcp", $1, $2 }' | _tui_listen_rows_fmt)
+    printf '监听状态：\n'
+    printf '  配置监听：\n'
+    if [ -n "$_cfg_rows" ]; then printf '%s\n' "$_cfg_rows"; else printf '    未配置\n'; fi
+    if [ "$CF_STATE" != running ]; then
+        printf '  实际监听：服务已停止，没有监听\n'
+        return 0
+    fi
+    if [ "$CF_LISTEN_ATTRIB" = denied ]; then
+        printf '  实际监听：需要 root 才能确认\n'
+        return 0
+    fi
+    if [ "$CF_LISTEN_ATTRIB" != pid ]; then
+        printf '  实际监听：没有检测到\n'
+        printf '  状态说明：! 检测失败，没有读到服务进程的监听信息\n'
+        return 0
+    fi
+    _act_rows=$(printf '%s\n' "$CF_LISTEN" | awk 'NF { n = split($2, a, ":"); p = a[n]; print $1, substr($2, 1, length($2) - length(p) - 1), p }' | _tui_listen_rows_fmt)
+    printf '  实际监听：\n'
+    if [ -n "$_act_rows" ]; then printf '%s\n' "$_act_rows"; else printf '    没有检测到\n'; fi
+    if [ -n "$CF_LISTEN_RELAY" ]; then
+        printf '  UDP 转发临时端口：\n'
+        printf '%s\n' "$CF_LISTEN_RELAY" | awk '{ n = split($2, a, ":"); p = a[n]; print $1, substr($2, 1, length($2) - length(p) - 1), p }' | _tui_listen_rows_fmt
+        printf '    Snell 转发 UDP 时临时创建，结束后消失，不是监听端口\n'
+    fi
+    _cp=$(_snell_ports_of "${CF_SNELL_LISTEN:-}" | tr ' ' '\n' | sort -un | tr '\n' ' ')
+    _ap=$(printf '%s\n' "$CF_LISTEN" | sed -n 's/.*:\([0-9][0-9]*\) .*/\1/p' | sort -un | tr '\n' ' ')
+    _miss=
+    for _p in $_cp; do case " $_ap " in *" $_p "*) ;; *) _miss="$_miss $_p" ;; esac; done
+    _extra=
+    for _p in $_ap; do case " $_cp " in *" $_p "*) ;; *) _extra="$_extra $_p" ;; esac; done
+    if [ -z "$_cp" ] && [ -z "$_ap" ]; then
+        printf '  状态说明：! 配置异常，配置里没有可识别的监听端口，实际也没有监听\n'
+    elif [ -z "$_miss" ] && [ -z "$_extra" ]; then
+        if [ "$_cfg_rows" = "$_act_rows" ]; then
+            printf '  状态说明：实际监听与配置一致\n'
+        else
+            printf '  状态说明：端口与配置一致，地址范围的写法不同，以实际监听为准\n'
+        fi
     else
-        printf '监听配置：%s（服务未运行）\n' "$_cfg"
+        [ -z "$_miss" ] || printf '  状态说明：! 配置异常，配置的端口%s 没有在监听，可能需要重启\n' "$_miss"
+        [ -z "$_extra" ] || printf '  状态说明：! 配置异常，实际监听的端口%s 不在配置里，配置改动后可能还没有重启\n' "$_extra"
     fi
 }
 
@@ -2061,7 +2221,7 @@ uninstall|卸载"
         case $TUI_KEY in
             back) return 0 ;;
             install) _tui_snell_install ;;
-            info) _tui_do snell_cli info; _tui_page ;;
+            info) _tui_report "Snell 详细信息" snell_cli info ;;
             start|stop|restart) _tui_core_lifecycle snell "$TUI_KEY" ;;
             config) tui_snell_config_menu ;;
             net) tui_snell_netgroup_menu ;;
@@ -2301,7 +2461,7 @@ uninstall|卸载"
                 fi
                 _tui_page
                 ;;
-            info) _tui_do agw_cli info; _tui_page ;;
+            info) _tui_report "AnyTLS Gateway 详细信息" agw_cli info ;;
             start|stop|restart) _tui_core_lifecycle anytlsgw "$TUI_KEY" ;;
             listener) tui_agw_listener_menu ;;
             cert) tui_agw_cert_menu ;;
@@ -2351,7 +2511,7 @@ _tui_listen_port_text() { # FILE
 _tui_inst_state() { # FILE
     if [ "$(kv_get "$1" enabled)" != true ]; then printf '○ 已禁用'; return 0; fi
     if ! sb_instance_validate "$1" >/dev/null 2>&1; then printf '! 配置无效'; return 0; fi
-    if [ "$CF_STATE" != running ]; then printf '○ sing-box 未运行'; return 0; fi
+    if [ "$CF_STATE" != running ]; then printf '○ sing-box 已停止'; return 0; fi
     if _sb_inst_listening "$1"; then printf '● 运行中'; else printf '! 没有监听'; fi
 }
 
@@ -2479,7 +2639,7 @@ uninstall|卸载"
         case $TUI_KEY in
             back) return 0 ;;
             install) _tui_singbox_install ;;
-            info) _tui_do singbox_cli info; _tui_page ;;
+            info) _tui_report "sing-box 详细信息" singbox_cli info ;;
             inst:*) tui_instance_menu "${TUI_KEY#inst:}" ;;
             add) _tui_add_menu ;;
             socks) tui_socks_menu ;;
@@ -2887,7 +3047,7 @@ _tui_health_global_text() {
     core_discover singbox
     _kn=
     if [ "$(sbh_mode)" = custom ]; then _kn="自定义监控 $_k/$_n 台，"; fi
-    if [ "$CF_STATE" != running ]; then printf '已开启（%ssing-box 未运行）' "$_kn"; return 0; fi
+    if [ "$CF_STATE" != running ]; then printf '已开启（%ssing-box 已停止）' "$_kn"; return 0; fi
     if sbh_monitor_up; then printf '已开启（%s事件驱动）' "$_kn"; else printf '已开启 ! 监控服务没有运行，上游状态显示为未知，sing-box 的转发不受影响'; fi
 }
 
@@ -3502,15 +3662,18 @@ tui_run() {
     _tui_onekey_init
     TUI_EOF=0
     TUI_EXIT=0
-    trap '_tui_on_int' INT TERM
-    trap '_tui_restore' EXIT
+    trap '_tui_on_int 130' INT
+    trap '_tui_on_int 143' TERM
+    trap '_tui_on_int 129' HUP
+    trap '_tui_cleanup' EXIT
     # 只在明确设置了非 UTF-8 的 locale 时提示, Alpine 默认不设置 locale, 终端本身通常能显示中文
     if [ "$TUI_UTF8" = 0 ] && [ -n "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" ] && [ "${TERM:-}" != dumb ] && [ "$TUI_ANSI" = 1 ]; then
         printf '提示：当前终端可能无法正确显示中文，功能仍可使用\n'
     fi
+    _tui_alt_enter
     tui_main_menu
-    _tui_restore
-    trap - INT TERM EXIT
+    _tui_cleanup
+    trap - INT TERM HUP EXIT
     printf '已退出\n'
     return 0
 }

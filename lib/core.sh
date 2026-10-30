@@ -550,6 +550,7 @@ core_discover() {
 "
         CF_STATE=broken
     fi
+    CF_LISTEN_RELAY=
     if command -v "core_${1}_discover_extra" >/dev/null 2>&1; then
         "core_${1}_discover_extra"
     fi
@@ -580,7 +581,7 @@ core_state_label() {
     case $1 in
         not-installed) printf '未安装' ;;
         unverified) printf '未确认 (有同名入口但不是 ELF)' ;;
-        stopped) printf '未运行' ;;
+        stopped) printf '已停止' ;;
         running) printf '运行中' ;;
         crashed) printf '已崩溃 (OpenRC 报告 crashed)' ;;
         broken) printf '异常 (二进制无法给出版本)' ;;
@@ -694,6 +695,7 @@ core_snell_discover_extra() {
     CF_SNELL_MODE=
     CF_PSK=unknown
     CF_LISTEN=
+    CF_LISTEN_RELAY=
     CF_LISTEN_ATTRIB=none
 
     # 配置路径: OpenRC 脚本里 command_args 的 -c, 其次已知的两种布局
@@ -764,6 +766,15 @@ core_snell_discover_extra() {
         if [ "$_inodes" != " " ]; then
             CF_LISTEN=$(_core_proc_listeners "$_inodes" "")
             CF_LISTEN_ATTRIB=pid
+            # Snell v6 转发 UDP 时, 每个 association 会临时开一个未连接的 [::]:临时端口 UDP socket (出站用, 与配置的 listen 无关,
+            # 即使只配置了 IPv4 也出现在 udp6, association 结束就消失). /proc/net/udp 里它和真正监听的 UDP 端口都是 07 状态,
+            # 所以只把端口在配置里的 UDP 当作监听, 其余归为转发临时端口. 读不到配置端口时无从判断, 保持原样
+            if [ -n "$_ports" ] && [ -n "$CF_LISTEN" ]; then
+                CF_LISTEN_RELAY=$(printf '%s\n' "$CF_LISTEN" | awk -v ports="$_ports" '$1 == "udp" { n = split($2, a, ":"); if (index(ports, " " a[n] " ") == 0) print }')
+                if [ -n "$CF_LISTEN_RELAY" ]; then
+                    CF_LISTEN=$(printf '%s\n' "$CF_LISTEN" | awk -v ports="$_ports" '$1 != "udp" { print; next } { n = split($2, a, ":"); if (index(ports, " " a[n] " ") != 0) print }')
+                fi
+            fi
         fi
     fi
     if [ "$CF_LISTEN_ATTRIB" = none ] && [ -n "$_ports" ] && [ "$CF_STATE" = running ]; then

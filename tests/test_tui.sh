@@ -138,7 +138,7 @@ assert_eq "确认 y 停止" stopped "$CF_STATE"
 out=$(T '1\n0\n0\n0\n')
 assert_contains "停止后显示启动" "$out" ". 启动"
 assert_not_contains "停止后不显示停止" "$out" ". 停止"
-assert_contains "停止状态符号" "$out" "○ 未运行"
+assert_contains "停止状态符号" "$out" "○ 已停止"
 # 启动
 out=$(T '1\n2\n\n0\n0\n0\n')
 core_discover snell
@@ -531,10 +531,10 @@ assert_contains "监控服务没有运行: 显示监控异常而不是故障" "$
 date +%s > "$RUN/connected"
 "$PM" sing-box stop >/dev/null 2>&1
 out=$(T '2\n0\n0\n')
-assert_contains "sing-box 停止: 实例状态" "$out" "○ sing-box 未运行"
+assert_contains "sing-box 停止: 实例状态" "$out" "○ sing-box 已停止"
 assert_not_contains "sing-box 停止: 不显示正常" "$out" "● 正常"
 out=$(T '2\n6\n0\n0\n0\n')
-assert_contains "sing-box 停止: 管理中心说明" "$out" "健康监控：已开启（sing-box 未运行）"
+assert_contains "sing-box 停止: 管理中心说明" "$out" "健康监控：已开启（sing-box 已停止）"
 "$PM" sing-box start >/dev/null 2>&1
 mkdir -p "$RUN" "$A/proc/777"; printf '777\n' > "$RUN/daemon.pid"; date +%s > "$RUN/connected"; mkst SOCKS-01 healthy "" "$NOW" 0
 # Profile 自己的启用/禁用 (和健康监控开关是两回事)

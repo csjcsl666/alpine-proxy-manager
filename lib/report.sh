@@ -163,7 +163,7 @@ _rpt_yn() { case $1 in yes) printf '是' ;; no) printf '否' ;; *) printf '%s' "
 _rpt_svc_state() {
     case $1 in
         started) printf '运行中' ;;
-        stopped) printf '未运行' ;;
+        stopped) printf '已停止' ;;
         crashed) printf '异常退出' ;;
         starting) printf '启动中' ;;
         stopping) printf '停止中' ;;
