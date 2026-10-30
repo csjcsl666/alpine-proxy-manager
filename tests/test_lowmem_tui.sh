@@ -527,8 +527,18 @@ EOD
         assert_contains "tmux $dim: 进入保护首页" "$v" "Snell · 网络与进程保护"
         assert_contains "tmux $dim: 首页状态" "$v" "保护状态：未启用"
         assert_contains "tmux $dim: 菜单" "$v" "4. 启用保护"
-        pick 1; waitfor "按回车返回"
-        v=$(vis)
+        pick 1
+        # 备用屏幕没有回滚: 详情超过一屏时分页, 回车逐页翻到最后一页才停在 按回车返回
+        _g=0
+        while [ "$_g" -lt 12 ]; do
+            sleep 0.5
+            v=$(vis)
+            case $v in
+                *"按回车返回..."*) break ;;
+                *"回车下一页"*) key Enter ;;
+            esac
+            _g=$((_g + 1))
+        done
         assert_contains "tmux $dim: 详情页停在 按回车返回" "$v" "按回车返回..."
         key Enter; waitfor "4. 启用保护"
         assert_contains "tmux $dim: 回车后回到保护首页" "$(vis)" "4. 启用保护"
