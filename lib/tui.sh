@@ -32,6 +32,8 @@ TUI_KEEP=0
 TUI_ONEKEY=0
 TUI_NCH=99
 TUI_ALT=0
+TUI_OUT=
+TUI_NOTICE=
 
 # ---- 终端能力 ----
 
@@ -64,15 +66,46 @@ _tui_c() { # 颜色名
     esac
 }
 
-# 清屏. 上一个操作刚显示过内容时 (TUI_KEEP=1) 不清屏, 只空一行, 内容留在屏幕上供阅读与复制, 下一个菜单接在它下面
-_tui_clear() {
-    if [ "${TUI_KEEP:-0}" = 1 ]; then TUI_KEEP=0; printf '\n'; return 0; fi
-    if [ "$TUI_ANSI" = 1 ]; then printf '\033[H\033[2J'; else printf '\n'; fi
+# ---- 页面生命周期 ----
+# 页面 = 清屏 + 完整重绘, 任何时候屏幕上只有一份最新页面, 内容不会往下累积
+#   _tui_clear       每个菜单循环的第一步: 清屏并回到左上角, 随后显示一次上一步操作的结果 (TUI_NOTICE)
+#   _tui_do          执行业务命令, 输出收进 TUI_OUT 后显示, 不让子进程直接写终端
+#   _tui_pause       上一步只有一两行反馈: 把 TUI_OUT 转成下一页顶部的结果提示, 不等待, 不保留旧页面
+#   _tui_wait/_page  需要读完的内容: 等待回车, 之后下一页照常清屏重绘
+# 不能清屏的终端 (ANSI 关闭: dumb 管道) 退回旧做法: 空一行, 内容留在后面
+
+# 结果提示最多保留的行数, 防止长输出把新页面顶出屏幕
+TUI_NOTICE_MAX=6
+
+_tui_notice_show() {
+    [ -n "$TUI_NOTICE" ] || return 0
+    printf '%s\n\n' "$(printf '%s\n' "$TUI_NOTICE" | tail -n "$TUI_NOTICE_MAX")"
+    TUI_NOTICE=
 }
 
-# 主菜单的内存行靠绝对定位刷新, 必须真正清屏
+# 记录并显示一句话反馈, 供 _tui_pause 带到下一页
+_tui_say() {
+    TUI_OUT=$1
+    printf '%s\n' "$1"
+}
+
+_tui_clear() {
+    if [ "$TUI_ANSI" = 1 ]; then
+        TUI_KEEP=0
+        TUI_OUT=
+        printf '\033[H\033[2J'
+        _tui_notice_show
+        return 0
+    fi
+    TUI_KEEP=0
+    printf '\n'
+}
+
+# 主菜单的内存行靠绝对定位刷新, 必须真正清屏, 并且不带结果提示 (提示会让行号错位)
 _tui_clear_hard() {
     TUI_KEEP=0
+    TUI_OUT=
+    TUI_NOTICE=
     if [ "$TUI_ANSI" = 1 ]; then printf '\033[H\033[2J'; else printf '\n'; fi
 }
 
@@ -348,13 +381,13 @@ tui_confirm() { # 说明文字, 回车默认 Yes
         # 读取失败且没有读到任何内容 (EOF 或终端断开) 不是空回车, 必须中止
         if [ "$_rc" -ne 0 ] && [ -z "$_a" ]; then
             TUI_EOF=1
-            printf '\n已取消\n'
+            printf '\n'; _tui_say 已取消
             return 1
         fi
         _a=$(printf '%s' "$_a" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
         case $_a in
             ''|y|Y|yes|YES|Yes) return 0 ;;
-            n|N|no|NO|No) printf '已取消\n'; return 1 ;;
+            n|N|no|NO|No) _tui_say 已取消; return 1 ;;
         esac
         printf '输入无效，请输入 y 或 n，直接按 Enter 表示 Yes\n'
     done
@@ -431,12 +464,14 @@ _tui_wait_enter() {
 }
 
 _tui_wait() {
-    if ! _tui_wait_on; then TUI_KEEP=1; return 0; fi
+    if ! _tui_wait_on; then _tui_keep; return 0; fi
     _tui_wait_flush
     printf '\n按回车返回...'
     _tui_wait_enter
     printf '\n'
     TUI_KEEP=0
+    TUI_OUT=
+    TUI_NOTICE=
     return 0
 }
 
@@ -446,7 +481,10 @@ _tui_fail_note() {
 }
 
 # 显示完内容之后不再等待: 只标记下一次不清屏, 内容留在屏幕上
-_tui_pause() { TUI_KEEP=1; }
+_tui_keep() {
+    if [ "$TUI_ANSI" = 1 ]; then TUI_NOTICE=$TUI_OUT; TUI_OUT=; else TUI_KEEP=1; fi
+}
+_tui_pause() { _tui_keep; }
 
 # ---- 主菜单内存显示与空闲刷新 ----
 # 只在主菜单展示期间刷新, 不创建后台进程: 菜单等待输入时用 read -t 超时, 超时就只重写内存那一行
@@ -643,14 +681,19 @@ _tui_read_choice() {
 
 # tui_choose ITEMS BACKLABEL: 无效输入只提示并继续, 0 q EOF 返回 back
 tui_choose() {
-    local _n _c
+    local _n _c _retry
+    _retry=0
     while :; do
         _n=$(printf '%s\n' "$1" | grep -c .)
-        if [ "$_n" -gt 0 ]; then
-            printf '%s\n' "$1" | awk -F'|' 'NF { printf "%d. %s\n", ++i, substr($0, index($0, "|") + 1) }'
+        if [ "$_retry" = 0 ]; then
+            if [ "$_n" -gt 0 ]; then
+                printf '%s\n' "$1" | awk -F'|' 'NF { printf "%d. %s\n", ++i, substr($0, index($0, "|") + 1) }'
+            fi
+            printf '0. %s\n' "$2"
+            printf '\n请选择：'
+        else
+            printf '输入无效，请重新选择：'
         fi
-        printf '0. %s\n' "$2"
-        printf '\n请选择：'
         _c=
         TUI_NCH=$_n
         if ! _tui_read_choice; then
@@ -662,20 +705,23 @@ tui_choose() {
         _c=$(printf '%s' "$_c" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
         case $_c in
             0|q|Q) TUI_KEY=back; return 0 ;;
-            ''|*[!0-9]*)
-                # 主菜单刷新模式: 不在下面追加重打 (会滚屏), 交给主菜单清屏重绘并带一行提示
-                if [ "${TUI_TICK_ON:-0}" = 1 ]; then TUI_KEY=invalid; return 0; fi
-                printf '输入无效，请重新选择。\n\n'
-                ;;
+            ''|*[!0-9]*) ;;
             *)
                 if [ "$_c" -ge 1 ] && [ "$_c" -le "$_n" ]; then
                     TUI_KEY=$(printf '%s\n' "$1" | grep . | sed -n "${_c}p" | cut -d'|' -f1)
                     return 0
                 fi
-                if [ "${TUI_TICK_ON:-0}" = 1 ]; then TUI_KEY=invalid; return 0; fi
-                printf '输入无效，请重新选择。\n\n'
                 ;;
         esac
+        # 无效输入. 主菜单刷新模式: 交给主菜单清屏重绘并带一行提示
+        if [ "${TUI_TICK_ON:-0}" = 1 ]; then TUI_KEY=invalid; return 0; fi
+        if [ "$TUI_ANSI" = 1 ]; then
+            # 菜单已经在屏幕上, 只回到提示行就地重写, 不把菜单再打印一遍
+            printf '\033[A\r\033[2K'
+            _retry=1
+        else
+            printf '输入无效，请重新选择。\n\n'
+        fi
     done
 }
 
@@ -683,6 +729,19 @@ tui_choose() {
 # 写操作与带输出的操作都在子 shell 里执行, stdin 默认断开, 不会吃掉 TUI 的输入
 
 _tui_do() { # 命令...
+    local _f
+    TUI_OUT=
+    if [ "$TUI_ANSI" = 1 ] && _f=$(mktemp 2>/dev/null) && [ -n "$_f" ]; then
+        # 输出落到临时文件而不是管道: 命令留下的后台进程握着文件不会让这里卡住, 它们之后写的内容也到不了终端
+        printf '执行中...'
+        ( "$@" ) </dev/null >"$_f" 2>&1
+        TUI_RC=$?
+        printf '\r\033[2K'
+        TUI_OUT=$(cat "$_f" 2>/dev/null)
+        rm -f "$_f"
+        [ -z "$TUI_OUT" ] || printf '%s\n' "$TUI_OUT"
+        return 0
+    fi
     ( "$@" ) </dev/null
     TUI_RC=$?
 }
@@ -787,7 +846,7 @@ _tui_do_view() { # 标题 命令...
 # 报告页: 显示并读完再返回. 在分页中按 Esc 结束就直接返回, 不再追加一次 按回车返回
 _tui_report() { # 标题 命令...
     _tui_do_view "$@"
-    if [ "$TUI_VIEW_ESC" = 1 ]; then TUI_KEEP=0; return 0; fi
+    if [ "$TUI_VIEW_ESC" = 1 ]; then TUI_KEEP=0; TUI_NOTICE=; TUI_OUT=; return 0; fi
     _tui_page
 }
 
@@ -2018,7 +2077,7 @@ _tui_snn_enable() { # egress|access
     local _cur _miss _item _txt
     _cur=$(snn_mode)
     if [ "$_cur" = "$1" ]; then
-        printf '%s已经启用\n' "$(snn_mode_label "$1")"
+        _tui_say "$(snn_mode_label "$1")已经启用"
         _tui_pause
         return 0
     fi
