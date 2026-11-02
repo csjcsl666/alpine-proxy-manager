@@ -11,6 +11,8 @@ if ! mk_elf_stub "$T_TMP/probe" "probe"; then t_skip "ELF 桩只支持 x86_64"; 
 # shellcheck source=tests/sb_common.sh
 . "$(dirname "$0")/sb_common.sh"
 new_s r1
+# 沙盒里也要有 stty, 否则 TUI 退化成整行输入, 测到的不是生产用的单键模式
+mkdir -p "$A/usr/bin"; ln -sf "$(command -v stty)" "$A/usr/bin/stty"
 "$PM" snell install --port 20000 --psk-stdin >/dev/null 2>&1 <<PSK
 TuiSnellPskNotSecret0123456789ab
 PSK
@@ -99,12 +101,19 @@ run_matrix() { # 列数 行数
     key 0 Enter; waitfor "3. AnyTLS"; ok "$L 日志返回"
     # Manager
     key 6 Enter; waitfor "返回"; ok "$L Manager 菜单"
+    # 帮助有几十行: 必须分页, 第一页从标题开始 (备用屏幕没有滚动历史)
+    key 3 Enter; waitfor "帮助（第 1/"; ok "$L Manager 帮助第一页"
+    assert_contains "$L 帮助第一页首行是标题" "$(cap | head -n 1)" "帮助（第 1/"
+    key Enter; waitfor "帮助（第 2/"; ok "$L Manager 帮助翻页"
+    key Escape; waitfor "3. 查看帮助"; ok "$L 帮助 Esc 返回 Manager"
     key 0 Enter; waitfor "3. AnyTLS"; ok "$L Manager 返回"
     # 反复进出 Snell
-    for _n in 1 2 3 4 5; do key 1 Enter; waitfor "3. 重启"; key 0 Enter; waitfor "3. AnyTLS"; done
+    for _n in 1 2 3 4 5; do key 1 Enter; waitfor "3. 重启"; key 0 Enter; waitfor "6. Manager"; done
+    waitfor "6. Manager"; sleep 0.5
     ok "$L 反复进出后主菜单"; assert_eq "$L 反复进出后主菜单只有一份" 1 "$(count_of '1. Snell')"
     # 退出: 回到原屏幕
-    key 0 Enter; sleep 0.5
+    key 0 Enter
+    _i=0; while [ "$_i" -lt 20 ] && tmux has-session -t "$TS" 2>/dev/null; do sleep 0.3; _i=$((_i + 1)); done
     assert_fail "$L 退出后会话结束或回到 shell" tmux has-session -t "$TS"
     tmux kill-session -t "$TS" 2>/dev/null
 }

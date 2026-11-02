@@ -1793,8 +1793,8 @@ help|查看帮助" "返回"
             check) tui_manager_check ;;
             update) tui_manager_update ;;
             help)
-                if command -v usage >/dev/null 2>&1; then _tui_do usage; else printf '帮助：proxy-manager help\n'; TUI_RC=0; fi
-                _tui_page
+                # 帮助有几十行: 走分页入口, 备用屏幕里没有滚动历史, 直接输出会把开头顶出屏幕
+                if command -v usage >/dev/null 2>&1; then _tui_report "帮助" usage; else printf '帮助：proxy-manager help\n'; TUI_RC=0; _tui_page; fi
                 ;;
         esac
         [ "$TUI_EXIT" != 1 ] || return 0
