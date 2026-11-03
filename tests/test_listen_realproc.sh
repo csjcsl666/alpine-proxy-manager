@@ -57,7 +57,7 @@ start_listener() { # 程序 端口
     return 1
 }
 fd_readable() { # PID
-    for _f in /proc/$1/fd/*; do
+    for _f in "/proc/$1"/fd/*; do
         readlink "$_f" >/dev/null 2>&1 && return 0
     done
     return 1
