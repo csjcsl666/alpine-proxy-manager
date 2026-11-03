@@ -111,7 +111,7 @@ assert_contains "真实内核: 配置端口在监听" "$CF_LISTEN" "tcp 127.0.0.
 OUT=$(_tui_snell_listen_line)
 assert_contains "TUI: 实际监听" "$OUT" "TCP  IPv4  127.0.0.1:$PORT"
 assert_contains "TUI: 判定一致" "$OUT" "状态说明：实际监听与配置一致"
-assert_contains "TUI: 归属未确认" "$OUT" "未确认归属于该进程"
+assert_contains "归属未确认写入 CF_NOTES" "$CF_NOTES" "未确认归属于该进程"
 assert_not_contains "TUI: 不报检测失败" "$OUT" "检测失败"
 assert_not_contains "TUI: 不报没有检测到" "$OUT" "实际监听：没有检测到"
 assert_contains "CLI 报告: 同一端口" "$(_rpt_listeners)" "$PORT TCP"

@@ -48,7 +48,8 @@ assert_eq "状态仍是 running" running "$CF_STATE"
 menu=$(page)
 assert_contains "TUI: 实际监听" "$menu" "TCP  IPv4  0.0.0.0:28391"
 assert_contains "TUI: 判定一致" "$menu" "状态说明：实际监听与配置一致"
-assert_contains "TUI: 明确归属未确认" "$menu" "归属：读不到服务进程的 socket，按配置端口匹配，未确认归属于该进程"
+assert_contains "TUI: 注意行写明归属未确认" "$menu" "注意：无法读取服务进程的 socket, 监听按配置端口匹配, 未确认归属于该进程"
+assert_eq "TUI: 归属提示只写一次" 1 "$(printf '%s\n' "$menu" | grep -c '未确认归属于该进程')"
 assert_not_contains "TUI: 不再报没有检测到" "$menu" "实际监听：没有检测到"
 assert_not_contains "TUI: 不再报检测失败" "$menu" "检测失败"
 st=$("$PM" snell status 2>&1)
@@ -84,7 +85,7 @@ menu=$(page)
 assert_contains "停止: 实际监听是没有" "$menu" "实际监听：服务已停止，没有监听"
 assert_not_contains "停止: 不显示端口行" "$menu" "实际监听：
     TCP"
-assert_not_contains "停止: 不出现归属行" "$menu" "未确认归属于该进程"
+assert_not_contains "停止: 不出现归属提示" "$menu" "未确认归属于该进程"
 st=$("$PM" snell status 2>&1)
 assert_contains "停止: CLI 无监听" "$st" "监听：无 (服务没有运行)"
 
