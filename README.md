@@ -132,6 +132,7 @@ proxy-manager snell uninstall --purge    # 同时删除配置 日志与由 Manag
 
 - 布局 二进制 `/usr/local/bin/snell-server` 配置 `/etc/snell/snell-server.conf` OpenRC `/etc/init.d/snell` 日志 `/var/log/snell/` 元数据 `/var/lib/alpine-proxy-manager/cores/snell.meta`
 - 运行依赖 `gcompat` `libstdc++` `libgcc` 只在 `snell install` 时通过 apk 安装缺失的包
+- 监听检测有两级证据 `pid` 已按服务进程自己的 socket 确认 `config-port` 读不到进程 socket 时按配置端口匹配 常见于没有 `CAP_SYS_PTRACE` 的容器 root 读取降权用户进程 命令行与 TUI 同样显示监听 并写明归属未确认 sing-box 实例按实例配置的端口做同样的降级
 - 精确 release 记录在 Manager 元数据里 不从二进制自报的版本推断
 - 安装 配置修改与更新都是事务式的 失败回滚到之前的状态并恢复服务
 - PSK 通过 `--psk-stdin` 或 `--stdin` 提供 不接受命令行明文 自动生成的 PSK 在生成时显示一次 之后需要时用 `snell export secret` 显式查看
