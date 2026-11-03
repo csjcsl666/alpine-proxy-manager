@@ -232,7 +232,7 @@ mk_net() {
 }
 
 # ---- Snell Managed 生命周期用的模拟系统 ----
-# 旋钮放在 $APM_FAKE_RC_DIR 下: fail_start fail_stop fail_restart no_listen fail_rcupdate fail_adduser fail_apk
+# 旋钮放在 $APM_FAKE_RC_DIR 下: fail_start fail_stop fail_restart no_listen fail_rcupdate fail_adduser fail_apk fd_denied
 # fail_port 文件里写一个端口, 配置监听该端口时 start 失败
 # 二进制内容含 BADBIN 时 start 失败
 
@@ -317,6 +317,16 @@ ports_of() { # 输出 "协议 端口" 每行一个
                 /"listen_port"/ && t != "" { n = $0; gsub(/[^0-9]/, "", n); if (t == "both") { print "tcp", n, h; print "udp", n, h } else print t, n, h; t = "" }' "$1" ;;
     esac
 }
+# 旋钮 fd_denied: 受限容器里 root 没有 CAP_SYS_PTRACE, 读不了降权用户进程的 /proc/PID/fd 链接, readlink 失败
+# 模拟成 fd 条目不是符号链接 (readlink 对它们同样失败), 目录本身可读, 与真实内核的表现一致
+sim_fd() { # 目标 路径
+    if [ -e "$K/fd_denied" ]; then
+        rm -f "$2"
+        : > "$2"
+    else
+        ln -sf "$1" "$2"
+    fi
+}
 rebuild_net() {
     mkdir -p "$R/proc/net"
     : > "$K/tcp.rows"
@@ -350,7 +360,7 @@ rebuild_net() {
                 printf '   %s: %s:%04X 00000000:0000 0A 00000000:00000000 00:00000000 00000000   100        0 %s 1 0\n' "$i" "${ha:-00000000}" "$p" "$((base + i))" >> "$K/tcp$f6.rows"
             fi
             mkdir -p "$R/proc/$w/fd"
-            ln -sf "socket:[$((base + i))]" "$R/proc/$w/fd/$((10 + i))"
+            sim_fd "socket:[$((base + i))]" "$R/proc/$w/fd/$((10 + i))"
             i=$((i + 1))
         done < "$K/ports.tmp"
         # 旋钮 relay_udp6 (内容是端口): Snell 转发 UDP 期间临时开的出站 socket, 未连接的 [::]:临时端口, 在 udp6 表里是 07 状态, 归 Snell 进程
@@ -358,12 +368,12 @@ rebuild_net() {
         # 旋钮 listen_udp (内容是端口): Snell 在配置的端口上真的监听 UDP (0.0.0.0, 07 状态)
         if [ "$s" = snell ] && [ -s "$K/listen_udp" ]; then
             printf '   %s: 00000000:%04X 00000000:0000 07 00000000:00000000 00:00000000 00000000   100        0 %s 2 0\n' "$i" "$(cat "$K/listen_udp")" "$((base + i))" >> "$K/udp.rows"
-            ln -sf "socket:[$((base + i))]" "$R/proc/$w/fd/$((10 + i))"
+            sim_fd "socket:[$((base + i))]" "$R/proc/$w/fd/$((10 + i))"
             i=$((i + 1))
         fi
         if [ "$s" = snell ] && [ -s "$K/relay_udp6" ]; then
             printf '   %s: 00000000000000000000000000000000:%04X 00000000000000000000000000000000:0000 07 00000000:00000000 00:00000000 00000000   100        0 %s 2 0\n' "$i" "$(cat "$K/relay_udp6")" "$((base + i))" >> "$K/udp6.rows"
-            ln -sf "socket:[$((base + i))]" "$R/proc/$w/fd/$((10 + i))"
+            sim_fd "socket:[$((base + i))]" "$R/proc/$w/fd/$((10 + i))"
         fi
     done
     for f in tcp udp; do

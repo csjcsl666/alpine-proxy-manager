@@ -1946,11 +1946,17 @@ _tui_snell_listen_line() {
         printf '  实际监听：需要 root 才能确认\n'
         return 0
     fi
-    if [ "$CF_LISTEN_ATTRIB" != pid ]; then
-        printf '  实际监听：没有检测到\n'
-        printf '  状态说明：! 检测失败，没有读到服务进程的监听信息\n'
-        return 0
-    fi
+    # 检测层给出两种有效结果: pid 已按服务进程的 socket 确认, config-port 受权限限制读不到进程 socket, 按配置端口匹配 /proc/net
+    # 两者都把结果放在 CF_LISTEN 里, 与 CLI 用同一份数据, 这里只在证据强度上区分, 不再另做一套判断
+    # 只有检测层什么都没得到 (none) 才是检测失败, 配置端口没有在监听属于下面的 配置异常
+    case $CF_LISTEN_ATTRIB in
+        pid|config-port) ;;
+        *)
+            printf '  实际监听：没有检测到\n'
+            printf '  状态说明：! 检测失败，没有读到服务进程的监听信息\n'
+            return 0
+            ;;
+    esac
     _act_rows=$(printf '%s\n' "$CF_LISTEN" | awk 'NF { n = split($2, a, ":"); p = a[n]; print $1, substr($2, 1, length($2) - length(p) - 1), p }' | _tui_listen_rows_fmt)
     printf '  实际监听：\n'
     if [ -n "$_act_rows" ]; then printf '%s\n' "$_act_rows"; else printf '    没有检测到\n'; fi
@@ -1976,6 +1982,9 @@ _tui_snell_listen_line() {
     else
         [ -z "$_miss" ] || printf '  状态说明：! 配置异常，配置的端口%s 没有在监听，可能需要重启\n' "$_miss"
         [ -z "$_extra" ] || printf '  状态说明：! 配置异常，实际监听的端口%s 不在配置里，配置改动后可能还没有重启\n' "$_extra"
+    fi
+    if [ "$CF_LISTEN_ATTRIB" = config-port ]; then
+        printf '  归属：读不到服务进程的 socket，按配置端口匹配，未确认归属于该进程\n'
     fi
 }
 

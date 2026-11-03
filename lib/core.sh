@@ -844,7 +844,7 @@ core_anytlsgw_discover_extra() {
 # sing-box 通用事实: 配置路径 (OpenRC 脚本 -c, 其次默认路径), 日志 metadata, 按服务进程 socket 归属的监听
 # 不解析配置 JSON, 因为外部部署的配置组织各不相同
 core_singbox_discover_extra() {
-    local _argc _argd _fs _inodes _c
+    local _argc _argd _fs _inodes _c _ports
     CF_CONFIG=
     CF_CONFIG_SOURCE=none
     CF_CONFIG_EXISTS=no
@@ -903,6 +903,19 @@ core_singbox_discover_extra() {
         if [ "$_inodes" != " " ]; then
             CF_LISTEN=$(_core_proc_listeners "$_inodes" "")
             CF_LISTEN_ATTRIB=pid
+        fi
+    fi
+    # 读不到服务进程的 socket (受限容器里的 root 没有 CAP_SYS_PTRACE, 读不了降权用户的 fd 链接) 时与 Snell AnyTLS Gateway 一样降级:
+    # 按 Manager 实例要求的端口匹配 /proc/net, 并标注归属未确认. 没有 Manager 实例 (外部部署) 时无从知道端口, 保持没有监听信息
+    if [ "$CF_LISTEN_ATTRIB" = none ] && [ "$CF_STATE" = running ] && command -v _sb_expected_ports >/dev/null 2>&1; then
+        _ports=$(_sb_expected_ports "${SB_HEALTH_DIR:-$(state_instances_dir)}" | tr ' ' '\n' | sed -n 's/^[a-z]*://p' | sort -un | tr '\n' ' ')
+        if [ -n "$_ports" ]; then
+            CF_LISTEN=$(_core_proc_listeners "" " $_ports")
+            CF_LISTEN_ATTRIB=config-port
+            if [ -n "$CF_PID" ]; then
+                CF_NOTES="${CF_NOTES}无法读取服务进程的 socket, 监听按实例配置的端口匹配, 未确认归属于该进程
+"
+            fi
         fi
     fi
 }

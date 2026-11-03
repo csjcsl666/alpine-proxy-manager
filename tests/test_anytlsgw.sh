@@ -173,6 +173,17 @@ assert_eq "除配置与事实来源外没有文件含 SOCKS5 密码" "$(printf '
 core_discover anytlsgw
 assert_eq "运行中" running "$CF_STATE"
 assert_contains "发现: 监听" "$CF_LISTEN" ":30001"
+assert_eq "发现: 读得到进程 socket 时归属是 pid" pid "$CF_LISTEN_ATTRIB"
+# 受限容器里 root 读不到降权用户进程的 fd 链接: 降级按配置端口匹配, 不能因此报告没有监听
+touch "$K/fd_denied"
+gw restart >/dev/null 2>&1
+core_discover anytlsgw
+assert_eq "fd 不可读: 降级为 config-port" config-port "$CF_LISTEN_ATTRIB"
+assert_contains "fd 不可读: 仍发现监听" "$CF_LISTEN" ":30001"
+rm -f "$K/fd_denied"
+gw restart >/dev/null 2>&1
+core_discover anytlsgw
+assert_eq "fd 恢复可读: 回到 pid" pid "$CF_LISTEN_ATTRIB"
 OUT=$(gw status)
 assert_contains "status 显示运行" "$OUT" "运行中"
 OUT=$(gw info)
