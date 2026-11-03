@@ -624,6 +624,22 @@ _core_socket_inodes() {
     printf '%s' "$_r"
 }
 
+# 进程的 fd 是否读不到 (受限): fd 目录不可读, 或有条目但没有一个能读出链接 (容器 root 没有 CAP_SYS_PTRACE 读降权用户进程)
+# fd 能读而里面没有 socket 是 确实没有监听, 不是读不到, 必须与受限区分开, 否则别的进程占着同端口会被当成它的监听
+_core_fd_denied() { # PID
+    local _d _fd _n
+    _d=$(env_path "/proc/$1/fd")
+    [ -e "$_d" ] || return 1
+    [ -r "$_d" ] || return 0
+    _n=0
+    for _fd in "$_d"/*; do
+        [ -e "$_fd" ] || [ -L "$_fd" ] || continue
+        _n=$((_n + 1))
+        readlink "$_fd" >/dev/null 2>&1 && return 1
+    done
+    [ "$_n" -gt 0 ]
+}
+
 # 解码 /proc/net/{tcp,tcp6,udp,udp6} 中处于监听的 socket
 # 参数 inodes 与 ports 任选其一过滤, 输出 "协议 地址:端口 inode"
 _core_proc_listeners() {
@@ -905,17 +921,16 @@ core_singbox_discover_extra() {
             CF_LISTEN_ATTRIB=pid
         fi
     fi
-    # 读不到服务进程的 socket (受限容器里的 root 没有 CAP_SYS_PTRACE, 读不了降权用户的 fd 链接) 时与 Snell AnyTLS Gateway 一样降级:
+    # 读不到服务进程的 socket (受限容器里的 root 没有 CAP_SYS_PTRACE, 读不了降权用户的 fd 链接) 时与 Snell AnyTLS Gateway 一样降级,
+    # 但只在确实读不到时降级, fd 能读而没有 socket 说明没有监听, 不能让别的进程占着同端口被当成它的监听:
     # 按 Manager 实例要求的端口匹配 /proc/net, 并标注归属未确认. 没有 Manager 实例 (外部部署) 时无从知道端口, 保持没有监听信息
-    if [ "$CF_LISTEN_ATTRIB" = none ] && [ "$CF_STATE" = running ] && command -v _sb_expected_ports >/dev/null 2>&1; then
+    if [ "$CF_LISTEN_ATTRIB" = none ] && [ "$CF_STATE" = running ] && [ -n "$CF_PID" ] && _core_fd_denied "$CF_PID" && command -v _sb_expected_ports >/dev/null 2>&1; then
         _ports=$(_sb_expected_ports "${SB_HEALTH_DIR:-$(state_instances_dir)}" | tr ' ' '\n' | sed -n 's/^[a-z]*://p' | sort -un | tr '\n' ' ')
         if [ -n "$_ports" ]; then
             CF_LISTEN=$(_core_proc_listeners "" " $_ports")
             CF_LISTEN_ATTRIB=config-port
-            if [ -n "$CF_PID" ]; then
-                CF_NOTES="${CF_NOTES}无法读取服务进程的 socket, 监听按实例配置的端口匹配, 未确认归属于该进程
+            CF_NOTES="${CF_NOTES}无法读取服务进程的 socket, 监听按实例配置的端口匹配, 未确认归属于该进程
 "
-            fi
         fi
     fi
 }
