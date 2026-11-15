@@ -120,10 +120,14 @@ Manager 安装的 Snell 与 sing-box 称为 Managed 由 Manager 完整管理 其
 ```sh
 proxy-manager snell install              # 下载官方 release 安装并启动 随机端口 自动生成 PSK
 proxy-manager snell install --port 20000 --psk-stdin
+proxy-manager snell install --port 20000 --ip-family dual --psk-stdin   # 不指定时有全局 IPv6 就双栈 否则 IPv4
 proxy-manager snell status | info | log [N]
 proxy-manager snell start | stop | restart
 proxy-manager snell config               # 显示配置 PSK 脱敏
 proxy-manager snell config set listen 0.0.0.0:20001
+proxy-manager snell config set listen 0.0.0.0:20001,[::]:20001   # 多个监听地址 逗号分隔 与 Snell 官方写法一致
+proxy-manager snell config set port 20002       # 只改端口 所有监听地址与顺序保留
+proxy-manager snell config set family dual      # ipv4 ipv6 dual 切换监听方式 沿用当前端口
 proxy-manager snell config set psk --generate
 proxy-manager snell update [标签] [--force]
 proxy-manager snell uninstall            # 保留配置与日志
@@ -133,6 +137,8 @@ proxy-manager snell uninstall --purge    # 同时删除配置 日志与由 Manag
 - 布局 二进制 `/usr/local/bin/snell-server` 配置 `/etc/snell/snell-server.conf` OpenRC `/etc/init.d/snell` 日志 `/var/log/snell/` 元数据 `/var/lib/alpine-proxy-manager/cores/snell.meta`
 - 运行依赖 `gcompat` `libstdc++` `libgcc` 只在 `snell install` 时通过 apk 安装缺失的包
 - 监听检测有两级证据 `pid` 已按服务进程自己的 socket 确认 `config-port` 读不到进程 socket 时按配置端口匹配 常见于没有 `CAP_SYS_PTRACE` 的容器 root 读取降权用户进程 命令行与 TUI 同样显示监听 并写明归属未确认 sing-box 实例按实例配置的端口做同样的降级
+- 监听地址支持 IPv4 IPv6 与多个地址 例如 `0.0.0.0:20001,[::]:20001` 修改 PSK mode 端口时只改目标字段 其余监听项与未知字段原样保留 全新安装默认按本机环境选择 检测到可用的全局 IPv6 地址 不含内网 ULA 地址 时监听双栈 否则只监听 IPv4 可用 `--ip-family ipv4|ipv6|dual` 明确指定 明确要求 IPv6 而本机没有全局 IPv6 地址时会拒绝并说明原因 而不是假装已启用 已有部署与保留配置的重装不受默认值影响
+- 监听状态按 地址加端口 逐项比对配置与实际 配置了 IPv6 而实际只有 IPv4 会明确显示 IPv6 监听缺失 重启与更新后的健康检查同样要求每个监听项都在监听 IPv6 监听只代表本机已监听 公网 IPv6 能否到达取决于路由 防火墙与上游网络
 - 精确 release 记录在 Manager 元数据里 不从二进制自报的版本推断
 - 安装 配置修改与更新都是事务式的 失败回滚到之前的状态并恢复服务
 - PSK 通过 `--psk-stdin` 或 `--stdin` 提供 不接受命令行明文 自动生成的 PSK 在生成时显示一次 之后需要时用 `snell export secret` 显式查看
