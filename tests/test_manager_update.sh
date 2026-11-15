@@ -107,7 +107,8 @@ EOF
 
 # ---- 环境: sim 系统里有运行中的 Snell 与 sing-box, Manager 装在隔离根目录 ----
 new_s m1
-printf 'MgrSnellPsk0123456789abcdefAB\n' | "$T_ROOT/bin/proxy-manager" snell install --port 20000 --psk-stdin >/dev/null 2>&1
+# Snell 用双栈配置安装: 升级路径的所有断言 (数据校验和 PID 不变 没有重启) 都因此覆盖 IPv4 加 IPv6 多监听
+printf 'MgrSnellPsk0123456789abcdefAB\n' | "$T_ROOT/bin/proxy-manager" snell install --listen "0.0.0.0:20000,[::]:20000" --psk-stdin >/dev/null 2>&1
 "$T_ROOT/bin/proxy-manager" sing-box install >/dev/null 2>&1
 "$T_ROOT/bin/proxy-manager" sing-box add anytls --port 20443 >/dev/null 2>&1
 export APM_ROOT="$ROOT" APM_DOWNLOADER="$MOCK" APM_DOWNLOAD_TRIES=1 APM_MGR_API="https://api.example.invalid/repos/$OWNER" APM_MGR_DL="https://dl.example.invalid/releases/download" APM_MGR_TIMEOUT=5
@@ -332,6 +333,10 @@ assert_eq "安装后 Build" "Build: $NEW_BUILD" "$("$MPM" --version | sed -n 2p)
 assert_eq "apm 指向新版本" "Alpine Proxy Manager 0.5.2" "$("$ROOT/usr/local/bin/apm" --version | sed -n 1p)"
 assert_eq "只剩一个 release" 1 "$(ls "$LIBD/releases" | wc -l | tr -d ' ')"
 assert_eq "Snell PID 不变" "$SP0" "$(spid)"
+assert_eq "升级后 Snell 配置的监听仍是双栈" "0.0.0.0:20000,[::]:20000" "$(sed -n 's/^listen = //p' "$A/etc/snell/snell-server.conf")"
+core_discover snell
+assert_contains "升级后 Snell 实际仍监听 IPv4" "$CF_LISTEN" "tcp 0.0.0.0:20000"
+assert_contains "升级后 Snell 实际仍监听 IPv6" "$CF_LISTEN" "tcp [::]:20000"
 assert_eq "sing-box PID 不变" "$BP0" "$(bpid)"
 assert_eq "没有重启任何 Core" "$RS0" "$(count_calls restart)"
 assert_eq "Manager 数据不变" "$D0" "$(data_sum)"
