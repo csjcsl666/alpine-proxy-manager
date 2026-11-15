@@ -1974,6 +1974,14 @@ _tui_snell_listen_line() {
     for _p in $_ap; do case " $_cp " in *" $_p "*) ;; *) _extra="$_extra $_p" ;; esac; done
     if [ -z "$_cp" ] && [ -z "$_ap" ]; then
         printf '  状态说明：! 配置异常，配置里没有可识别的监听端口，实际也没有监听\n'
+    elif [ -z "$_miss" ] && [ -z "$_extra" ] && [ -n "$(_snell_listen_missing "${CF_SNELL_LISTEN:-}" "$CF_LISTEN")" ]; then
+        # 端口集合相同, 但某个配置的监听地址没有对应的实际监听, 典型情况是配置了 IPv6 而实际只有 IPv4
+        for _p in $(_snell_listen_missing "${CF_SNELL_LISTEN:-}" "$CF_LISTEN"); do
+            case $_p in
+                \[*) printf '  状态说明：! 配置异常，IPv6 监听缺失：%s 没有在监听，可能需要重启，或系统没有可用的 IPv6\n' "$_p" ;;
+                *) printf '  状态说明：! 配置异常，IPv4 监听缺失：%s 没有在监听，可能需要重启\n' "$_p" ;;
+            esac
+        done
     elif [ -z "$_miss" ] && [ -z "$_extra" ]; then
         if [ "$_cfg_rows" = "$_act_rows" ]; then
             printf '  状态说明：实际监听与配置一致\n'
@@ -2004,10 +2012,12 @@ tui_snell_config_menu() {
         printf '\n'
         tui_choose "listen|修改 listen
 mode|修改 mode
-psk|修改 PSK" "返回"
+psk|修改 PSK
+port|修改端口（保留所有监听地址）
+family|切换监听方式（ipv4 ipv6 dual）" "返回"
         case $TUI_KEY in
             back) return 0 ;;
-            listen|mode)
+            listen|mode|port|family)
                 _tui_need_root || continue
                 tui_ask "新的 $TUI_KEY 值（留空取消）："
                 [ -n "$TUI_IN" ] || continue

@@ -273,6 +273,18 @@ _rpt_listeners() {
     esac
 }
 
+# Snell: 配置要求的监听项没有对应的实际监听时单独写一行 (只在运行中且读到了监听信息时判断), 地址与端口都比对
+_rpt_snell_listen_gap() {
+    local _m
+    [ "$CF_STATE" = running ] && [ -n "$CF_LISTEN" ] && [ -n "$CF_SNELL_LISTEN" ] || return 0
+    for _m in $(_snell_listen_missing "$CF_SNELL_LISTEN" "$CF_LISTEN"); do
+        case $_m in
+            \[*) printf '  ! 配置异常: IPv6 监听缺失 %s 没有在监听, 可能需要重启, 或系统没有可用的 IPv6\n' "$_m" ;;
+            *) printf '  ! 配置异常: IPv4 监听缺失 %s 没有在监听, 可能需要重启\n' "$_m" ;;
+        esac
+    done
+}
+
 # 配置文件一行: 路径 权限 (没有找到就说没有找到)
 _rpt_config_line() {
     if [ -z "$CF_CONFIG" ]; then printf '  配置：未找到\n'; return 0; fi
@@ -334,6 +346,7 @@ report_snell_status() {
     _rpt_service_line
     _rpt_snell_net
     _rpt_listeners
+    _rpt_snell_listen_gap
     _rpt_notes
 }
 
@@ -381,6 +394,7 @@ report_snell_info() {
     fi
     [ "$CF_KEY" != snell ] || _rpt_snell_net
     _rpt_listeners
+    [ "$CF_KEY" != snell ] || _rpt_snell_listen_gap
     _rpt_files_block
     _rpt_notes
 }

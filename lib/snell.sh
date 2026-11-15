@@ -174,7 +174,37 @@ _snell_valid_port() {
     [ ${#1} -le 5 ] && [ "$1" -ge 1025 ] && [ "$1" -le 65535 ]
 }
 
-# listen 值: 逗号分隔的 ADDR:PORT, ADDR 为 IPv4 或 [IPv6]
+# IPv6 字面量 (不含方括号): 只含十六进制 冒号 点, 至多一个 ::, 非压缩写法正好 8 组, 末尾可以是内嵌 IPv4 (占 2 组)
+_snell_valid_ipv6() {
+    printf '%s\n' "$1" | awk '
+        function grp(g) { return length(g) >= 1 && length(g) <= 4 && g ~ /^[0-9A-Fa-f]+$/ }
+        function cnt(p, last,   n, a, i, c) {
+            if (p == "") return 0
+            n = split(p, a, ":"); c = 0
+            for (i = 1; i <= n; i++) {
+                if (grp(a[i])) c++
+                else if (last && i == n && a[i] ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) c += 2
+                else return -1
+            }
+            return c
+        }
+        {
+            s = $0
+            if (s !~ /^[0-9A-Fa-f:.]+$/) exit 1
+            i = index(s, "::")
+            if (i) {
+                l = substr(s, 1, i - 1); r = substr(s, i + 2)
+                if (index(r, "::") || substr(r, 1, 1) == ":") exit 1
+                x = cnt(l, 0); y = cnt(r, 1)
+                if (x < 0 || y < 0 || x + y > 7) exit 1
+                exit 0
+            }
+            x = cnt(s, 1)
+            exit (x == 8) ? 0 : 1
+        }'
+}
+
+# listen 值: 逗号分隔的 ADDR:PORT, ADDR 为 IPv4 或 [IPv6], 与 Snell 官方写法一致 (例如 0.0.0.0:20001,[::]:20001)
 _snell_valid_listen() {
     local _item _h _p _seen
     [ -n "$1" ] || return 1
@@ -185,7 +215,7 @@ _snell_valid_listen() {
         _p=${_item##*:}
         _snell_valid_port "$_p" || return 1
         case $_h in
-            \[*\]) printf '%s' "$_h" | grep -Eq '^\[[0-9A-Fa-f:.]+\]$' || return 1 ;;
+            \[*\]) _h=${_h#\[}; _snell_valid_ipv6 "${_h%\]}" || return 1 ;;
             *) is_ipv4 "$_h" || return 1 ;;
         esac
         case $_seen in *" $_item "*) return 1 ;; esac
@@ -257,6 +287,56 @@ _snell_gen_psk() {
 
 # 把 listen 里的端口列表输出为空格分隔
 _snell_ports_of() { printf '%s' "$1" | tr ',' '\n' | sed -n 's/.*:\([0-9][0-9]*\)[[:space:]]*$/\1/p' | tr '\n' ' ' | sed 's/ $//'; }
+
+# 只改端口: 每个监听项的地址与顺序原样保留, 逗号分隔, 不带空格 (listen LIST PORT)
+_snell_listen_with_port() {
+    printf '%s' "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | awk -v p="$2" '
+        NF { sub(/:[0-9]+$/, ":" p); printf "%s%s", (n++ ? "," : ""), $0 }'
+}
+
+# 本机是否有可用的全局 IPv6: 协议栈没有被禁用, 并且有全局范围的地址
+# 只说明本机能监听 IPv6, 不代表公网 IPv6 可达 (路由 防火墙 上游网络都在容器外)
+_snell_ipv6_usable() {
+    local _d
+    _d=$(env_path /proc/sys/net/ipv6/conf/all/disable_ipv6)
+    [ ! -r "$_d" ] || [ "$(cat "$_d" 2>/dev/null)" != 1 ] || return 1
+    [ -r "$(env_path /proc/net/if_inet6)" ] || return 1
+    # if_inet6 每行: 地址 接口序号 前缀长度 范围 标志 名称, 范围 00 是全局范围
+    # 唯一本地地址 fc00::/7 (ULA, 例如容器内网的 fd42:...) 也是全局范围, 但不能从公网访问, 不算
+    awk 'tolower($1) !~ /^f[cd]/ && $4 == "00" { f = 1 } END { exit !f }' "$(env_path /proc/net/if_inet6)"
+}
+
+# 配置要求的监听项里, 哪些没有对应的实际监听: 输出 ADDR:PORT, 每行一个
+# 参数: 配置的 listen, CF_LISTEN 格式的实际监听 (协议 地址:端口 inode)
+# 按 地址+端口 比对, 不能只比端口: 配置了 IPv6 而实际只有 IPv4 时端口集合相同, 但 IPv6 监听缺失
+# 覆盖关系: 配置的具体地址可以由同端口同协议族的通配地址覆盖; IPv4 与 IPv6 互不覆盖
+# 不让 [::] 去覆盖 0.0.0.0: Snell 在同一端口同时绑定 IPv4 与 IPv6 时 IPv6 socket 必然是 v6only,
+# 而 /proc/net/tcp6 分不出 v6only, 放宽会把真正缺失的 IPv4 监听当成已满足
+_snell_listen_missing() {
+    {
+        printf '%s\n' "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | awk 'NF { print "C", $0 }'
+        printf '%s\n' "$2" | awk '$1 == "tcp" { print "A", $2 }'
+    } | awk '
+        function port(x) { sub(/.*:/, "", x); return x }
+        function addr(x,   p) { p = port(x); return substr(x, 1, length(x) - length(p) - 1) }
+        function norm(x,   a) {
+            a = addr(x)
+            if (a == "[::0]" || a == "[0:0:0:0:0:0:0:0]") a = "[::]"
+            return a ":" port(x)
+        }
+        $1 == "A" { act[norm($2)] = 1; next }
+        $1 == "C" { cfg[++n] = norm($2) }
+        END {
+            for (i = 1; i <= n; i++) {
+                c = cfg[i]; p = port(c); a = addr(c)
+                if (c in act) continue
+                if (a !~ /^\[/) {
+                    if (a != "0.0.0.0" && (("0.0.0.0:" p) in act)) continue
+                } else if (a != "[::]" && (("[::]:" p) in act)) continue
+                print c
+            }
+        }'
+}
 
 # ---- 发布与下载 ----
 
@@ -424,17 +504,14 @@ _snell_wait_secs() { printf '%s' "${APM_SNELL_WAIT:-15}"; }
 
 # 等待: OpenRC 为 running, 找到服务进程, 配置里的每个端口都处于监听
 _snell_wait_healthy() {
-    local _t _max _p _ok
+    local _t _max
     _max=$(_snell_wait_secs)
     _t=0
     while [ "$_t" -le "$_max" ]; do
         core_discover snell
         if [ "$CF_STATE" = running ] && [ -n "$CF_PID" ] && [ -n "$CF_SNELL_LISTEN" ]; then
-            _ok=1
-            for _p in $(_snell_ports_of "$CF_SNELL_LISTEN"); do
-                printf '%s\n' "$CF_LISTEN" | grep -q ":$_p " || _ok=0
-            done
-            [ "$_ok" = 1 ] && return 0
+            # 每个配置的监听项 (地址+端口) 都要在监听, 双栈配置只起来 IPv4 不算健康
+            [ -z "$(_snell_listen_missing "$CF_SNELL_LISTEN" "$CF_LISTEN")" ] && return 0
         fi
         [ "$_t" -lt "$_max" ] && sleep 1
         _t=$((_t + 1))
@@ -501,10 +578,11 @@ _snell_install_fail() {
 }
 
 snell_install() {
-    local _release _port _listen _psk _psk_mode _tag _reuse _stdin_psk _a _cmark _gmark
+    local _release _port _listen _psk _psk_mode _tag _reuse _stdin_psk _a _cmark _gmark _family
     _release=$SNELL_DEFAULT_RELEASE
     _port=
     _listen=
+    _family=
     _psk=
     _psk_mode=generate
     while [ $# -gt 0 ]; do
@@ -512,6 +590,7 @@ snell_install() {
             --release) [ $# -ge 2 ] || { apm_err "--release 需要参数"; return 2; }; _release=$2; shift ;;
             --port) [ $# -ge 2 ] || { apm_err "--port 需要参数"; return 2; }; _port=$2; shift ;;
             --listen) [ $# -ge 2 ] || { apm_err "--listen 需要参数"; return 2; }; _listen=$2; shift ;;
+            --ip-family) [ $# -ge 2 ] || { apm_err "--ip-family 需要参数 (ipv4 ipv6 dual)"; return 2; }; _family=$2; shift ;;
             --psk-stdin) _psk_mode=stdin ;;
             *) apm_err "未知参数: $1"; return 2 ;;
         esac
@@ -522,6 +601,11 @@ snell_install() {
     [ -z "$_port" ] || _snell_valid_port "$_port" || { apm_err "端口无效: $_port (需要 1025 到 65535)"; return 2; }
     [ -z "$_listen" ] || [ -z "$_port" ] || { apm_err "--port 与 --listen 不能同时使用"; return 2; }
     [ -z "$_listen" ] || _snell_valid_listen "$_listen" || { apm_err "listen 无效"; return 2; }
+    case $_family in
+        ''|ipv4|ipv6|dual) ;;
+        *) apm_err "--ip-family 取值无效: $_family (ipv4 ipv6 dual)"; return 2 ;;
+    esac
+    [ -z "$_family" ] || [ -z "$_listen" ] || { apm_err "--ip-family 与 --listen 不能同时使用"; return 2; }
     _snell_need_root || return 4
 
     # 已有的部署一律拒绝, 绝不隐式更新或覆盖
@@ -560,8 +644,25 @@ snell_install() {
         _listen=$(sed -n 's/^[[:space:]]*listen[[:space:]]*=[[:space:]]*//p' "$(env_path "$SNELL_CONF")" | head -n 1 | sed 's/[[:space:]]*$//')
         _snell_say "沿用已保留的配置 $SNELL_CONF"
     elif [ -z "$_listen" ]; then
+        # 没有明确选择时按本机环境决定: 有可用的全局 IPv6 就双栈, 否则只监听 IPv4
+        # 只影响全新安装: 已有部署拒绝安装, 沿用保留配置的重装不走这里, 升级 Manager 不碰 Snell 配置
+        if [ -z "$_family" ]; then
+            if _snell_ipv6_usable; then
+                _family=dual
+                _snell_say "检测到本机有全局 IPv6 地址, 默认监听 IPv4 加 IPv6 (双栈), 只需要 IPv4 请加 --ip-family ipv4"
+            else
+                _family=ipv4
+            fi
+        fi
+        case $_family in
+            ipv6|dual) _snell_ipv6_usable || { apm_err "未检测到可用的全局 IPv6 地址 (协议栈被禁用 没有地址 或只有内网的 ULA 地址), 不会生成 IPv6 监听。请先确认容器分配了公网 IPv6, 或使用 --ip-family ipv4"; return 1; } ;;
+        esac
         [ -n "$_port" ] || _port=$(_snell_rand_port) || { apm_err "无法选出可用的随机端口"; return 1; }
-        _listen="0.0.0.0:$_port"
+        case $_family in
+            ipv6) _listen="[::]:$_port" ;;
+            dual) _listen="0.0.0.0:$_port,[::]:$_port" ;;
+            *) _listen="0.0.0.0:$_port" ;;
+        esac
     fi
     for _a in $(_snell_ports_of "$_listen"); do
         if _snell_port_in_use "$_a"; then
@@ -667,6 +768,9 @@ snell_install() {
     _snell_say "Snell 安装完成并已验证"
     _snell_say "  release：$_tag (二进制自报 $SNELL_NEW_REPORTED)"
     _snell_say "  监听：$_listen (容器或系统内端口, NAT 公网映射需自行配置)"
+    case $_listen in
+        *\[*) _snell_say "  IPv6：只表示本机已监听 IPv6, 公网 IPv6 能否到达取决于路由 防火墙与上游网络, 需要自行从外部验证" ;;
+    esac
     _snell_say "  配置：$SNELL_CONF"
     if [ "$_reuse" = no ] && [ "$_psk_mode" = generate ]; then
         _snell_say "  PSK：$_psk"
@@ -770,8 +874,8 @@ snell_config_set() {
     local _key _val _cur _cand _was _newports _p _old _rc
     _key=${1:-}
     shift
-    [ -n "$_key" ] || { apm_err "用法: snell config set listen|mode|psk 值"; return 2; }
-    case $_key in listen|mode|psk) ;; *) apm_err "不支持的键: $_key (只支持 listen mode psk)"; return 2 ;; esac
+    [ -n "$_key" ] || { apm_err "用法: snell config set listen|port|family|mode|psk 值"; return 2; }
+    case $_key in listen|port|family|mode|psk) ;; *) apm_err "不支持的键: $_key (只支持 listen port family mode psk)"; return 2 ;; esac
     _val=
     GENERATED_PSK=
     if [ "$_key" = psk ]; then
@@ -786,6 +890,8 @@ snell_config_set() {
         [ -n "$_val" ] || { apm_err "缺少值"; return 2; }
         case $_key in
             listen) _snell_valid_listen "$_val" || { apm_err "listen 无效"; return 2; } ;;
+            port) _snell_valid_port "$_val" || { apm_err "端口无效: $_val (需要 1025 到 65535)"; return 2; } ;;
+            family) case $_val in ipv4|ipv6|dual) ;; *) apm_err "family 取值无效: $_val (ipv4 ipv6 dual)"; return 2 ;; esac ;;
             mode) _snell_valid_mode "$_val" || { apm_err "mode 取值未确认: $_val (已确认: $SNELL_MODES)"; return 2; } ;;
         esac
     fi
@@ -796,6 +902,29 @@ snell_config_set() {
     [ "$CF_CONFIG_READABLE" = yes ] || { apm_err "无法读取当前配置"; return 1; }
     _cur=$(env_path "$CF_CONFIG")
     _old=$CF_SNELL_LISTEN
+    # port 与 family 都是对 listen 的结构化修改: 在现有监听上算出新的 listen, 之后与 listen 走同一条事务路径
+    case $_key in
+        port)
+            _val=$(_snell_listen_with_port "$_old" "$_val")
+            _snell_valid_listen "$_val" || { apm_err "按新端口生成的 listen 无效: $_val, 当前配置未改动"; return 1; }
+            _key=listen
+            ;;
+        family)
+            _p=$(_snell_ports_of "$_old" | tr ' ' '\n' | sort -un | tr '\n' ' ' | sed 's/ $//')
+            case $_p in
+                ''|*' '*) apm_err "当前 listen 含有多个端口 (${_p:-无}), 无法按 family 自动生成, 请直接用 listen 明确指定"; return 1 ;;
+            esac
+            case $_val in
+                ipv6|dual) _snell_ipv6_usable || { apm_err "未检测到可用的全局 IPv6 地址 (协议栈被禁用或没有全局地址), 当前配置未改动"; return 1; } ;;
+            esac
+            case $_val in
+                ipv4) _val="0.0.0.0:$_p" ;;
+                ipv6) _val="[::]:$_p" ;;
+                dual) _val="0.0.0.0:$_p,[::]:$_p" ;;
+            esac
+            _key=listen
+            ;;
+    esac
     if [ "$_key" = listen ]; then
         for _p in $(_snell_ports_of "$_val"); do
             case " $(_snell_ports_of "$_old") " in *" $_p "*) continue ;; esac
@@ -846,6 +975,9 @@ snell_config_set() {
         fi
     else
         _snell_say "$_key 已更新为 $_val"
+        case $_val in
+            *\[*) _snell_say "IPv6 监听只表示本机已监听, 公网 IPv6 能否到达取决于路由 防火墙与上游网络" ;;
+        esac
     fi
     if [ "$_was" = running ]; then
         _snell_say "Snell 已重启并验证"
